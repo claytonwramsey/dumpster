@@ -1,7 +1,7 @@
 use std::{
     alloc::{dealloc, Layout},
     cell::Cell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     marker::PhantomData,
     ops::Deref,
     ptr::{self, NonNull},
@@ -15,13 +15,7 @@ mod tests;
 /// This trait should usually be implemented by using `#[derive(Collectable)]`.
 /// Only data structures using raw pointers or other magic should manually implement `Collectable`.
 pub trait Collectable {
-    /// Search through all allocations reachable from this value and return a map from its
-    /// allocation ID to the allocations which could be found that point to it.
-    fn add_to_parent_map(
-        &self,
-        self_id: AllocationId,
-        map: &mut HashMap<AllocationId, Vec<AllocationId>>,
-    );
+    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph);
 }
 
 /// A garbage-collected pointer.
@@ -37,6 +31,8 @@ pub struct Gc<T: Collectable + ?Sized> {
 /// The underlying heap allocation for a [`Gc`].
 struct GcBox<T: Collectable + ?Sized> {
     /// The number of extant references to this garbage-collected data.
+    /// If the stored reference count is zero, then this value is a "zombie" - in the process of
+    /// being dropped - and should not be dropped again.
     ref_count: Cell<usize>,
     /// The stored value inside this garbage-collected box.
     value: T,
@@ -47,6 +43,13 @@ struct GcBox<T: Collectable + ?Sized> {
 ///
 /// It contains a pointer to the reference count of the allocation.
 pub struct AllocationId(NonNull<Cell<usize>>);
+
+/// A reference graph of garbage-collected values.
+pub struct RefGraph {
+    /// A map from each allocation to all allocations which we could find that referenced it.
+    parent_map: HashMap<AllocationId, Vec<AllocationId>>,
+    visited: HashSet<AllocationId>,
+}
 
 impl<T: Collectable + ?Sized> Gc<T> {
     /// Construct a new garbage-collected allocation, with `value` as its value.
@@ -101,10 +104,14 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// If this is the last reference which can reach the pointed-to data,
     fn drop(&mut self) {
         let box_ref = unsafe { self.ptr.as_ref() };
+        println!("drop a gc with ref count {}", box_ref.ref_count.get());
         let old_ref_count = box_ref.ref_count.get();
-        println!("old ref count {old_ref_count}");
+        if old_ref_count == 0 {
+            return;
+        }
         box_ref.ref_count.set(old_ref_count - 1);
         if old_ref_count == 1 || box_ref.is_orphaned() {
+            box_ref.ref_count.set(0);
             unsafe {
                 ptr::drop_in_place(self.ptr.as_mut());
                 dealloc(
@@ -124,9 +131,13 @@ impl<T: Collectable + ?Sized> GcBox<T> {
 
     /// Determine whether this `GcBox` exists only because it is part of an orphaned cycle.
     fn is_orphaned(&self) -> bool {
-        let mut parent_map = HashMap::new();
-        parent_map.insert(self.id(), Vec::new());
-        self.value.add_to_parent_map(self.id(), &mut parent_map);
+        let mut ref_graph = RefGraph {
+            parent_map: HashMap::new(),
+            visited: HashSet::new(),
+        };
+        self.value.add_to_ref_graph(self.id(), &mut ref_graph);
+
+        println!("final ref graph: {:?}", ref_graph.parent_map);
 
         fn all_accounted_ancestors(
             id: AllocationId,
@@ -150,6 +161,22 @@ impl<T: Collectable + ?Sized> GcBox<T> {
             }
         }
 
-        all_accounted_ancestors(self.id(), &mut parent_map)
+        all_accounted_ancestors(self.id(), &mut ref_graph.parent_map)
+    }
+}
+
+impl RefGraph {
+    pub fn add_ref(&mut self, pointer: AllocationId, pointee: AllocationId) {
+        self.parent_map
+            .entry(pointee)
+            .or_insert(Vec::new())
+            .push(pointer);
+        self.visited.insert(pointer);
+    }
+
+    pub fn mark_visited(&mut self, allocation: AllocationId) -> bool {
+        let already_visited = !self.visited.insert(allocation);
+        self.parent_map.entry(allocation).or_insert(Vec::new());
+        already_visited
     }
 }
