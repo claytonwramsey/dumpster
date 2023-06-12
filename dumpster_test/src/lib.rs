@@ -61,3 +61,59 @@ fn self_referential() {
     drop(gc1);
     assert_eq!(count.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn double_loop() {
+    let count = AtomicUsize::new(0);
+
+    let gc1 = Gc::new(MultiRef {
+        counter: &count,
+        pointers: RefCell::new(Vec::new()),
+    });
+    gc1.pointers
+        .borrow_mut()
+        .extend([Gc::clone(&gc1), Gc::clone(&gc1)]);
+
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    drop(gc1);
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn parallel_loop() {
+    let count1 = AtomicUsize::new(0);
+    let count2 = AtomicUsize::new(0);
+    let count3 = AtomicUsize::new(0);
+    let count4 = AtomicUsize::new(0);
+
+    let gc1 = Gc::new(MultiRef {
+        counter: &count1,
+        pointers: RefCell::new(Vec::new()),
+    });
+    let gc2 = Gc::new(MultiRef {
+        counter: &count2,
+        pointers: RefCell::new(vec![Gc::clone(&gc1)]),
+    });
+    let gc3 = Gc::new(MultiRef {
+        counter: &count3,
+        pointers: RefCell::new(vec![Gc::clone(&gc1)]),
+    });
+    let gc4 = Gc::new(MultiRef {
+        counter: &count4,
+        pointers: RefCell::new(vec![Gc::clone(&gc2), Gc::clone(&gc3)]),
+    });
+    gc1.pointers.borrow_mut().push(Gc::clone(&gc4));
+
+    drop(gc1);
+    drop(gc2);
+    drop(gc3);
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    drop(gc4);
+    assert_eq!(count1.load(Ordering::Relaxed), 1);
+    assert_eq!(count2.load(Ordering::Relaxed), 1);
+    assert_eq!(count3.load(Ordering::Relaxed), 1);
+    assert_eq!(count4.load(Ordering::Relaxed), 1);
+}
