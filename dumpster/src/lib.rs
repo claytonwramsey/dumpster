@@ -19,7 +19,11 @@ mod impls;
 /// This trait should usually be implemented by using `#[derive(Collectable)]`.
 /// Only data structures using raw pointers or other magic should manually implement `Collectable`.
 pub trait Collectable {
-    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph);
+    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+        &self,
+        self_ref: AllocationId,
+        ref_graph: &mut RefGraph,
+    );
 }
 
 /// A garbage-collected pointer.
@@ -159,7 +163,8 @@ impl<T: Collectable + ?Sized> GcBox<T> {
             parent_map: HashMap::new(),
             visited: HashSet::new(),
         };
-        self.value.add_to_ref_graph(self.id(), &mut ref_graph);
+        self.value
+            .add_to_ref_graph::<true>(self.id(), &mut ref_graph);
 
         println!("final ref graph: {:?}", ref_graph.parent_map);
 

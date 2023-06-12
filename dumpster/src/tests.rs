@@ -16,8 +16,15 @@ fn simple() {
     }
 
     impl Collectable for Foo {
-        fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
-            ref_graph.mark_visited(self_ref);
+        fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+            &self,
+            self_ref: AllocationId,
+            ref_graph: &mut RefGraph,
+        ) {
+            if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
+                return;
+            }
+            self.0.add_to_ref_graph::<false>(self_ref, ref_graph);
         }
     }
 
@@ -41,14 +48,15 @@ fn cyclic() {
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
     impl Collectable for Foo {
-        fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
-            if ref_graph.mark_visited(self_ref) {
+        fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+            &self,
+            self_ref: AllocationId,
+            ref_graph: &mut RefGraph,
+        ) {
+            if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
                 return;
             }
-            if let Some(gc) = self.0.borrow().as_ref() {
-                ref_graph.add_ref(self_ref, Gc::id(gc));
-                (*gc).add_to_ref_graph(Gc::id(gc), ref_graph);
-            }
+            self.0.add_to_ref_graph::<false>(self_ref, ref_graph);
         }
     }
 

@@ -1,6 +1,58 @@
 //! Implementations of [`Collectable`] for common data types.
 
+use std::cell::RefCell;
+
+use crate::Gc;
+
 use super::{AllocationId, Collectable, RefGraph};
+
+impl<T: Collectable + ?Sized> Collectable for Gc<T> {
+    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+        &self,
+        self_ref: AllocationId,
+        ref_graph: &mut RefGraph,
+    ) {
+        if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
+            return;
+        }
+        let next_id = Gc::id(self);
+        ref_graph.add_ref(self_ref, next_id);
+        unsafe {
+            self.ptr
+                .as_ref()
+                .value
+                .add_to_ref_graph::<true>(next_id, ref_graph);
+        }
+    }
+}
+
+impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
+    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+        &self,
+        self_ref: AllocationId,
+        ref_graph: &mut RefGraph,
+    ) {
+        if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
+            return;
+        }
+        self.borrow().add_to_ref_graph::<false>(self_ref, ref_graph);
+    }
+}
+
+impl<T: Collectable> Collectable for Option<T> {
+    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+        &self,
+        self_ref: AllocationId,
+        ref_graph: &mut RefGraph,
+    ) {
+        if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
+            return;
+        }
+        if let Some(v) = self {
+            v.add_to_ref_graph::<false>(self_ref, ref_graph);
+        }
+    }
+}
 
 /// Implement [`Collectable`] for a trivially-collected type which contains no  [`Gc`]s in its
 /// fields.
@@ -8,8 +60,14 @@ macro_rules! collectable_trivial_impl {
     ($x: ty) => {
         impl Collectable for $x {
             #[inline]
-            fn add_to_ref_graph(&self, id: AllocationId, ref_graph: &mut RefGraph) {
-                ref_graph.mark_visited(id);
+            fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+                &self,
+                id: AllocationId,
+                ref_graph: &mut RefGraph,
+            ) {
+                if IS_ALLOCATION {
+                    ref_graph.mark_visited(id);
+                }
             }
         }
     };
