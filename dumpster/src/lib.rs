@@ -32,7 +32,8 @@ mod impls;
 
 /// The trait that any garbage-collectable data must implement.
 ///
-/// This trait should usually be implemented by using `#[derive(Collectable)]`.
+/// This trait should usually be implemented by using `#[derive(Collectable)]`, using the macro from
+/// the crate `dumpster_derive`.
 /// Only data structures using raw pointers or other magic should manually implement `Collectable`.
 ///
 /// # Safety
@@ -43,6 +44,32 @@ mod impls;
 /// Lastly, when a collectable type is dropped (via its implementation in [`Drop`]), it must not
 /// access any of the data behind its [`Gc`] fields, because those values may have already been
 /// dropped.
+///
+/// # Examples
+///
+/// A data structure which contains no `Gc`s is quite simple:
+///
+/// ```
+/// use dumpster::{AllocationId, Collectable, RefGraph};
+///
+/// struct Foo;
+///
+/// unsafe impl Collectable for Foo {
+///     fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+///         &self,
+///         self_ref: AllocationId,
+///         ref_graph: &mut RefGraph,
+///     ) {
+///         if IS_ALLOCATION {
+///             ref_graph.mark_visited(self_ref);
+///         }
+///     }
+/// }
+///
+/// # use dumpster::Gc;
+/// # let gc1 = Gc::new(Foo);
+/// # drop(gc1);
+/// ```
 pub unsafe trait Collectable {
     fn add_to_ref_graph<const IS_ALLOCATION: bool>(
         &self,
