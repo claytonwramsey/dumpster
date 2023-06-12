@@ -2,4 +2,6 @@
 members = [
     "dumpster",
     "dumpster_derive",
+    "dumpster_test",
 ]
+resolver = "2"

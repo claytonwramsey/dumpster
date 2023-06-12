@@ -2,3 +2,7 @@
 name = "dumpster_test"
 version = "0.1.0"
 edition = "2021"
+
+[dev-dependencies]
+dumpster = {version = "0.1.0", path = "../dumpster"}
+dumpster_derive = {version= "0.1.0", path = "../dumpster_derive"}
