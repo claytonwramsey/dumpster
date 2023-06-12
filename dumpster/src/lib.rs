@@ -1,3 +1,5 @@
+//!
+
 use std::{
     alloc::{dealloc, Layout},
     cell::Cell,
@@ -9,6 +11,8 @@ use std::{
 
 #[cfg(test)]
 mod tests;
+
+mod impls;
 
 /// The trait that any garbage-collectable data must implement.
 ///
@@ -42,9 +46,29 @@ struct GcBox<T: Collectable + ?Sized> {
 /// A unique identifier for an allocated garbage-collected block.
 ///
 /// It contains a pointer to the reference count of the allocation.
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::{AllocationId, Gc};
+///
+/// let gc1 = Gc::new(1);
+/// let gc2 = Gc::clone(&gc1);
+/// let gc3 = Gc::new(1);
+///
+/// let id1: AllocationId = Gc::id(&gc1);
+/// let id2: AllocationId = Gc::id(&gc2);
+/// let id3: AllocationId = Gc::id(&gc3);
+///
+/// assert_eq!(id1, id2);
+/// assert!(id1 != id3);
+/// ```
 pub struct AllocationId(NonNull<Cell<usize>>);
 
 /// A reference graph of garbage-collected values.
+///
+/// This graph is built during cycle detection to find allocations which are unreachable and can
+/// be freed.
 pub struct RefGraph {
     /// A map from each allocation to all allocations which we could find that referenced it.
     parent_map: HashMap<AllocationId, Vec<AllocationId>>,
