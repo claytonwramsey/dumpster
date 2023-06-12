@@ -6,7 +6,7 @@ use crate::Gc;
 
 use super::{AllocationId, Collectable, RefGraph};
 
-impl<T: Collectable + ?Sized> Collectable for Gc<T> {
+unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
     fn add_to_ref_graph<const IS_ALLOCATION: bool>(
         &self,
         self_ref: AllocationId,
@@ -26,7 +26,7 @@ impl<T: Collectable + ?Sized> Collectable for Gc<T> {
     }
 }
 
-impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
+unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     fn add_to_ref_graph<const IS_ALLOCATION: bool>(
         &self,
         self_ref: AllocationId,
@@ -39,7 +39,7 @@ impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     }
 }
 
-impl<T: Collectable> Collectable for Option<T> {
+unsafe impl<T: Collectable> Collectable for Option<T> {
     fn add_to_ref_graph<const IS_ALLOCATION: bool>(
         &self,
         self_ref: AllocationId,
@@ -58,7 +58,7 @@ impl<T: Collectable> Collectable for Option<T> {
 /// fields.
 macro_rules! collectable_trivial_impl {
     ($x: ty) => {
-        impl Collectable for $x {
+        unsafe impl Collectable for $x {
             #[inline]
             fn add_to_ref_graph<const IS_ALLOCATION: bool>(
                 &self,

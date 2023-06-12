@@ -15,7 +15,7 @@ fn simple() {
         }
     }
 
-    impl Collectable for Foo {
+    unsafe impl Collectable for Foo {
         fn add_to_ref_graph<const IS_ALLOCATION: bool>(
             &self,
             self_ref: AllocationId,
@@ -47,7 +47,7 @@ fn cyclic() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
-    impl Collectable for Foo {
+    unsafe impl Collectable for Foo {
         fn add_to_ref_graph<const IS_ALLOCATION: bool>(
             &self,
             self_ref: AllocationId,

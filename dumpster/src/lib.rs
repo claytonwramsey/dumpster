@@ -18,7 +18,16 @@ mod impls;
 ///
 /// This trait should usually be implemented by using `#[derive(Collectable)]`.
 /// Only data structures using raw pointers or other magic should manually implement `Collectable`.
-pub trait Collectable {
+///
+/// # Safety
+///
+/// A collectable data type must correctly be able to add itself and its references to the reference
+/// graph.
+/// It must also make sure to check whether it has already been visited to prevent infinite loops.
+/// Lastly, when a collectable type is dropped (via its implementation in [`Drop`]), it must not
+/// access any of the data behind its [`Gc`] fields, because those values may have already been
+/// dropped.
+pub unsafe trait Collectable {
     fn add_to_ref_graph<const IS_ALLOCATION: bool>(
         &self,
         self_ref: AllocationId,
