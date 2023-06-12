@@ -44,6 +44,10 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
     }
 }
 
+unsafe impl<'a, T> Collectable for &'a T {
+    fn add_to_ref_graph<const IS_ALLOCATION: bool>(&self, _: AllocationId, _: &mut RefGraph) {}
+}
+
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     fn add_to_ref_graph<const IS_ALLOCATION: bool>(
         &self,
@@ -69,6 +73,20 @@ unsafe impl<T: Collectable> Collectable for Option<T> {
         if let Some(v) = self {
             v.add_to_ref_graph::<false>(self_ref, ref_graph);
         }
+    }
+}
+
+unsafe impl<T: Collectable> Collectable for Vec<T> {
+    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+        &self,
+        self_ref: AllocationId,
+        ref_graph: &mut RefGraph,
+    ) {
+        if IS_ALLOCATION {
+            ref_graph.mark_visited(self_ref);
+        }
+        self.iter()
+            .for_each(|elem| elem.add_to_ref_graph::<false>(self_ref, ref_graph));
     }
 }
 

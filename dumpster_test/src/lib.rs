@@ -1,6 +1,9 @@
 #![cfg(test)]
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::{
+    cell::RefCell,
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering},
+};
 
 use dumpster::Gc;
 use dumpster_derive::Collectable;
@@ -10,6 +13,18 @@ struct Empty;
 
 #[derive(Collectable)]
 struct UnitTuple();
+
+#[derive(Collectable)]
+struct MultiRef<'a> {
+    counter: &'a AtomicUsize,
+    pointers: RefCell<Vec<Gc<MultiRef<'a>>>>,
+}
+
+impl<'a> Drop for MultiRef<'a> {
+    fn drop(&mut self) {
+        self.counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 #[test]
 fn unit() {
@@ -30,4 +45,19 @@ fn unit() {
     assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 0);
     drop(gc2);
     assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn self_referential() {
+    let count = AtomicUsize::new(0);
+
+    let gc1 = Gc::new(MultiRef {
+        counter: &count,
+        pointers: RefCell::new(Vec::new()),
+    });
+    gc1.pointers.borrow_mut().push(Gc::clone(&gc1));
+
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    drop(gc1);
+    assert_eq!(count.load(Ordering::Relaxed), 1);
 }
