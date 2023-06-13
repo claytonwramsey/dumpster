@@ -16,6 +16,9 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#![warn(clippy::pedantic)]
+#![warn(clippy::cargo)]
+
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::{
@@ -70,6 +73,7 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
     generics
 }
 
+#[allow(clippy::too_many_lines)]
 /// Generate method implementations for [`Collectable`] for some data type.
 ///
 /// Returns a pair containing the method body for [`Collectable::add_to_ref_graph`] and
@@ -162,7 +166,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                                 dumpster::Collectable::destroy_gcs(
                                     #field_name,
                                 );
-                            })
+                            });
                         }
 
                         delegate_graph

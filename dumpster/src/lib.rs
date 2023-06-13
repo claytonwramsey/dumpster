@@ -16,6 +16,9 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#![warn(clippy::pedantic)]
+#![warn(clippy::cargo)]
+
 use std::{
     alloc::{dealloc, Layout},
     cell::Cell,
@@ -132,23 +135,6 @@ struct GcBox<T: Collectable + ?Sized> {
 /// A unique identifier for an allocated garbage-collected block.
 ///
 /// It contains a pointer to the reference count of the allocation.
-///
-/// # Examples
-///
-/// ```
-/// use dumpster::{AllocationId, Gc};
-///
-/// let gc1 = Gc::new(1);
-/// let gc2 = Gc::clone(&gc1);
-/// let gc3 = Gc::new(1);
-///
-/// let id1: AllocationId = Gc::id(&gc1);
-/// let id2: AllocationId = Gc::id(&gc2);
-/// let id3: AllocationId = Gc::id(&gc3);
-///
-/// assert_eq!(id1, id2);
-/// assert!(id1 != id3);
-/// ```
 pub struct AllocationId(NonNull<Cell<usize>>);
 
 /// A reference graph of garbage-collected values.
@@ -177,10 +163,11 @@ impl<T: Collectable + ?Sized> Gc<T> {
         }
     }
 
+    #[must_use]
     /// Get a unique ID for the data pointed to by this garbage-collected pointer.
     ///
     /// This is used by `dumpster` directly for generating a reference graph.
-    pub fn id(gc: &Gc<T>) -> AllocationId {
+    fn id(gc: &Gc<T>) -> AllocationId {
         unsafe { gc.ptr.unwrap().as_ref().id() }
     }
 }
@@ -204,7 +191,7 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
         }
         Self {
             ptr: self.ptr.clone(),
-            _phantom: self._phantom.clone(),
+            _phantom: PhantomData,
         }
     }
 }
@@ -226,7 +213,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                 box_ref.ref_count.set(0);
                 unsafe {
                     ptr::drop_in_place(ptr.as_mut());
-                    dealloc(ptr.as_ptr() as *mut u8, Layout::for_value(ptr.as_ref()))
+                    dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
                 };
             }
         }
@@ -241,12 +228,6 @@ impl<T: Collectable + ?Sized> GcBox<T> {
 
     /// Determine whether this `GcBox` exists only because it is part of an orphaned cycle.
     fn is_orphaned(&self) -> bool {
-        let mut ref_graph = RefGraph {
-            parent_map: HashMap::new(),
-            visited: HashSet::new(),
-        };
-        ref_graph.add_allocation(self.id(), &self.value);
-
         fn all_accounted_ancestors(
             id: AllocationId,
             parent_map: &mut HashMap<AllocationId, Vec<AllocationId>>,
@@ -269,17 +250,20 @@ impl<T: Collectable + ?Sized> GcBox<T> {
             }
         }
 
+        let mut ref_graph = RefGraph {
+            parent_map: HashMap::new(),
+            visited: HashSet::new(),
+        };
+        ref_graph.add_allocation(self.id(), &self.value);
+
         all_accounted_ancestors(self.id(), &mut ref_graph.parent_map)
     }
 }
 
 impl RefGraph {
-    fn add_ref(&mut self, pointer: AllocationId, pointee: AllocationId) {
-        self.parent_map
-            .entry(pointee)
-            .or_insert(Vec::new())
-            .push(pointer);
-        self.visited.insert(pointer);
+    fn add_ref(&mut self, from: AllocationId, to: AllocationId) {
+        self.parent_map.entry(to).or_insert(Vec::new()).push(from);
+        self.visited.insert(from);
     }
 
     fn add_allocation<T: Collectable + ?Sized>(&mut self, id: AllocationId, value: &T) {
