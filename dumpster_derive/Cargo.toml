@@ -10,4 +10,5 @@ proc-macro = true
 proc-macro2 = "1.0.60"
 quote = "1.0"
 syn = "2.0"
+dumpster = {version = "0.1.0", path = "../dumpster"}
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

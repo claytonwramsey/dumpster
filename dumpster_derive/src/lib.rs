@@ -37,16 +37,22 @@ pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let generics = add_trait_bounds(input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let generate_graph = delegate_graph_fields(name, &input.data);
+    let (generate_graph, destroy_gcs) = delegate_methods(name, &input.data);
 
     let generated = quote! {
         unsafe impl #impl_generics dumpster::Collectable for #name #ty_generics #where_clause {
+            #[inline]
             fn add_to_ref_graph(
                 &self,
                 self_ref: dumpster::AllocationId,
                 ref_graph: &mut dumpster::RefGraph,
             ) {
                 #generate_graph
+            }
+
+            #[inline]
+            unsafe fn destroy_gcs(&mut self) {
+                #destroy_gcs
             }
         }
     };
@@ -64,12 +70,15 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
     generics
 }
 
-/// Generate an expression to delegate garbage collection to the fields of some data type.
-fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
+/// Generate method implementations for [`Collectable`] for some data type.
+///
+/// Returns a pair containing the method body for [`Collectable::add_to_ref_graph`] and
+/// [`Collectable::destroy_gcs`].
+fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
     match data {
         Data::Struct(data) => match data.fields {
             Fields::Named(ref f) => {
-                let recurse = f.named.iter().map(|f| {
+                let delegate_graph = f.named.iter().map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span() =>
                         dumpster::Collectable::add_to_ref_graph(
@@ -79,12 +88,22 @@ fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
                         );
                     }
                 });
-                quote! {
-                    #(#recurse)*
-                }
+
+                let delegate_destroy = f.named.iter().map(|f| {
+                    let name = &f.ident;
+                    quote_spanned! {f.span() =>
+                        dumpster::Collectable::destroy_gcs(
+                            &mut self.#name,
+                        );
+                    }
+                });
+                (
+                    quote! { #(#delegate_graph)* },
+                    quote! { #(#delegate_destroy)* },
+                )
             }
             Fields::Unnamed(ref f) => {
-                let recurse = f.unnamed.iter().enumerate().map(|(i, f)| {
+                let delegate_graph = f.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span() =>
                         dumpster::Collectable::add_to_ref_graph(
@@ -94,20 +113,30 @@ fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
                         );
                     }
                 });
-                quote! {
-                    #(#recurse)*
-                }
+                let delegate_destroy = f.unnamed.iter().enumerate().map(|(i, f)| {
+                    let index = Index::from(i);
+                    quote_spanned! {f.span() =>
+                        dumpster::Collectable::add_to_ref_graph(&mut self.#index);
+                    }
+                });
+                (
+                    quote! { #(#delegate_graph)* },
+                    quote! { #(#delegate_destroy)* },
+                )
             }
-            Fields::Unit => quote! {},
+            Fields::Unit => (TokenStream::new(), TokenStream::new()),
         },
         Data::Enum(e) => {
-            let cases = e.variants.iter().map(|var| {
+            let mut delegate_graph = TokenStream::new();
+            let mut delegate_destroy = TokenStream::new();
+            for var in e.variants.iter() {
                 let var_name = &var.ident;
 
                 match &var.fields {
                     Fields::Named(n) => {
                         let mut binding = TokenStream::new();
-                        let mut execution = TokenStream::new();
+                        let mut execution_graph = TokenStream::new();
+                        let mut execution_destroy = TokenStream::new();
                         for (i, name) in n.named.iter().enumerate() {
                             let field_name = format!("field{i}");
                             let field_ident = name.ident.as_ref().unwrap();
@@ -121,20 +150,30 @@ fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
                                 });
                             }
 
-                            execution.extend(quote! {
+                            execution_graph.extend(quote! {
                                 dumpster::Collectable::add_to_ref_graph(
                                     #field_name,
                                     self_ref,
                                     ref_graph
                                 );
+                            });
+
+                            execution_destroy.extend(quote! {
+                                dumpster::Collectable::destroy_gcs(
+                                    #field_name,
+                                );
                             })
                         }
 
-                        todo!()
+                        delegate_graph
+                            .extend(quote! {#name::#var_name{#binding} => {#execution_graph}});
+                        delegate_destroy
+                            .extend(quote! {#name::#var_name{#binding} => {#execution_destroy}});
                     }
                     Fields::Unnamed(u) => {
                         let mut binding = TokenStream::new();
-                        let mut execution = TokenStream::new();
+                        let mut execution_graph = TokenStream::new();
+                        let mut execution_destroy = TokenStream::new();
                         for (i, _) in u.unnamed.iter().enumerate() {
                             let field_name = format!("field{i}");
                             if i == 0 {
@@ -147,33 +186,38 @@ fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
                                 });
                             }
 
-                            execution.extend(quote! {
+                            execution_graph.extend(quote! {
                                 dumpster::Collectable::add_to_ref_graph(
                                     #field_name,
                                     self_ref,
                                     ref_graph
                                 );
-                            })
+                            });
+
+                            execution_destroy.extend(quote! {
+                                dumpster::Collectable::destroy_gcs(#field_name)
+                            });
                         }
 
-                        quote_spanned! {var.span() => #name::#var_name(#binding) => {#execution},}
+                        delegate_graph
+                            .extend(quote! {#name::#var_name(#binding) => {#execution_graph}});
+                        delegate_destroy
+                            .extend(quote! {#name::#var_name(#binding) => {#execution_destroy}});
                     }
-                    Fields::Unit => quote_spanned! {
-                        var.span() => #name::#var_name => (),
-                    },
-                }
-            });
-
-            quote! {
-                match self {
-                    #(#cases)*
+                    Fields::Unit => {
+                        delegate_graph.extend(quote! {#name::#var_name => (),});
+                        delegate_destroy.extend(quote! {#name::#var_name => (),});
+                    }
                 }
             }
+
+            (delegate_graph, delegate_destroy)
         }
         Data::Union(u) => {
-            quote_spanned! {
+            let stream = quote_spanned! {
                 u.union_token.span => compile_error!("`Collectable` must be manually implemented for unions");
-            }
+            };
+            (stream.clone(), stream)
         }
     }
 }

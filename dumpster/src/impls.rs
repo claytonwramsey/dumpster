@@ -20,7 +20,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque},
+    collections::{BinaryHeap, HashSet, LinkedList, VecDeque},
 };
 
 use crate::Gc;
@@ -31,17 +31,27 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
     fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
         let next_id = Gc::id(self);
         ref_graph.add_ref(self_ref, next_id);
-        ref_graph.add_allocation(next_id, unsafe { &self.ptr.as_ref().value });
+        ref_graph.add_allocation(next_id, unsafe { &self.ptr.unwrap().as_ref().value });
+    }
+
+    unsafe fn destroy_gcs(&mut self) {
+        // do not delegate to pointee
+        self.ptr = None;
     }
 }
 
 unsafe impl<'a, T> Collectable for &'a T {
     fn add_to_ref_graph(&self, _: AllocationId, _: &mut RefGraph) {}
+    unsafe fn destroy_gcs(&mut self) {}
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
         self.borrow().add_to_ref_graph(self_ref, ref_graph);
+    }
+
+    unsafe fn destroy_gcs(&mut self) {
+        self.borrow_mut().destroy_gcs();
     }
 }
 
@@ -51,27 +61,59 @@ unsafe impl<T: Collectable> Collectable for Option<T> {
             v.add_to_ref_graph(self_ref, ref_graph);
         }
     }
+
+    unsafe fn destroy_gcs(&mut self) {
+        if let Some(x) = self.as_mut() {
+            x.destroy_gcs();
+        }
+    }
 }
 
 /// Implement [`Collectable`] for a collection data structure which has some method `iter()` that
-/// iterates over all elements of the data structure.
+/// iterates over all elements of the data structure and `iter_mut()` which does the same over
+/// mutable references.
 macro_rules! collectable_collection_impl {
     ($x: ty) => {
         unsafe impl<T: Collectable> Collectable for $x {
+            #[inline]
             fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
                 self.iter()
                     .for_each(|elem| elem.add_to_ref_graph(self_ref, ref_graph));
+            }
+
+            #[inline]
+            unsafe fn destroy_gcs(&mut self) {
+                self.iter_mut().for_each(|x| x.destroy_gcs());
             }
         }
     };
 }
 
 collectable_collection_impl!(Vec<T>);
-collectable_collection_impl!(HashSet<T>);
-collectable_collection_impl!(BTreeSet<T>);
 collectable_collection_impl!(VecDeque<T>);
-collectable_collection_impl!(BinaryHeap<T>);
 collectable_collection_impl!(LinkedList<T>);
+
+/// Implement [`Collectable`] for a set-like data structure which freezes its elements.
+macro_rules! collectable_set_impl {
+    ($x: ty) => {
+        unsafe impl<T: Collectable> Collectable for $x {
+            #[inline]
+            fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
+                self.iter()
+                    .for_each(|elem| elem.add_to_ref_graph(self_ref, ref_graph));
+            }
+
+            #[inline]
+            unsafe fn destroy_gcs(&mut self) {
+                self.drain().for_each(|mut x| x.destroy_gcs());
+            }
+        }
+    };
+}
+
+collectable_set_impl!(HashSet<T>);
+collectable_set_impl!(BinaryHeap<T>);
+// collectable_set_impl!(BTreeSet<T>); // awaiting stabilization of `drain` on `BTreeSet`
 
 /// Implement [`Collectable`] for a trivially-collected type which contains no  [`Gc`]s in its
 /// fields.
@@ -80,6 +122,8 @@ macro_rules! collectable_trivial_impl {
         unsafe impl Collectable for $x {
             #[inline]
             fn add_to_ref_graph(&self, _: AllocationId, _: &mut RefGraph) {}
+            #[inline]
+            unsafe fn destroy_gcs(&mut self) {}
         }
     };
 }

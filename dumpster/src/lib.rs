@@ -55,6 +55,7 @@ mod impls;
 ///
 /// unsafe impl Collectable for Foo {
 ///     fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {}
+///     unsafe fn destroy_gcs(&mut self) {}
 /// }
 ///
 /// # use dumpster::Gc;
@@ -74,20 +75,44 @@ mod impls;
 ///         // `self.0` is a field, so we delegate down to it.
 ///         self.0.add_to_ref_graph(self_ref, ref_graph);
 ///     }
+///
+///     unsafe fn destroy_gcs(&mut self) {
+///         // likewise, delegate down for `destroy_gcs`
+///         self.0.destroy_gcs();
+///     }
 /// }
 /// # use dumpster::Gc;
 /// # let gc1 = Gc::new(Bar(Gc::new(())));
 /// # drop(gc1);
 /// ```
 pub unsafe trait Collectable {
+    /// Construct a reference graph by adding all references as edges to `ref_graph`.
+    /// Downstream implementors need not do anything other than delegate to all fields of this data
+    /// structure.
     fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph);
+
+    /// Destroy all `Gc` pointers owned by this value without calling `Drop`.
+    ///
+    /// This function may only be called just before this value is dropped.
+    /// Implementors should simply delegate to calling `destroy_gcs` on all of its fields.
+    ///
+    /// After this function has been called on a [`Gc`], it is rendered unusable.
+    ///
+    /// # Safety
+    ///
+    /// After `destroy_gcs` is called on this value, any `Gc` owned by this data structure may not
+    /// be dereferenced.
+    ///
+    /// `destroy_gcs` should only be called by the `dumpster` crate (i.e. not by any downstream
+    /// consumer).
+    unsafe fn destroy_gcs(&mut self);
 }
 
 /// A garbage-collected pointer.
 pub struct Gc<T: Collectable + ?Sized> {
     /// A pointer to the heap allocation containing the data under concern.
     /// The pointee box should never be mutated.
-    ptr: NonNull<GcBox<T>>,
+    ptr: Option<NonNull<GcBox<T>>>,
     /// Phantom data to ensure correct lifetime analysis.
     _phantom: PhantomData<T>,
 }
@@ -144,19 +169,19 @@ impl<T: Collectable + ?Sized> Gc<T> {
         T: Sized,
     {
         Gc {
-            ptr: NonNull::from(Box::leak(Box::new(GcBox {
+            ptr: Some(NonNull::from(Box::leak(Box::new(GcBox {
                 ref_count: Cell::new(1),
                 value,
-            }))),
+            })))),
             _phantom: PhantomData,
         }
     }
 
     /// Get a unique ID for the data pointed to by this garbage-collected pointer.
     ///
-    /// This is used especially for the implementation of [`Collectable::add_to_parent_map`].
+    /// This is used by `dumpster` directly for generating a reference graph.
     pub fn id(gc: &Gc<T>) -> AllocationId {
-        unsafe { gc.ptr.as_ref().id() }
+        unsafe { gc.ptr.unwrap().as_ref().id() }
     }
 }
 
@@ -164,7 +189,7 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &self.ptr.as_ref().value }
+        unsafe { &self.ptr.unwrap().as_ref().value }
     }
 }
 
@@ -174,7 +199,7 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
     /// This does not duplicate the data.
     fn clone(&self) -> Self {
         unsafe {
-            let box_ref = self.ptr.as_ref();
+            let box_ref = self.ptr.unwrap().as_ref();
             box_ref.ref_count.set(box_ref.ref_count.get() + 1);
         }
         Self {
@@ -190,21 +215,20 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// If this is the last reference which can reach the pointed-to data, the allocation that it
     /// points to will be destroyed.
     fn drop(&mut self) {
-        let box_ref = unsafe { self.ptr.as_ref() };
-        let old_ref_count = box_ref.ref_count.get();
-        if old_ref_count == 0 {
-            return;
-        }
-        box_ref.ref_count.set(old_ref_count - 1);
-        if old_ref_count == 1 || box_ref.is_orphaned() {
-            box_ref.ref_count.set(0);
-            unsafe {
-                ptr::drop_in_place(self.ptr.as_mut());
-                dealloc(
-                    self.ptr.as_ptr() as *mut u8,
-                    Layout::for_value(self.ptr.as_ref()),
-                )
-            };
+        if let Some(mut ptr) = self.ptr {
+            let box_ref = unsafe { ptr.as_ref() };
+            let old_ref_count = box_ref.ref_count.get();
+            if old_ref_count == 0 {
+                return;
+            }
+            box_ref.ref_count.set(old_ref_count - 1);
+            if old_ref_count == 1 || box_ref.is_orphaned() {
+                box_ref.ref_count.set(0);
+                unsafe {
+                    ptr::drop_in_place(ptr.as_mut());
+                    dealloc(ptr.as_ptr() as *mut u8, Layout::for_value(ptr.as_ref()))
+                };
+            }
         }
     }
 }

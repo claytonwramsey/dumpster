@@ -39,6 +39,8 @@ fn simple() {
         fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
             self.0.add_to_ref_graph(self_ref, ref_graph);
         }
+
+        unsafe fn destroy_gcs(&mut self) {}
     }
 
     let gc1 = Gc::new(Foo(1));
@@ -63,6 +65,12 @@ fn cyclic() {
     unsafe impl Collectable for Foo {
         fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
             self.0.add_to_ref_graph(self_ref, ref_graph);
+        }
+
+        unsafe fn destroy_gcs(&mut self) {
+            if let Some(x) = self.0.borrow_mut().as_mut() {
+                x.destroy_gcs();
+            }
         }
     }
 
