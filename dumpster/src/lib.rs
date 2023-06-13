@@ -191,7 +191,6 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// points to will be destroyed.
     fn drop(&mut self) {
         let box_ref = unsafe { self.ptr.as_ref() };
-        println!("drop a gc with ref count {}", box_ref.ref_count.get());
         let old_ref_count = box_ref.ref_count.get();
         if old_ref_count == 0 {
             return;
@@ -223,8 +222,6 @@ impl<T: Collectable + ?Sized> GcBox<T> {
             visited: HashSet::new(),
         };
         ref_graph.add_allocation(self.id(), &self.value);
-
-        println!("final ref graph: {:?}", ref_graph.parent_map);
 
         fn all_accounted_ancestors(
             id: AllocationId,
