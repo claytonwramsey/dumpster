@@ -18,7 +18,10 @@
 
 //! Implementations of [`Collectable`] for common data types.
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque},
+};
 
 use crate::Gc;
 
@@ -50,12 +53,25 @@ unsafe impl<T: Collectable> Collectable for Option<T> {
     }
 }
 
-unsafe impl<T: Collectable> Collectable for Vec<T> {
-    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
-        self.iter()
-            .for_each(|elem| elem.add_to_ref_graph(self_ref, ref_graph));
-    }
+/// Implement [`Collectable`] for a collection data structure which has some method `iter()` that
+/// iterates over all elements of the data structure.
+macro_rules! collectable_collection_impl {
+    ($x: ty) => {
+        unsafe impl<T: Collectable> Collectable for $x {
+            fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
+                self.iter()
+                    .for_each(|elem| elem.add_to_ref_graph(self_ref, ref_graph));
+            }
+        }
+    };
 }
+
+collectable_collection_impl!(Vec<T>);
+collectable_collection_impl!(HashSet<T>);
+collectable_collection_impl!(BTreeSet<T>);
+collectable_collection_impl!(VecDeque<T>);
+collectable_collection_impl!(BinaryHeap<T>);
+collectable_collection_impl!(LinkedList<T>);
 
 /// Implement [`Collectable`] for a trivially-collected type which contains no  [`Gc`]s in its
 /// fields.
