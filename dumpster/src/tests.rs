@@ -16,6 +16,8 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+//! Simple tests using manual implementations of [`Collectable`].
+
 use super::*;
 use std::{
     cell::RefCell,
@@ -34,15 +36,8 @@ fn simple() {
     }
 
     unsafe impl Collectable for Foo {
-        fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-            &self,
-            self_ref: AllocationId,
-            ref_graph: &mut RefGraph,
-        ) {
-            if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
-                return;
-            }
-            self.0.add_to_ref_graph::<false>(self_ref, ref_graph);
+        fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
+            self.0.add_to_ref_graph(self_ref, ref_graph);
         }
     }
 
@@ -66,15 +61,8 @@ fn cyclic() {
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
     unsafe impl Collectable for Foo {
-        fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-            &self,
-            self_ref: AllocationId,
-            ref_graph: &mut RefGraph,
-        ) {
-            if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
-                return;
-            }
-            self.0.add_to_ref_graph::<false>(self_ref, ref_graph);
+        fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
+            self.0.add_to_ref_graph(self_ref, ref_graph);
         }
     }
 

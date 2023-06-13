@@ -38,11 +38,10 @@ mod impls;
 ///
 /// # Safety
 ///
-/// A collectable data type must correctly be able to add itself and its references to the reference
-/// graph.
-/// It must also make sure to check whether it has already been visited to prevent infinite loops.
-/// Lastly, when a collectable type is dropped (via its implementation in [`Drop`]), it must not
-/// access any of the data behind its [`Gc`] fields, because those values may have already been
+/// A collectable data type must call `add_to_ref_graph` on all values which it owns with the same
+/// arguments that were passed to it.
+/// Additionally, when a collectable type is dropped (via its implementation in [`Drop`]), it must
+/// not access any of the data behind its [`Gc`] fields, because those values may have already been
 /// dropped.
 ///
 /// # Examples
@@ -55,27 +54,33 @@ mod impls;
 /// struct Foo;
 ///
 /// unsafe impl Collectable for Foo {
-///     fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-///         &self,
-///         self_ref: AllocationId,
-///         ref_graph: &mut RefGraph,
-///     ) {
-///         if IS_ALLOCATION {
-///             ref_graph.mark_visited(self_ref);
-///         }
-///     }
+///     fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {}
 /// }
 ///
 /// # use dumpster::Gc;
 /// # let gc1 = Gc::new(Foo);
 /// # drop(gc1);
 /// ```
+///
+/// If a field of your structure is a `Gc`, it should delegate to that field as such:
+///
+/// ```
+/// use dumpster::{AllocationId, Collectable, RefGraph};
+///
+/// struct Bar(Gc<()>);
+///
+/// unsafe impl Collectable for Bar {
+///     fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
+///         // `self.0` is a field, so we delegate down to it.
+///         self.0.add_to_ref_graph(self_ref, ref_graph);
+///     }
+/// }
+/// # use dumpster::Gc;
+/// # let gc1 = Gc::new(Bar(Gc::new(())));
+/// # drop(gc1);
+/// ```
 pub unsafe trait Collectable {
-    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-        &self,
-        self_ref: AllocationId,
-        ref_graph: &mut RefGraph,
-    );
+    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph);
 }
 
 /// A garbage-collected pointer.
@@ -182,7 +187,8 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
 impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// Destroy this garbage-collected pointer.
     ///
-    /// If this is the last reference which can reach the pointed-to data,
+    /// If this is the last reference which can reach the pointed-to data, the allocation that it
+    /// points to will be destroyed.
     fn drop(&mut self) {
         let box_ref = unsafe { self.ptr.as_ref() };
         println!("drop a gc with ref count {}", box_ref.ref_count.get());
@@ -216,8 +222,7 @@ impl<T: Collectable + ?Sized> GcBox<T> {
             parent_map: HashMap::new(),
             visited: HashSet::new(),
         };
-        self.value
-            .add_to_ref_graph::<true>(self.id(), &mut ref_graph);
+        ref_graph.add_allocation(self.id(), &self.value);
 
         println!("final ref graph: {:?}", ref_graph.parent_map);
 
@@ -256,7 +261,14 @@ impl RefGraph {
         self.visited.insert(pointer);
     }
 
-    pub fn mark_visited(&mut self, allocation: AllocationId) -> bool {
+    fn add_allocation<T: Collectable + ?Sized>(&mut self, id: AllocationId, value: &T) {
+        if self.mark_visited(id) {
+            return;
+        }
+        value.add_to_ref_graph(id, self);
+    }
+
+    fn mark_visited(&mut self, allocation: AllocationId) -> bool {
         let already_visited = !self.visited.insert(allocation);
         self.parent_map.entry(allocation).or_insert(Vec::new());
         already_visited

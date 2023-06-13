@@ -41,14 +41,11 @@ pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 
     let generated = quote! {
         unsafe impl #impl_generics dumpster::Collectable for #name #ty_generics #where_clause {
-            fn add_to_ref_graph<const IS_ALLOCATION: bool>(
+            fn add_to_ref_graph(
                 &self,
                 self_ref: dumpster::AllocationId,
                 ref_graph: &mut dumpster::RefGraph,
             ) {
-                if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
-                    return;
-                }
                 #generate_graph
             }
         }
@@ -75,7 +72,7 @@ fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
                 let recurse = f.named.iter().map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span() =>
-                        dumpster::Collectable::add_to_ref_graph::<false>(
+                        dumpster::Collectable::add_to_ref_graph(
                             &self.#name,
                             self_ref,
                             ref_graph
@@ -90,7 +87,7 @@ fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
                 let recurse = f.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span() =>
-                        dumpster::Collectable::add_to_ref_graph::<false>(
+                        dumpster::Collectable::add_to_ref_graph(
                             &self.#index,
                             self_ref,
                             ref_graph
@@ -125,7 +122,7 @@ fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
                             }
 
                             execution.extend(quote! {
-                                dumpster::Collectable::add_to_ref_graph::<false>(
+                                dumpster::Collectable::add_to_ref_graph(
                                     #field_name,
                                     self_ref,
                                     ref_graph
@@ -151,7 +148,7 @@ fn delegate_graph_fields(name: &Ident, data: &Data) -> TokenStream {
                             }
 
                             execution.extend(quote! {
-                                dumpster::Collectable::add_to_ref_graph::<false>(
+                                dumpster::Collectable::add_to_ref_graph(
                                     #field_name,
                                     self_ref,
                                     ref_graph

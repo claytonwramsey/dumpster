@@ -25,68 +25,35 @@ use crate::Gc;
 use super::{AllocationId, Collectable, RefGraph};
 
 unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
-    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-        &self,
-        self_ref: AllocationId,
-        ref_graph: &mut RefGraph,
-    ) {
-        if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
-            return;
-        }
+    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
         let next_id = Gc::id(self);
         ref_graph.add_ref(self_ref, next_id);
-        unsafe {
-            self.ptr
-                .as_ref()
-                .value
-                .add_to_ref_graph::<true>(next_id, ref_graph);
-        }
+        ref_graph.add_allocation(next_id, unsafe { &self.ptr.as_ref().value });
     }
 }
 
 unsafe impl<'a, T> Collectable for &'a T {
-    fn add_to_ref_graph<const IS_ALLOCATION: bool>(&self, _: AllocationId, _: &mut RefGraph) {}
+    fn add_to_ref_graph(&self, _: AllocationId, _: &mut RefGraph) {}
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
-    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-        &self,
-        self_ref: AllocationId,
-        ref_graph: &mut RefGraph,
-    ) {
-        if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
-            return;
-        }
-        self.borrow().add_to_ref_graph::<false>(self_ref, ref_graph);
+    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
+        self.borrow().add_to_ref_graph(self_ref, ref_graph);
     }
 }
 
 unsafe impl<T: Collectable> Collectable for Option<T> {
-    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-        &self,
-        self_ref: AllocationId,
-        ref_graph: &mut RefGraph,
-    ) {
-        if IS_ALLOCATION && ref_graph.mark_visited(self_ref) {
-            return;
-        }
+    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
         if let Some(v) = self {
-            v.add_to_ref_graph::<false>(self_ref, ref_graph);
+            v.add_to_ref_graph(self_ref, ref_graph);
         }
     }
 }
 
 unsafe impl<T: Collectable> Collectable for Vec<T> {
-    fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-        &self,
-        self_ref: AllocationId,
-        ref_graph: &mut RefGraph,
-    ) {
-        if IS_ALLOCATION {
-            ref_graph.mark_visited(self_ref);
-        }
+    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
         self.iter()
-            .for_each(|elem| elem.add_to_ref_graph::<false>(self_ref, ref_graph));
+            .for_each(|elem| elem.add_to_ref_graph(self_ref, ref_graph));
     }
 }
 
@@ -96,15 +63,7 @@ macro_rules! collectable_trivial_impl {
     ($x: ty) => {
         unsafe impl Collectable for $x {
             #[inline]
-            fn add_to_ref_graph<const IS_ALLOCATION: bool>(
-                &self,
-                id: AllocationId,
-                ref_graph: &mut RefGraph,
-            ) {
-                if IS_ALLOCATION {
-                    ref_graph.mark_visited(id);
-                }
-            }
+            fn add_to_ref_graph(&self, _: AllocationId, _: &mut RefGraph) {}
         }
     };
 }
