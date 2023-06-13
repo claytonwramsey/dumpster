@@ -128,6 +128,7 @@ pub struct AllocationId(NonNull<Cell<usize>>);
 pub struct RefGraph {
     /// A map from each allocation to all allocations which we could find that referenced it.
     parent_map: HashMap<AllocationId, Vec<AllocationId>>,
+    /// The set of allocations that have already been visited while searching for cycles.
     visited: HashSet<AllocationId>,
 }
 
@@ -247,7 +248,7 @@ impl<T: Collectable + ?Sized> GcBox<T> {
 }
 
 impl RefGraph {
-    pub fn add_ref(&mut self, pointer: AllocationId, pointee: AllocationId) {
+    fn add_ref(&mut self, pointer: AllocationId, pointee: AllocationId) {
         self.parent_map
             .entry(pointee)
             .or_insert(Vec::new())
