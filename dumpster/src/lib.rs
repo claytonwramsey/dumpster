@@ -22,10 +22,12 @@
 use std::{
     alloc::{dealloc, Layout},
     cell::Cell,
-    collections::{HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet},
+    hash::Hash,
     marker::PhantomData,
+    num::NonZeroUsize,
     ops::Deref,
-    ptr::{self, NonNull},
+    ptr::{drop_in_place, NonNull},
 };
 
 #[cfg(test)]
@@ -57,8 +59,9 @@ mod impls;
 /// struct Foo;
 ///
 /// unsafe impl Collectable for Foo {
-///     fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {}
-///     unsafe fn destroy_gcs(&mut self) {}
+///     fn add_to_ref_graph(&self, _: &mut RefGraph) {}
+///     fn sweep(&self, _: bool, _: &mut RefGraph) {}
+///     unsafe fn destroy_gcs(&mut self, _: &RefGraph) {}
 /// }
 ///
 /// # use dumpster::Gc;
@@ -74,14 +77,18 @@ mod impls;
 /// struct Bar(Gc<()>);
 ///
 /// unsafe impl Collectable for Bar {
-///     fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
+///     fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
 ///         // `self.0` is a field, so we delegate down to it.
-///         self.0.add_to_ref_graph(self_ref, ref_graph);
+///         self.0.add_to_ref_graph(ref_graph);
 ///     }
 ///
-///     unsafe fn destroy_gcs(&mut self) {
+///     fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
+///         self.0.sweep(is_accessible, ref_graph);
+///     }
+///
+///     unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
 ///         // likewise, delegate down for `destroy_gcs`
-///         self.0.destroy_gcs();
+///         self.0.destroy_gcs(ref_graph);
 ///     }
 /// }
 /// # use dumpster::Gc;
@@ -92,14 +99,18 @@ pub unsafe trait Collectable {
     /// Construct a reference graph by adding all references as edges to `ref_graph`.
     /// Downstream implementors need not do anything other than delegate to all fields of this data
     /// structure.
-    fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph);
+    fn add_to_ref_graph(&self, ref_graph: &mut RefGraph);
+
+    /// Perform the sweep step in a mark-sweep garbage collection.
+    /// User implementations need not do anything except delegate to their fields.
+    fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph);
 
     /// Destroy all `Gc` pointers owned by this value without calling `Drop`.
     ///
     /// This function may only be called just before this value is dropped.
     /// Implementors should simply delegate to calling `destroy_gcs` on all of its fields.
     ///
-    /// After this function has been called on a [`Gc`], it is rendered unusable.
+    /// After this function has been called on a [`Gc`], it will be rendered unusable.
     ///
     /// # Safety
     ///
@@ -108,7 +119,7 @@ pub unsafe trait Collectable {
     ///
     /// `destroy_gcs` should only be called by the `dumpster` crate (i.e. not by any downstream
     /// consumer).
-    unsafe fn destroy_gcs(&mut self);
+    unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph);
 }
 
 /// A garbage-collected pointer.
@@ -142,10 +153,20 @@ pub struct AllocationId(NonNull<Cell<usize>>);
 /// This graph is built during cycle detection to find allocations which are unreachable and can
 /// be freed.
 pub struct RefGraph {
-    /// A map from each allocation to all allocations which we could find that referenced it.
-    parent_map: HashMap<AllocationId, Vec<AllocationId>>,
+    /// A map from each allocation to what is known about it.
+    allocations: HashMap<AllocationId, AllocationInfo>,
     /// The set of allocations that have already been visited while searching for cycles.
     visited: HashSet<AllocationId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The set of states that we can know about an allocation's reachability.
+enum AllocationInfo {
+    /// The allocation has been proven reachable and is not safe to free.
+    Reachable,
+    /// The allocation's reachability is unknown.
+    /// Field 0 of this case is the number of located references to this allocation.
+    Unknown(NonZeroUsize),
 }
 
 impl<T: Collectable + ?Sized> Gc<T> {
@@ -203,18 +224,50 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// points to will be destroyed.
     fn drop(&mut self) {
         if let Some(mut ptr) = self.ptr {
-            let box_ref = unsafe { ptr.as_ref() };
-            let old_ref_count = box_ref.ref_count.get();
-            if old_ref_count == 0 {
-                return;
-            }
-            box_ref.ref_count.set(old_ref_count - 1);
-            if old_ref_count == 1 || box_ref.is_orphaned() {
-                box_ref.ref_count.set(0);
-                unsafe {
-                    ptr::drop_in_place(ptr.as_mut());
-                    dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
-                };
+            unsafe {
+                let box_ref = ptr.as_ref();
+                match box_ref.ref_count.get() {
+                    0 => (), // allocation is already being destroyed
+                    1 => {
+                        // this was the last reference, drop unconditionally
+                        drop_in_place(ptr.as_mut());
+                        // note: `box_ref` is no longer usable
+                        dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
+                    }
+                    n => {
+                        // search through to see if we need to deallocate anything inaccessible
+                        box_ref.ref_count.set(n - 1);
+
+                        // build the reference graph
+                        let mut ref_graph = RefGraph {
+                            allocations: HashMap::new(),
+                            visited: HashSet::new(),
+                        };
+                        box_ref.value.add_to_ref_graph(&mut ref_graph);
+                        println!("after building graph: {:?}", ref_graph.allocations);
+
+                        // `ref_graph` now has the full internal reference graph.
+                        // perform a mark-sweep to detect all unreachable allocations.
+                        ref_graph.visited.clear();
+                        box_ref.value.sweep(false, &mut ref_graph);
+                        println!("after sweeping: {:?}", ref_graph.allocations);
+
+                        // `ref_graph` has now found which allocations are reachable and which are
+                        // not. Destroy the GCs.
+                        if matches!(
+                            ref_graph.allocations.get(&Gc::id(self)),
+                            Some(AllocationInfo::Unknown(_))
+                        ) {
+                            self.ptr = None;
+                            ptr.as_ref().ref_count.set(0);
+                            ptr.as_mut().value.destroy_gcs(&ref_graph);
+                            drop_in_place(ptr.as_mut());
+                            dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
+                        }
+
+                        println!("after destroying GCs: {:?}", ref_graph.allocations);
+                    }
+                }
             }
         }
     }
@@ -225,57 +278,24 @@ impl<T: Collectable + ?Sized> GcBox<T> {
     fn id(&self) -> AllocationId {
         AllocationId(NonNull::from(&self.ref_count))
     }
-
-    /// Determine whether this `GcBox` exists only because it is part of an orphaned cycle.
-    fn is_orphaned(&self) -> bool {
-        fn all_accounted_ancestors(
-            id: AllocationId,
-            parent_map: &mut HashMap<AllocationId, Vec<AllocationId>>,
-        ) -> bool {
-            match parent_map.remove(&id) {
-                // we have already visited this node and verified its ancestors are accounted for
-                None => true,
-                Some(v) => {
-                    if v.len() != unsafe { id.0.as_ref() }.get() {
-                        // mismatched ref count and number of found parents
-                        return false;
-                    }
-                    for next_parent in v {
-                        if !all_accounted_ancestors(next_parent, parent_map) {
-                            return false;
-                        }
-                    }
-                    true
-                }
-            }
-        }
-
-        let mut ref_graph = RefGraph {
-            parent_map: HashMap::new(),
-            visited: HashSet::new(),
-        };
-        ref_graph.add_allocation(self.id(), &self.value);
-
-        all_accounted_ancestors(self.id(), &mut ref_graph.parent_map)
-    }
 }
 
 impl RefGraph {
-    fn add_ref(&mut self, from: AllocationId, to: AllocationId) {
-        self.parent_map.entry(to).or_insert(Vec::new()).push(from);
-        self.visited.insert(from);
-    }
-
-    fn add_allocation<T: Collectable + ?Sized>(&mut self, id: AllocationId, value: &T) {
-        if self.mark_visited(id) {
-            return;
+    fn add_ref(&mut self, to: AllocationId) {
+        match self.allocations.entry(to) {
+            Entry::Occupied(ref mut o) => {
+                let AllocationInfo::Unknown(ref mut count) = o.get_mut() else {unreachable!();};
+                *count = count.saturating_add(1);
+            }
+            Entry::Vacant(v) => {
+                v.insert(AllocationInfo::Unknown(NonZeroUsize::new(1).unwrap()));
+            }
         }
-        value.add_to_ref_graph(id, self);
     }
 
+    /// Mark this allocation as having been visited.
+    /// Returns `true` if the allocation has been visited before, and `false` if not.
     fn mark_visited(&mut self, allocation: AllocationId) -> bool {
-        let already_visited = !self.visited.insert(allocation);
-        self.parent_map.entry(allocation).or_insert(Vec::new());
-        already_visited
+        !self.visited.insert(allocation)
     }
 }

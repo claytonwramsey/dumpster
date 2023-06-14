@@ -25,6 +25,7 @@ use std::{
 };
 
 #[test]
+/// Test a simple data structure
 fn simple() {
     static DROPPED: AtomicBool = AtomicBool::new(false);
     struct Foo(u8);
@@ -36,11 +37,9 @@ fn simple() {
     }
 
     unsafe impl Collectable for Foo {
-        fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
-            self.0.add_to_ref_graph(self_ref, ref_graph);
-        }
-
-        unsafe fn destroy_gcs(&mut self) {}
+        fn add_to_ref_graph(&self, _: &mut RefGraph) {}
+        fn sweep(&self, _: bool, _: &mut RefGraph) {}
+        unsafe fn destroy_gcs(&mut self, _: &RefGraph) {}
     }
 
     let gc1 = Gc::new(Foo(1));
@@ -58,19 +57,51 @@ fn simple() {
 }
 
 #[test]
+fn self_referential() {
+    static DROPPED: AtomicU8 = AtomicU8::new(0);
+    struct Foo(RefCell<Option<Gc<Foo>>>);
+
+    unsafe impl Collectable for Foo {
+        fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
+            self.0.add_to_ref_graph(ref_graph);
+        }
+        fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
+            self.0.sweep(is_accessible, ref_graph);
+        }
+        unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+            self.0.destroy_gcs(ref_graph);
+        }
+    }
+
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            println!("dropped!");
+            DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let gc = Gc::new(Foo(RefCell::new(None)));
+    gc.0.replace(Some(Gc::clone(&gc)));
+
+    assert_eq!(DROPPED.load(Ordering::Relaxed), 0);
+    drop(gc);
+    assert_eq!(DROPPED.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn cyclic() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
     unsafe impl Collectable for Foo {
-        fn add_to_ref_graph(&self, self_ref: AllocationId, ref_graph: &mut RefGraph) {
-            self.0.add_to_ref_graph(self_ref, ref_graph);
+        fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
+            self.0.add_to_ref_graph(ref_graph);
         }
-
-        unsafe fn destroy_gcs(&mut self) {
-            if let Some(x) = self.0.borrow_mut().as_mut() {
-                x.destroy_gcs();
-            }
+        fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
+            self.0.sweep(is_accessible, ref_graph);
+        }
+        unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+            self.0.destroy_gcs(ref_graph);
         }
     }
 
