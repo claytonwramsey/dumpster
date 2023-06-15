@@ -192,3 +192,43 @@ fn complete4() {
         assert_eq!(detector.load(Ordering::Relaxed), 1);
     }
 }
+
+#[test]
+fn complete20() {
+    let detectors: Vec<AtomicUsize> = (0..20).map(|_| AtomicUsize::new(0)).collect();
+    let mut gcs = complete_graph(&detectors);
+
+    for _ in 0..19 {
+        gcs.pop();
+    }
+
+    for detector in &detectors {
+        assert_eq!(detector.load(Ordering::Relaxed), 0);
+    }
+
+    drop(gcs);
+
+    for detector in &detectors {
+        assert_eq!(detector.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[test]
+fn complete100() {
+    let detectors: Vec<AtomicUsize> = (0..1_00).map(|_| AtomicUsize::new(0)).collect();
+    let mut gcs = complete_graph(&detectors);
+
+    for _ in 0..99 {
+        gcs.pop();
+    }
+
+    for detector in &detectors {
+        assert_eq!(detector.load(Ordering::Relaxed), 0);
+    }
+
+    drop(gcs);
+
+    for detector in &detectors {
+        assert_eq!(detector.load(Ordering::Relaxed), 1);
+    }
+}
