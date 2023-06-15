@@ -245,14 +245,12 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                         };
                         ref_graph.mark_visited(box_ref.id());
                         box_ref.value.add_to_ref_graph(&mut ref_graph);
-                        println!("after building graph: {:?}", ref_graph.allocations);
 
                         // `ref_graph` now has the full internal reference graph.
                         // perform a mark-sweep to detect all unreachable allocations.
                         ref_graph.visited.clear();
                         ref_graph.mark_visited(box_ref.id());
                         box_ref.value.sweep(false, &mut ref_graph);
-                        println!("after sweeping: {:?}", ref_graph.allocations);
 
                         // `ref_graph` has now found which allocations are reachable and which are
                         // not. Destroy the GCs.
@@ -262,15 +260,12 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                         ) {
                             self.ptr = None;
                             box_ref.ref_count.set(0);
-                            println!("call destroy on {ptr:?}");
                             ref_graph.visited.clear();
                             ref_graph.mark_visited(box_ref.id());
                             ptr.as_mut().value.destroy_gcs(&mut ref_graph);
                             drop_in_place(ptr.as_mut());
                             dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
                         }
-
-                        println!("after destroying GCs: {:?}", ref_graph.allocations);
                     }
                 }
             }
@@ -292,10 +287,6 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
         let next_id = Gc::id(self);
         let deref: &T = self;
         if let AllocationInfo::Unknown(n_refs_found) = ref_graph.allocations[&next_id] {
-            println!(
-                "is_accessible {is_accessible} found refs {n_refs_found} true refs {}",
-                unsafe { self.ptr.unwrap().as_ref().ref_count.get() }
-            );
             if is_accessible
                 || usize::from(n_refs_found) < unsafe { self.ptr.unwrap().as_ref().ref_count.get() }
             {
@@ -321,7 +312,6 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
                 && !matches!(ref_graph.allocations[&next_id], AllocationInfo::Reachable)
                 && old_ref_count != 0
             {
-                println!("call destroy on {ptr:?} (old ref count {old_ref_count})");
                 ptr.as_ref().ref_count.set(0);
                 ptr.as_mut().value.destroy_gcs(ref_graph);
                 drop_in_place(ptr.as_mut());
