@@ -243,12 +243,14 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                             allocations: HashMap::new(),
                             visited: HashSet::new(),
                         };
+                        ref_graph.mark_visited(box_ref.id());
                         box_ref.value.add_to_ref_graph(&mut ref_graph);
                         println!("after building graph: {:?}", ref_graph.allocations);
 
                         // `ref_graph` now has the full internal reference graph.
                         // perform a mark-sweep to detect all unreachable allocations.
                         ref_graph.visited.clear();
+                        ref_graph.mark_visited(box_ref.id());
                         box_ref.value.sweep(false, &mut ref_graph);
                         println!("after sweeping: {:?}", ref_graph.allocations);
 
@@ -259,7 +261,8 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                             Some(AllocationInfo::Unknown(_))
                         ) {
                             self.ptr = None;
-                            ptr.as_ref().ref_count.set(0);
+                            box_ref.ref_count.set(0);
+                            println!("call destroy on {ptr:?}");
                             ptr.as_mut().value.destroy_gcs(&ref_graph);
                             drop_in_place(ptr.as_mut());
                             dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));

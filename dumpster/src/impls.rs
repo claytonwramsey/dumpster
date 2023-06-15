@@ -23,6 +23,7 @@ use std::{
     cell::RefCell,
     collections::{BinaryHeap, HashSet, LinkedList, VecDeque},
     ptr::drop_in_place,
+    sync::atomic::AtomicUsize,
 };
 
 use crate::{AllocationInfo, Gc};
@@ -32,8 +33,8 @@ use super::{Collectable, RefGraph};
 unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
     fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
         let next_id = Gc::id(self);
+        ref_graph.add_ref(next_id);
         if !ref_graph.mark_visited(next_id) {
-            ref_graph.add_ref(next_id);
             let deref: &T = self;
             deref.add_to_ref_graph(ref_graph);
         }
@@ -70,6 +71,7 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
             if !matches!(ref_graph.allocations[&next_id], AllocationInfo::Reachable)
                 && old_ref_count != 0
             {
+                println!("call destroy on {ptr:?}");
                 self.ptr = None;
                 ptr.as_ref().ref_count.set(0);
                 ptr.as_mut().value.destroy_gcs(ref_graph);
@@ -220,3 +222,5 @@ collectable_trivial_impl!(isize);
 
 collectable_trivial_impl!(f32);
 collectable_trivial_impl!(f64);
+
+collectable_trivial_impl!(AtomicUsize);
