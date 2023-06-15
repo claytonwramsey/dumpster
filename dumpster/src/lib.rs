@@ -122,6 +122,7 @@ pub unsafe trait Collectable {
     unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph);
 }
 
+#[derive(Debug)]
 /// A garbage-collected pointer.
 pub struct Gc<T: Collectable + ?Sized> {
     /// A pointer to the heap allocation containing the data under concern.

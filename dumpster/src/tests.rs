@@ -21,7 +21,7 @@
 use super::*;
 use std::{
     cell::RefCell,
-    sync::atomic::{AtomicBool, AtomicU8, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
 };
 
 #[test]
@@ -54,6 +54,32 @@ fn simple() {
     drop(gc2);
 
     assert!(DROPPED.load(Ordering::Relaxed));
+}
+
+#[derive(Debug)]
+struct MultiRef<'a> {
+    refs: RefCell<Vec<Gc<MultiRef<'a>>>>,
+    drop_count: &'a AtomicUsize,
+}
+
+unsafe impl Collectable for MultiRef<'_> {
+    fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
+        self.refs.add_to_ref_graph(ref_graph);
+    }
+
+    fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
+        self.refs.sweep(is_accessible, ref_graph);
+    }
+
+    unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
+        self.refs.destroy_gcs(ref_graph);
+    }
+}
+
+impl Drop for MultiRef<'_> {
+    fn drop(&mut self) {
+        self.drop_count.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 #[test]
@@ -121,4 +147,50 @@ fn cyclic() {
     assert_eq!(DROPPED.load(Ordering::Relaxed), 0);
     drop(foo2);
     assert_eq!(DROPPED.load(Ordering::Relaxed), 2);
+}
+
+/// Construct a complete graph of garbage-collected
+fn complete_graph(detectors: &[AtomicUsize]) -> Vec<Gc<MultiRef<'_>>> {
+    let mut gcs = Vec::new();
+    for d in detectors {
+        let gc = Gc::new(MultiRef {
+            refs: RefCell::new(Vec::new()),
+            drop_count: d,
+        });
+        for x in &gcs {
+            gc.refs.borrow_mut().push(Gc::clone(x));
+            x.refs.borrow_mut().push(Gc::clone(&gc));
+        }
+        gcs.push(gc);
+    }
+
+    gcs
+}
+
+#[test]
+fn complete4() {
+    let detectors: [AtomicUsize; 4] = [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ];
+
+    let mut gcs = complete_graph(&detectors);
+
+    for _ in 0..3 {
+        gcs.pop();
+    }
+
+    // println!("{gcs:?}");
+
+    for detector in &detectors {
+        assert_eq!(detector.load(Ordering::Relaxed), 0);
+    }
+
+    drop(gcs);
+
+    for detector in &detectors {
+        assert_eq!(detector.load(Ordering::Relaxed), 1);
+    }
 }
