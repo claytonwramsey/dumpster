@@ -32,7 +32,7 @@ unsafe impl<'a, T> Collectable for &'a T {
     #[inline]
     fn sweep(&self, _: bool, _: &mut RefGraph) {}
     #[inline]
-    unsafe fn destroy_gcs(&mut self, _: &RefGraph) {}
+    unsafe fn destroy_gcs(&mut self, _: &mut RefGraph) {}
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
@@ -47,7 +47,7 @@ unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     }
 
     #[inline]
-    unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+    unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
         self.borrow_mut().destroy_gcs(ref_graph);
     }
 }
@@ -68,7 +68,7 @@ unsafe impl<T: Collectable> Collectable for Option<T> {
     }
 
     #[inline]
-    unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+    unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
         if let Some(x) = self.as_mut() {
             x.destroy_gcs(ref_graph);
         }
@@ -94,7 +94,7 @@ macro_rules! collectable_collection_impl {
             }
 
             #[inline]
-            unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+            unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
                 self.iter_mut().for_each(|x| x.destroy_gcs(ref_graph));
             }
         }
@@ -122,7 +122,7 @@ macro_rules! collectable_set_impl {
             }
 
             #[inline]
-            unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+            unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
                 self.drain().for_each(|mut x| x.destroy_gcs(ref_graph));
             }
         }
@@ -143,7 +143,7 @@ macro_rules! collectable_trivial_impl {
             #[inline]
             fn sweep(&self, _: bool, _: &mut RefGraph) {}
             #[inline]
-            unsafe fn destroy_gcs(&mut self, _: &RefGraph) {}
+            unsafe fn destroy_gcs(&mut self, _: &mut RefGraph) {}
         }
     };
 }

@@ -61,7 +61,7 @@ mod impls;
 /// unsafe impl Collectable for Foo {
 ///     fn add_to_ref_graph(&self, _: &mut RefGraph) {}
 ///     fn sweep(&self, _: bool, _: &mut RefGraph) {}
-///     unsafe fn destroy_gcs(&mut self, _: &RefGraph) {}
+///     unsafe fn destroy_gcs(&mut self, _: &mut RefGraph) {}
 /// }
 ///
 /// # use dumpster::Gc;
@@ -86,7 +86,7 @@ mod impls;
 ///         self.0.sweep(is_accessible, ref_graph);
 ///     }
 ///
-///     unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+///     unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
 ///         // likewise, delegate down for `destroy_gcs`
 ///         self.0.destroy_gcs(ref_graph);
 ///     }
@@ -119,7 +119,7 @@ pub unsafe trait Collectable {
     ///
     /// `destroy_gcs` should only be called by the `dumpster` crate (i.e. not by any downstream
     /// consumer).
-    unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph);
+    unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph);
 }
 
 /// A garbage-collected pointer.
@@ -263,7 +263,9 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                             self.ptr = None;
                             box_ref.ref_count.set(0);
                             println!("call destroy on {ptr:?}");
-                            ptr.as_mut().value.destroy_gcs(&ref_graph);
+                            ref_graph.visited.clear();
+                            ref_graph.mark_visited(box_ref.id());
+                            ptr.as_mut().value.destroy_gcs(&mut ref_graph);
                             drop_in_place(ptr.as_mut());
                             dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
                         }
@@ -310,15 +312,16 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
         }
     }
 
-    unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+    unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
         if let Some(mut ptr) = self.ptr {
             let next_id = Gc::id(self);
             let old_ref_count = ptr.as_ref().ref_count.get();
-            if !matches!(ref_graph.allocations[&next_id], AllocationInfo::Reachable)
+            self.ptr = None;
+            if !ref_graph.mark_visited(next_id)
+                && !matches!(ref_graph.allocations[&next_id], AllocationInfo::Reachable)
                 && old_ref_count != 0
             {
-                println!("call destroy on {ptr:?} (old ref count {old_ref_count}");
-                self.ptr = None;
+                println!("call destroy on {ptr:?} (old ref count {old_ref_count})");
                 ptr.as_ref().ref_count.set(0);
                 ptr.as_mut().value.destroy_gcs(ref_graph);
                 drop_in_place(ptr.as_mut());

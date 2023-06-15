@@ -55,7 +55,7 @@ pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenSt
             }
 
             #[inline]
-            unsafe fn destroy_gcs(&mut self, ref_graph: &dumpster::RefGraph) {
+            unsafe fn destroy_gcs(&mut self, ref_graph: &mut dumpster::RefGraph) {
                 #destroy_gcs
             }
         }

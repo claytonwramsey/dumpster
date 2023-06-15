@@ -39,7 +39,7 @@ fn simple() {
     unsafe impl Collectable for Foo {
         fn add_to_ref_graph(&self, _: &mut RefGraph) {}
         fn sweep(&self, _: bool, _: &mut RefGraph) {}
-        unsafe fn destroy_gcs(&mut self, _: &RefGraph) {}
+        unsafe fn destroy_gcs(&mut self, _: &mut RefGraph) {}
     }
 
     let gc1 = Gc::new(Foo(1));
@@ -68,7 +68,7 @@ fn self_referential() {
         fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
             self.0.sweep(is_accessible, ref_graph);
         }
-        unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+        unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
             self.0.destroy_gcs(ref_graph);
         }
     }
@@ -100,7 +100,7 @@ fn cyclic() {
         fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
             self.0.sweep(is_accessible, ref_graph);
         }
-        unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
+        unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
             self.0.destroy_gcs(ref_graph);
         }
     }
