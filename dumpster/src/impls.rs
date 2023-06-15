@@ -19,68 +19,12 @@
 //! Implementations of [`Collectable`] for common data types.
 
 use std::{
-    alloc::{dealloc, Layout},
     cell::RefCell,
     collections::{BinaryHeap, HashSet, LinkedList, VecDeque},
-    ptr::drop_in_place,
     sync::atomic::AtomicUsize,
 };
 
-use crate::{AllocationInfo, Gc};
-
 use super::{Collectable, RefGraph};
-
-unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
-    fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
-        let next_id = Gc::id(self);
-        ref_graph.add_ref(next_id);
-        if !ref_graph.mark_visited(next_id) {
-            let deref: &T = self;
-            deref.add_to_ref_graph(ref_graph);
-        }
-    }
-
-    fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
-        let next_id = Gc::id(self);
-        let deref: &T = self;
-        if let AllocationInfo::Unknown(n_refs_found) = ref_graph.allocations[&next_id] {
-            println!(
-                "is_accessible {is_accessible} found refs {n_refs_found} true refs {}",
-                unsafe { self.ptr.unwrap().as_ref().ref_count.get() }
-            );
-            if is_accessible
-                || usize::from(n_refs_found) < unsafe { self.ptr.unwrap().as_ref().ref_count.get() }
-            {
-                // we proved that the pointed-to allocation was reachable!
-                ref_graph
-                    .allocations
-                    .insert(next_id, AllocationInfo::Reachable);
-                // ignore visited qualifier because this is a change of state
-                deref.sweep(true, ref_graph);
-            } else if !ref_graph.mark_visited(next_id) {
-                // unable to prove this allocation was reachable - keep looking
-                deref.sweep(false, ref_graph);
-            }
-        }
-    }
-
-    unsafe fn destroy_gcs(&mut self, ref_graph: &RefGraph) {
-        if let Some(mut ptr) = self.ptr {
-            let next_id = Gc::id(self);
-            let old_ref_count = ptr.as_ref().ref_count.get();
-            if !matches!(ref_graph.allocations[&next_id], AllocationInfo::Reachable)
-                && old_ref_count != 0
-            {
-                println!("call destroy on {ptr:?}");
-                self.ptr = None;
-                ptr.as_ref().ref_count.set(0);
-                ptr.as_mut().value.destroy_gcs(ref_graph);
-                drop_in_place(ptr.as_mut());
-                dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
-            }
-        }
-    }
-}
 
 unsafe impl<'a, T> Collectable for &'a T {
     #[inline]
