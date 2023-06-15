@@ -182,8 +182,6 @@ fn complete4() {
         gcs.pop();
     }
 
-    // println!("{gcs:?}");
-
     for detector in &detectors {
         assert_eq!(detector.load(Ordering::Relaxed), 0);
     }

@@ -40,6 +40,26 @@ struct MultiRef<'a> {
     pointers: RefCell<Vec<Gc<MultiRef<'a>>>>,
 }
 
+#[derive(Collectable)]
+#[allow(unused)]
+enum Refs {
+    None,
+    One(Gc<Refs>),
+    Many { refs: Vec<Gc<Refs>> },
+}
+
+#[derive(Collectable)]
+#[allow(unused)]
+enum A {
+    None,
+}
+
+#[derive(Collectable)]
+#[allow(unused)]
+enum B {
+    One(Gc<B>),
+}
+
 impl<'a> Drop for MultiRef<'a> {
     fn drop(&mut self) {
         self.counter.fetch_add(1, Ordering::Relaxed);

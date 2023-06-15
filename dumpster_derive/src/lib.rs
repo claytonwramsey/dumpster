@@ -20,7 +20,7 @@
 #![warn(clippy::cargo)]
 
 use proc_macro2::TokenStream;
-use quote::{quote, quote_spanned};
+use quote::{format_ident, quote, quote_spanned};
 use syn::{
     parse_macro_input, parse_quote, spanned::Spanned, Data, DeriveInput, Fields, GenericParam,
     Generics, Ident, Index,
@@ -169,7 +169,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                         let mut execution_sweep = TokenStream::new();
                         let mut execution_destroy = TokenStream::new();
                         for (i, name) in n.named.iter().enumerate() {
-                            let field_name = format!("field{i}");
+                            let field_name = format_ident!("field{i}");
                             let field_ident = name.ident.as_ref().unwrap();
                             if i == 0 {
                                 binding.extend(quote! {
@@ -191,24 +191,24 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                             execution_sweep.extend(quote! {
                                 dumpster::Collectable::sweep(
                                     #field_name,
-                                    is_accessible
+                                    is_accessible,
                                     ref_graph
                                 );
                             });
 
                             execution_destroy.extend(quote! {
                                 dumpster::Collectable::destroy_gcs(
-                                    #field_name,
+                                    #field_name, ref_graph
                                 );
                             });
                         }
 
                         delegate_graph
-                            .extend(quote! {#name::#var_name{#binding} => {#execution_graph}});
+                            .extend(quote! {#name::#var_name{#binding} => {#execution_graph},});
                         delegate_sweep
-                            .extend(quote! {#name::##var_name{#binding => #execution_graph}});
+                            .extend(quote! {#name::#var_name{#binding} => {#execution_sweep},});
                         delegate_destroy
-                            .extend(quote! {#name::#var_name{#binding} => {#execution_destroy}});
+                            .extend(quote! {#name::#var_name{#binding} => {#execution_destroy},});
                     }
                     Fields::Unnamed(u) => {
                         let mut binding = TokenStream::new();
@@ -216,7 +216,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                         let mut execution_sweep = TokenStream::new();
                         let mut execution_destroy = TokenStream::new();
                         for (i, _) in u.unnamed.iter().enumerate() {
-                            let field_name = format!("field{i}");
+                            let field_name = format_ident!("field{i}");
                             if i == 0 {
                                 binding.extend(quote! {
                                     #field_name
@@ -244,20 +244,25 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                         }
 
                         delegate_graph
-                            .extend(quote! {#name::#var_name(#binding) => {#execution_graph}});
+                            .extend(quote! {#name::#var_name(#binding) => {#execution_graph},});
                         delegate_sweep
-                            .extend(quote! {#name::#var_name(#binding) => {#execution_sweep}});
+                            .extend(quote! {#name::#var_name(#binding) => {#execution_sweep},});
                         delegate_destroy
-                            .extend(quote! {#name::#var_name(#binding) => {#execution_destroy}});
+                            .extend(quote! {#name::#var_name(#binding) => {#execution_destroy},});
                     }
                     Fields::Unit => {
                         delegate_graph.extend(quote! {#name::#var_name => (),});
+                        delegate_sweep.extend(quote! {#name::#var_name => (),});
                         delegate_destroy.extend(quote! {#name::#var_name => (),});
                     }
                 }
             }
 
-            (delegate_graph, delegate_sweep, delegate_destroy)
+            (
+                quote! {match self {#delegate_graph}},
+                quote! {match self {#delegate_sweep}},
+                quote! {match self {#delegate_destroy}},
+            )
         }
         Data::Union(u) => {
             let stream = quote_spanned! {
