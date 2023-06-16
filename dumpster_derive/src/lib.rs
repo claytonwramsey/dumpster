@@ -144,7 +144,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                 let delegate_destroy = f.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span() =>
-                        dumpster::Collectable::destroy_gcs(&mut self.#index);
+                        dumpster::Collectable::destroy_gcs(&mut self.#index, ref_graph);
                     }
                 });
                 (

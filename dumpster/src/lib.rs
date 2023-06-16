@@ -198,7 +198,7 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &self.ptr.unwrap().as_ref().value }
+        unsafe { &self.ptr.expect("Dereferenced Gc during Drop").as_ref().value }
     }
 }
 
