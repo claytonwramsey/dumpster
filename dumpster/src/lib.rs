@@ -54,7 +54,7 @@ mod impls;
 /// A data structure which contains no `Gc`s is quite simple:
 ///
 /// ```
-/// use dumpster::{AllocationId, Collectable, RefGraph};
+/// use dumpster::{Collectable, RefGraph};
 ///
 /// struct Foo;
 ///
@@ -72,7 +72,7 @@ mod impls;
 /// If a field of your structure is a `Gc`, it should delegate to that field as such:
 ///
 /// ```
-/// use dumpster::{AllocationId, Collectable, RefGraph};
+/// use dumpster::{Collectable, RefGraph};
 ///
 /// struct Bar(Gc<()>);
 ///
