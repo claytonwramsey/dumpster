@@ -124,6 +124,17 @@ pub unsafe trait Collectable {
 
 #[derive(Debug)]
 /// A garbage-collected pointer.
+/// 
+/// # Examples
+/// 
+/// ```
+/// use dumpster::Gc;
+/// 
+/// let x: Gc<u8> = Gc::new(3);
+/// 
+/// println!("{}", *x); // prints '3'
+/// // x is then freed automatically!
+/// ```
 pub struct Gc<T: Collectable + ?Sized> {
     /// A pointer to the heap allocation containing the data under concern.
     /// The pointee box should never be mutated.
@@ -147,7 +158,7 @@ struct GcBox<T: Collectable + ?Sized> {
 /// A unique identifier for an allocated garbage-collected block.
 ///
 /// It contains a pointer to the reference count of the allocation.
-pub struct AllocationId(NonNull<Cell<usize>>);
+struct AllocationId(NonNull<Cell<usize>>);
 
 /// A reference graph of garbage-collected values.
 ///
