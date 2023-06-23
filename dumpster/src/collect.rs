@@ -217,3 +217,10 @@ impl Dumpster {
         self.to_collect.borrow_mut().remove(&box_ref.id());
     }
 }
+
+impl Drop for Dumpster {
+    fn drop(&mut self) {
+        // cleanup any leftover allocations
+        self.collect_all();
+    }
+}
