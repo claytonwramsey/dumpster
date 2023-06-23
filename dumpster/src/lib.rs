@@ -23,17 +23,18 @@ use std::{
     alloc::{dealloc, Layout},
     cell::Cell,
     collections::{hash_map::Entry, HashMap, HashSet},
-    hash::Hash,
     marker::PhantomData,
     num::NonZeroUsize,
     ops::Deref,
     ptr::{drop_in_place, NonNull},
 };
 
+use collect::{AllocationId, AllocationInfo, DUMPSTER, Dumpster};
+
+mod collect;
+mod impls;
 #[cfg(test)]
 mod tests;
-
-mod impls;
 
 /// The trait that any garbage-collectable data must implement.
 ///
@@ -124,16 +125,16 @@ pub unsafe trait Collectable {
 
 #[derive(Debug)]
 /// A garbage-collected pointer.
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use dumpster::Gc;
-/// 
+///
 /// let x: Gc<u8> = Gc::new(3);
-/// 
+///
 /// println!("{}", *x); // prints '3'
-/// // x is then freed automatically!
+///                     // x is then freed automatically!
 /// ```
 pub struct Gc<T: Collectable + ?Sized> {
     /// A pointer to the heap allocation containing the data under concern.
@@ -141,6 +142,13 @@ pub struct Gc<T: Collectable + ?Sized> {
     ptr: Option<NonNull<GcBox<T>>>,
     /// Phantom data to ensure correct lifetime analysis.
     _phantom: PhantomData<T>,
+}
+
+/// Collect all existing unreachable allocations.
+/// 
+/// This only collects the allocations local to the caller's thread.
+pub fn collect() {
+    DUMPSTER.with(Dumpster::collect_all);
 }
 
 #[repr(C)]
@@ -154,12 +162,6 @@ struct GcBox<T: Collectable + ?Sized> {
     value: T,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// A unique identifier for an allocated garbage-collected block.
-///
-/// It contains a pointer to the reference count of the allocation.
-struct AllocationId(NonNull<Cell<usize>>);
-
 /// A reference graph of garbage-collected values.
 ///
 /// This graph is built during cycle detection to find allocations which are unreachable and can
@@ -171,22 +173,13 @@ pub struct RefGraph {
     visited: HashSet<AllocationId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// The set of states that we can know about an allocation's reachability.
-enum AllocationInfo {
-    /// The allocation has been proven reachable and is not safe to free.
-    Reachable,
-    /// The allocation's reachability is unknown.
-    /// Field 0 of this case is the number of located references to this allocation.
-    Unknown(NonZeroUsize),
-}
-
 impl<T: Collectable + ?Sized> Gc<T> {
     /// Construct a new garbage-collected allocation, with `value` as its value.
     pub fn new(value: T) -> Gc<T>
     where
         T: Sized,
     {
+        DUMPSTER.with(|d| d.n_refs_living.set(d.n_refs_living.get() + 1));
         Gc {
             ptr: Some(NonNull::from(Box::leak(Box::new(GcBox {
                 ref_count: Cell::new(1),
@@ -209,7 +202,13 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &self.ptr.expect("Dereferenced Gc during Drop").as_ref().value }
+        unsafe {
+            &self
+                .ptr
+                .expect("Dereferenced Gc during Drop")
+                .as_ref()
+                .value
+        }
     }
 }
 
@@ -222,6 +221,7 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
             let box_ref = self.ptr.unwrap().as_ref();
             box_ref.ref_count.set(box_ref.ref_count.get() + 1);
         }
+        DUMPSTER.with(|d| d.n_refs_living.set(d.n_refs_living.get() + 1));
         Self {
             ptr: self.ptr.clone(),
             _phantom: PhantomData,
@@ -236,51 +236,40 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// points to will be destroyed.
     fn drop(&mut self) {
         if let Some(mut ptr) = self.ptr {
-            unsafe {
-                let box_ref = ptr.as_ref();
-                match box_ref.ref_count.get() {
-                    0 => (), // allocation is already being destroyed
-                    1 => {
-                        // this was the last reference, drop unconditionally
-                        drop_in_place(ptr.as_mut());
-                        // note: `box_ref` is no longer usable
-                        dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
-                    }
-                    n => {
-                        // search through to see if we need to deallocate anything inaccessible
-                        box_ref.ref_count.set(n - 1);
-
-                        // build the reference graph
-                        let mut ref_graph = RefGraph {
-                            allocations: HashMap::new(),
-                            visited: HashSet::new(),
-                        };
-                        ref_graph.mark_visited(box_ref.id());
-                        box_ref.value.add_to_ref_graph(&mut ref_graph);
-
-                        // `ref_graph` now has the full internal reference graph.
-                        // perform a mark-sweep to detect all unreachable allocations.
-                        ref_graph.visited.clear();
-                        ref_graph.mark_visited(box_ref.id());
-                        box_ref.value.sweep(false, &mut ref_graph);
-
-                        // `ref_graph` has now found which allocations are reachable and which are
-                        // not. Destroy the GCs.
-                        if matches!(
-                            ref_graph.allocations.get(&Gc::id(self)),
-                            Some(AllocationInfo::Unknown(_))
-                        ) {
-                            self.ptr = None;
-                            box_ref.ref_count.set(0);
-                            ref_graph.visited.clear();
-                            ref_graph.mark_visited(box_ref.id());
-                            ptr.as_mut().value.destroy_gcs(&mut ref_graph);
+            DUMPSTER.with(|d| {
+                // Decrement the number of living references and increment the total number of
+                // dropped references
+                d.n_ref_drops.set(d.n_ref_drops.get() + 1);
+                d.n_refs_living.set(d.n_refs_living.get() - 1);
+                unsafe {
+                    let box_ref = ptr.as_ref();
+                    match box_ref.ref_count.get() {
+                        0 => (), // allocation is already being destroyed
+                        1 => {
+                            d.mark_cleaned(box_ref);
+                            // this was the last reference, drop unconditionally
                             drop_in_place(ptr.as_mut());
+                            // note: `box_ref` is no longer usable
                             dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
+                        }
+                        n => {
+                            // decrement the ref count - but another reference to this data still
+                            // lives
+                            box_ref.ref_count.set(n - 1);
+                            // remaining references could be a cycle - therefore, mark it as dirty
+                            // so we can check later
+                            d.mark_dirty(box_ref);
+
+                            // check if it's been a long time since the last time we collected all 
+                            // the garbage. 
+                            // if so, go and collect it all again (amortized O(1))
+                            if d.n_ref_drops.get() << 1 >= d.n_refs_living.get() {
+                                d.collect_all();
+                            }
                         }
                     }
                 }
-            }
+            });
         }
     }
 }

@@ -143,8 +143,10 @@ fn cyclic() {
     foo1.0.replace(Some(Gc::clone(&foo2)));
 
     assert_eq!(DROPPED.load(Ordering::Relaxed), 0);
+    println!("dropping foo1");
     drop(foo1);
     assert_eq!(DROPPED.load(Ordering::Relaxed), 0);
+    println!("dropping foo2");
     drop(foo2);
     assert_eq!(DROPPED.load(Ordering::Relaxed), 2);
 }
@@ -187,6 +189,7 @@ fn complete4() {
     }
 
     drop(gcs);
+    collect();
 
     for detector in &detectors {
         assert_eq!(detector.load(Ordering::Relaxed), 1);
@@ -207,6 +210,7 @@ fn complete20() {
     }
 
     drop(gcs);
+    collect();
 
     for detector in &detectors {
         assert_eq!(detector.load(Ordering::Relaxed), 1);
@@ -227,6 +231,7 @@ fn complete100() {
     }
 
     drop(gcs);
+    collect();
 
     for detector in &detectors {
         assert_eq!(detector.load(Ordering::Relaxed), 1);

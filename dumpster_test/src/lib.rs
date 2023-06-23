@@ -25,7 +25,7 @@ use std::{
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 
-use dumpster::Gc;
+use dumpster::{Gc, collect};
 use dumpster_derive::Collectable;
 
 #[derive(Collectable)]
@@ -152,12 +152,12 @@ fn parallel_loop() {
     assert_eq!(count3.load(Ordering::Relaxed), 0);
     assert_eq!(count4.load(Ordering::Relaxed), 0);
     drop(gc4);
+    collect();
     assert_eq!(count1.load(Ordering::Relaxed), 1);
     assert_eq!(count2.load(Ordering::Relaxed), 1);
     assert_eq!(count3.load(Ordering::Relaxed), 1);
     assert_eq!(count4.load(Ordering::Relaxed), 1);
 }
-
 
 #[test]
 #[should_panic]
