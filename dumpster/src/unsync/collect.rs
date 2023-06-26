@@ -1,3 +1,21 @@
+/*
+   dumpster, a cycle-tracking garbage collector for Rust.
+   Copyright (C) 2023 Clayton Ramsey.
+
+   This program is free software: you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation, either version 3 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 use std::{
     alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
@@ -63,10 +81,16 @@ unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: OpaquePtr, vis
 }
 
 unsafe fn destroy_gcs<T: Collectable + ?Sized>(ptr: OpaquePtr, destroyer: &mut DestroyGcs) {
-    ptr.specify::<GcBox<T>>()
+    let mut specific_ptr = ptr.specify::<GcBox<T>>();
+    specific_ptr.as_mut().ref_count.set(0);
+    specific_ptr
         .as_mut()
         .value
         .destroy_gcs(destroyer);
+
+    destroyer.collection_queue.push((specific_ptr.as_ptr().cast(), Layout::for_value(&specific_ptr.as_ref().value)));
+    println!("drop {:?}", addr_of_mut!(specific_ptr.as_mut().value));
+    drop_in_place(addr_of_mut!(specific_ptr.as_mut().value));
 }
 
 impl Dumpster {
@@ -92,16 +116,17 @@ impl Dumpster {
             let mut sweep = Sweep {
                 visited: HashSet::new(),
             };
-            for id in ref_graph_build
-                .ref_state
-                .iter()
-                .filter_map(|(k, v)| (v.get() != k.0.as_ref().get()).then_some(k))
-            {
-                if sweep.visited.insert(*id) {
-                    let collect = &self.to_collect.borrow()[id];
-                    (collect.sweep_fn)(collect.ptr, &mut sweep);
+            for (id, v) in self.to_collect.borrow().iter() {
+                let is_root = match ref_graph_build.ref_state.get(id) {
+                    None => true,
+                    Some(&n) => id.0.as_ref().get() != n.into(),
+                };
+                if is_root && !sweep.visited.insert(*id) {
+                    (v.sweep_fn)(v.ptr, &mut sweep);
                 }
             }
+
+            println!("reachable set: {:?}", sweep.visited);
 
             let mut destroy = DestroyGcs {
                 visited: HashSet::new(),
@@ -229,8 +254,10 @@ impl Destroyer for DestroyGcs {
                 let id = p.as_ref().id();
                 gc.ptr = None;
                 if !self.reachable.contains(&id) && self.visited.insert(p.as_ref().id()) {
+                    p.as_mut().ref_count.set(0);
                     gc.deref().destroy_gcs(self);
                     self.collection_queue.push((id.0.as_ptr().cast(), Layout::for_value(p.as_ref())));
+                    println!("drop {:?}", addr_of_mut!(p.as_mut().value));
                     drop_in_place(addr_of_mut!(p.as_mut().value));
                 }
                 
