@@ -40,7 +40,7 @@ mod tests;
 /// # Examples
 ///
 /// ```
-/// use dumpster::Gc;
+/// use dumpster::unsync::Gc;
 ///
 /// let x: Gc<u8> = Gc::new(3);
 ///
@@ -135,6 +135,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                 d.n_refs_living.set(d.n_refs_living.get() - 1);
                 unsafe {
                     let box_ref = ptr.as_ref();
+                    println!("drop reference {ptr:?} with ref count {}", box_ref.ref_count.get());
                     match box_ref.ref_count.get() {
                         0 => (), // allocation is already being destroyed
                         1 => {

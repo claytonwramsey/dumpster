@@ -40,22 +40,17 @@ pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let generics = add_trait_bounds(input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let (generate_graph, do_sweep, destroy_gcs) = delegate_methods(name, &input.data);
+    let (do_visitor, destroy_gcs) = delegate_methods(name, &input.data);
 
     let generated = quote! {
         unsafe impl #impl_generics dumpster::Collectable for #name #ty_generics #where_clause {
             #[inline]
-            fn add_to_ref_graph(&self, ref_graph: &mut dumpster::RefGraph) {
-                #generate_graph
+            fn accept<V: dumpster::Visitor>(&self, visitor: &mut V) {
+                #do_visitor
             }
 
             #[inline]
-            fn sweep(&self, is_accessible: bool, ref_graph: &mut dumpster::RefGraph) {
-                #do_sweep
-            }
-
-            #[inline]
-            unsafe fn destroy_gcs(&mut self, ref_graph: &mut dumpster::RefGraph) {
+            unsafe fn destroy_gcs<D: dumpster::Destroyer>(&mut self, destroyer: &mut D) {
                 #destroy_gcs
             }
         }
@@ -76,30 +71,16 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
 
 #[allow(clippy::too_many_lines)]
 /// Generate method implementations for [`Collectable`] for some data type.
-///
-/// Returns a triple containing the method body for [`Collectable::add_to_ref_graph`],
-/// [`Collectable::sweep`] and [`Collectable::destroy_gcs`].
-fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, TokenStream) {
+fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
     match data {
         Data::Struct(data) => match data.fields {
             Fields::Named(ref f) => {
-                let delegate_graph = f.named.iter().map(|f| {
+                let delegate_visit = f.named.iter().map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span() =>
-                        dumpster::Collectable::add_to_ref_graph(
+                        dumpster::Collectable::accept(
                             &self.#name,
-                            ref_graph
-                        );
-                    }
-                });
-
-                let delegate_sweep = f.named.iter().map(|f| {
-                    let name = &f.ident;
-                    quote_spanned! {f.span() =>
-                        dumpster::Collectable::sweep(
-                            &self.#name,
-                            is_accessible,
-                            ref_graph
+                            visitor
                         );
                     }
                 });
@@ -109,34 +90,22 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                     quote_spanned! {f.span() =>
                         dumpster::Collectable::destroy_gcs(
                             &mut self.#name,
-                            ref_graph
+                            destroyer
                         );
                     }
                 });
                 (
-                    quote! { #(#delegate_graph)* },
-                    quote! { #(#delegate_sweep)* },
+                    quote! { #(#delegate_visit)* },
                     quote! { #(#delegate_destroy)* },
                 )
             }
             Fields::Unnamed(ref f) => {
-                let delegate_graph = f.unnamed.iter().enumerate().map(|(i, f)| {
+                let delegate_visit = f.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span() =>
-                        dumpster::Collectable::add_to_ref_graph(
+                        dumpster::Collectable::accept(
                             &self.#index,
-                            ref_graph
-                        );
-                    }
-                });
-
-                let delegate_sweep = f.unnamed.iter().enumerate().map(|(i, f)| {
-                    let index = Index::from(i);
-                    quote_spanned! {f.span() =>
-                        dumpster::Collectable::sweep(
-                            &self.#index,
-                            is_accessible,
-                            ref_graph
+                            visitor
                         );
                     }
                 });
@@ -144,20 +113,18 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                 let delegate_destroy = f.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span() =>
-                        dumpster::Collectable::destroy_gcs(&mut self.#index, ref_graph);
+                        dumpster::Collectable::destroy_gcs(&mut self.#index, destroyer);
                     }
                 });
                 (
-                    quote! { #(#delegate_graph)* },
-                    quote! { #(#delegate_sweep)* },
+                    quote! { #(#delegate_visit)* },
                     quote! { #(#delegate_destroy)* },
                 )
             }
-            Fields::Unit => (TokenStream::new(), TokenStream::new(), TokenStream::new()),
+            Fields::Unit => (TokenStream::new(), TokenStream::new()),
         },
         Data::Enum(e) => {
-            let mut delegate_graph = TokenStream::new();
-            let mut delegate_sweep = TokenStream::new();
+            let mut delegate_visit = TokenStream::new();
             let mut delegate_destroy = TokenStream::new();
             for var in e.variants.iter() {
                 let var_name = &var.ident;
@@ -165,8 +132,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                 match &var.fields {
                     Fields::Named(n) => {
                         let mut binding = TokenStream::new();
-                        let mut execution_graph = TokenStream::new();
-                        let mut execution_sweep = TokenStream::new();
+                        let mut execution_visit = TokenStream::new();
                         let mut execution_destroy = TokenStream::new();
                         for (i, name) in n.named.iter().enumerate() {
                             let field_name = format_ident!("field{i}");
@@ -181,39 +147,28 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                                 });
                             }
 
-                            execution_graph.extend(quote! {
-                                dumpster::Collectable::add_to_ref_graph(
+                            execution_visit.extend(quote! {
+                                dumpster::Collectable::accept(
                                     #field_name,
-                                    ref_graph
-                                );
-                            });
-
-                            execution_sweep.extend(quote! {
-                                dumpster::Collectable::sweep(
-                                    #field_name,
-                                    is_accessible,
-                                    ref_graph
+                                    visitor
                                 );
                             });
 
                             execution_destroy.extend(quote! {
                                 dumpster::Collectable::destroy_gcs(
-                                    #field_name, ref_graph
+                                    #field_name, destroyer
                                 );
                             });
                         }
 
-                        delegate_graph
-                            .extend(quote! {#name::#var_name{#binding} => {#execution_graph},});
-                        delegate_sweep
-                            .extend(quote! {#name::#var_name{#binding} => {#execution_sweep},});
+                        delegate_visit
+                            .extend(quote! {#name::#var_name{#binding} => {#execution_visit},});
                         delegate_destroy
                             .extend(quote! {#name::#var_name{#binding} => {#execution_destroy},});
                     }
                     Fields::Unnamed(u) => {
                         let mut binding = TokenStream::new();
-                        let mut execution_graph = TokenStream::new();
-                        let mut execution_sweep = TokenStream::new();
+                        let mut execution_visit = TokenStream::new();
                         let mut execution_destroy = TokenStream::new();
                         for (i, _) in u.unnamed.iter().enumerate() {
                             let field_name = format_ident!("field{i}");
@@ -227,40 +182,32 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
                                 });
                             }
 
-                            execution_graph.extend(quote! {
-                                dumpster::Collectable::add_to_ref_graph(
+                            execution_visit.extend(quote! {
+                                dumpster::Collectable::accept(
                                     #field_name,
-                                    ref_graph
+                                    visitor
                                 );
                             });
 
-                            execution_sweep.extend(quote! {
-                                dumpster::Collectable::sweep(#field_name, is_accessible, ref_graph);
-                            });
-
                             execution_destroy.extend(quote! {
-                                dumpster::Collectable::destroy_gcs(#field_name, ref_graph);
+                                dumpster::Collectable::destroy_gcs(#field_name, destroyer);
                             });
                         }
 
-                        delegate_graph
-                            .extend(quote! {#name::#var_name(#binding) => {#execution_graph},});
-                        delegate_sweep
-                            .extend(quote! {#name::#var_name(#binding) => {#execution_sweep},});
+                        delegate_visit
+                            .extend(quote! {#name::#var_name(#binding) => {#execution_visit},});
                         delegate_destroy
                             .extend(quote! {#name::#var_name(#binding) => {#execution_destroy},});
                     }
                     Fields::Unit => {
-                        delegate_graph.extend(quote! {#name::#var_name => (),});
-                        delegate_sweep.extend(quote! {#name::#var_name => (),});
+                        delegate_visit.extend(quote! {#name::#var_name => (),});
                         delegate_destroy.extend(quote! {#name::#var_name => (),});
                     }
                 }
             }
 
             (
-                quote! {match self {#delegate_graph}},
-                quote! {match self {#delegate_sweep}},
+                quote! {match self {#delegate_visit}},
                 quote! {match self {#delegate_destroy}},
             )
         }
@@ -268,7 +215,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream, Tok
             let stream = quote_spanned! {
                 u.union_token.span => compile_error!("`Collectable` must be manually implemented for unions");
             };
-            (stream.clone(), stream.clone(), stream)
+            (stream.clone(), stream)
         }
     }
 }

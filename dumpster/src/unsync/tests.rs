@@ -256,3 +256,44 @@ fn complete1000() {
         assert_eq!(detector.load(Ordering::Relaxed), 1);
     }
 }
+
+
+#[test]
+fn parallel_loop() {
+    let count1 = AtomicUsize::new(0);
+    let count2 = AtomicUsize::new(0);
+    let count3 = AtomicUsize::new(0);
+    let count4 = AtomicUsize::new(0);
+
+    let gc1 = Gc::new(MultiRef {
+        drop_count: &count1,
+        refs: RefCell::new(Vec::new()),
+    });
+    let gc2 = Gc::new(MultiRef {
+        drop_count: &count2,
+        refs: RefCell::new(vec![Gc::clone(&gc1)]),
+    });
+    let gc3 = Gc::new(MultiRef {
+        drop_count: &count3,
+        refs: RefCell::new(vec![Gc::clone(&gc1)]),
+    });
+    let gc4 = Gc::new(MultiRef {
+        drop_count: &count4,
+        refs: RefCell::new(vec![Gc::clone(&gc2), Gc::clone(&gc3)]),
+    });
+    gc1.refs.borrow_mut().push(Gc::clone(&gc4));
+
+    drop(gc1);
+    drop(gc2);
+    drop(gc3);
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    drop(gc4);
+    collect();
+    assert_eq!(count1.load(Ordering::Relaxed), 1);
+    assert_eq!(count2.load(Ordering::Relaxed), 1);
+    assert_eq!(count3.load(Ordering::Relaxed), 1);
+    assert_eq!(count4.load(Ordering::Relaxed), 1);
+}

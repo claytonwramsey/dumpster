@@ -56,6 +56,7 @@ pub struct Dumpster {
 /// It contains a pointer to the reference count of the allocation.
 pub struct AllocationId(pub NonNull<Cell<usize>>);
 
+#[derive(Debug)]
 /// The necessary information required to collect some garbage-collected data.
 /// This data is stored in a map from allocation IDs to the necessary cleanup operation.
 struct Cleanup {
@@ -67,17 +68,21 @@ struct Cleanup {
 
 impl Cleanup {
     fn new<T: Collectable + ?Sized>(box_ref: &GcBox<T>) -> Cleanup {
-        Cleanup {
+        dbg!(Cleanup {
             build_graph_fn: apply_visitor::<T, BuildRefGraph>,
             sweep_fn: apply_visitor::<T, Sweep>,
             destroy_gcs_fn: destroy_gcs::<T>,
-            ptr: OpaquePtr::new(box_ref),
-        }
+            ptr: OpaquePtr::new(NonNull::from(box_ref)),
+        })
     }
 }
 
+#[inline(never)]
 unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: OpaquePtr, visitor: &mut V) {
-    ptr.specify::<GcBox<T>>().as_ref().value.accept(visitor);
+    println!("apply visitor!");
+    let specified: NonNull<GcBox<T>> = ptr.specify();
+    println!("done specifying - accept!");
+    specified.as_ref().value.accept(visitor);
 }
 
 unsafe fn destroy_gcs<T: Collectable + ?Sized>(ptr: OpaquePtr, destroyer: &mut DestroyGcs) {
@@ -89,7 +94,6 @@ unsafe fn destroy_gcs<T: Collectable + ?Sized>(ptr: OpaquePtr, destroyer: &mut D
         .destroy_gcs(destroyer);
 
     destroyer.collection_queue.push((specific_ptr.as_ptr().cast(), Layout::for_value(&specific_ptr.as_ref().value)));
-    println!("drop {:?}", addr_of_mut!(specific_ptr.as_mut().value));
     drop_in_place(addr_of_mut!(specific_ptr.as_mut().value));
 }
 
@@ -104,14 +108,15 @@ impl Dumpster {
                 ref_state: HashMap::new(),
             };
 
-            println!("begin graph build");
+            println!("building ref graph");
             for (k, v) in self.to_collect.borrow().iter() {
                 if !ref_graph_build.visited.contains(k) {
                     ref_graph_build.visited.insert(*k);
+                    println!("call build graph fn {:?}", v.build_graph_fn);
                     (v.build_graph_fn)(v.ptr, &mut ref_graph_build);
                 }
             }
-            println!("final ref graph: {:?}", ref_graph_build.ref_state);
+            println!("ref counts: {:?}", ref_graph_build.ref_state);
 
             let mut sweep = Sweep {
                 visited: HashSet::new(),
@@ -126,7 +131,7 @@ impl Dumpster {
                 }
             }
 
-            println!("reachable set: {:?}", sweep.visited);
+            println!("reachable: {:?}", sweep.visited);
 
             let mut destroy = DestroyGcs {
                 visited: HashSet::new(),
@@ -150,6 +155,7 @@ impl Dumpster {
     /// Mark an allocation as "dirty," implying that it may need to be swept through later to find
     /// out if it has any references pointing to it.
     pub(super) fn mark_dirty<T: Collectable + ?Sized>(&self, box_ref: &GcBox<T>) {
+        println!("mark {:?} as dirty", std::ptr::addr_of!(*box_ref));
         self.to_collect
             .borrow_mut()
             .entry(box_ref.id())
@@ -159,6 +165,7 @@ impl Dumpster {
     /// Mark an allocation as "cleaned," implying that the allocation is about to be destroyed and
     /// therefore should not be cleaned up later.
     pub(super) fn mark_cleaned<T: Collectable + ?Sized>(&self, box_ref: &GcBox<T>) {
+        println!("mark {:?} as cleaned", NonNull::from(box_ref));
         self.to_collect.borrow_mut().remove(&box_ref.id());
     }
 }
@@ -253,11 +260,10 @@ impl Destroyer for DestroyGcs {
             if let Some(mut p) = gc.ptr {
                 let id = p.as_ref().id();
                 gc.ptr = None;
-                if !self.reachable.contains(&id) && self.visited.insert(p.as_ref().id()) {
+                if !self.reachable.contains(&id) && self.visited.insert(id) {
                     p.as_mut().ref_count.set(0);
-                    gc.deref().destroy_gcs(self);
+                    p.as_mut().value.destroy_gcs(self);
                     self.collection_queue.push((id.0.as_ptr().cast(), Layout::for_value(p.as_ref())));
-                    println!("drop {:?}", addr_of_mut!(p.as_mut().value));
                     drop_in_place(addr_of_mut!(p.as_mut().value));
                 }
                 

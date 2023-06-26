@@ -25,7 +25,7 @@ use std::{
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 
-use dumpster::{Gc, collect};
+use dumpster::unsync::{Gc, collect};
 use dumpster_derive::Collectable;
 
 #[derive(Collectable)]
