@@ -24,53 +24,39 @@ use std::{
     sync::atomic::AtomicUsize,
 };
 
-use super::{Collectable, RefGraph};
+use crate::{Collectable, Destroyer, Visitor};
 
 unsafe impl<'a, T> Collectable for &'a T {
     #[inline]
-    fn add_to_ref_graph(&self, _: &mut RefGraph) {}
+    fn accept<V: Visitor>(&self, _: &mut V) {}
     #[inline]
-    fn sweep(&self, _: bool, _: &mut RefGraph) {}
-    #[inline]
-    unsafe fn destroy_gcs(&mut self, _: &mut RefGraph) {}
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     #[inline]
-    fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
-        self.borrow().add_to_ref_graph(ref_graph);
+    fn accept<V: Visitor>(&self, visitor: &mut V) {
+        self.borrow().accept(visitor);
     }
 
     #[inline]
-    fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
-        self.borrow().sweep(is_accessible, ref_graph);
-    }
-
-    #[inline]
-    unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
-        self.borrow_mut().destroy_gcs(ref_graph);
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
+        self.borrow_mut().destroy_gcs(visitor);
     }
 }
 
 unsafe impl<T: Collectable> Collectable for Option<T> {
     #[inline]
-    fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
-        if let Some(v) = self {
-            v.add_to_ref_graph(ref_graph);
+    fn accept<V: Visitor>(&self, visitor: &mut V) {
+        if let Some(ref x) = self {
+            x.accept(visitor);
         }
     }
 
     #[inline]
-    fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
-        if let Some(v) = self {
-            v.sweep(is_accessible, ref_graph);
-        }
-    }
-
-    #[inline]
-    unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
-        if let Some(x) = self.as_mut() {
-            x.destroy_gcs(ref_graph);
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
+        if let Some(ref mut x) = self {
+            x.destroy_gcs(visitor);
         }
     }
 }
@@ -82,20 +68,13 @@ macro_rules! collectable_collection_impl {
     ($x: ty) => {
         unsafe impl<T: Collectable> Collectable for $x {
             #[inline]
-            fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
-                self.iter()
-                    .for_each(|elem| elem.add_to_ref_graph(ref_graph));
+            fn accept<V: Visitor>(&self, visitor: &mut V) {
+                self.iter().for_each(|elem| elem.accept(visitor));
             }
 
             #[inline]
-            fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
-                self.iter()
-                    .for_each(|elem| elem.sweep(is_accessible, ref_graph));
-            }
-
-            #[inline]
-            unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
-                self.iter_mut().for_each(|x| x.destroy_gcs(ref_graph));
+            unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
+                self.iter_mut().for_each(|x| x.destroy_gcs(visitor));
             }
         }
     };
@@ -110,20 +89,13 @@ macro_rules! collectable_set_impl {
     ($x: ty) => {
         unsafe impl<T: Collectable> Collectable for $x {
             #[inline]
-            fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
-                self.iter()
-                    .for_each(|elem| elem.add_to_ref_graph(ref_graph));
+            fn accept<V: Visitor>(&self, visitor: &mut V) {
+                self.iter().for_each(|elem| elem.accept(visitor));
             }
 
             #[inline]
-            fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
-                self.iter()
-                    .for_each(|elem| elem.sweep(is_accessible, ref_graph));
-            }
-
-            #[inline]
-            unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
-                self.drain().for_each(|mut x| x.destroy_gcs(ref_graph));
+            unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
+                self.drain().for_each(|mut x| x.destroy_gcs(visitor));
             }
         }
     };
@@ -139,11 +111,9 @@ macro_rules! collectable_trivial_impl {
     ($x: ty) => {
         unsafe impl Collectable for $x {
             #[inline]
-            fn add_to_ref_graph(&self, _: &mut RefGraph) {}
+            fn accept<V: Visitor>(&self, _: &mut V) {}
             #[inline]
-            fn sweep(&self, _: bool, _: &mut RefGraph) {}
-            #[inline]
-            unsafe fn destroy_gcs(&mut self, _: &mut RefGraph) {}
+            unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
         }
     };
 }

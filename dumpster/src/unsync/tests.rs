@@ -18,6 +18,8 @@
 
 //! Simple tests using manual implementations of [`Collectable`].
 
+use crate::Visitor;
+
 use super::*;
 use std::{
     cell::RefCell,
@@ -37,9 +39,10 @@ fn simple() {
     }
 
     unsafe impl Collectable for Foo {
-        fn add_to_ref_graph(&self, _: &mut RefGraph) {}
-        fn sweep(&self, _: bool, _: &mut RefGraph) {}
-        unsafe fn destroy_gcs(&mut self, _: &mut RefGraph) {}
+        #[inline]
+        fn accept<V: Visitor>(&self, _: &mut V) {}
+        #[inline]
+        unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
     }
 
     let gc1 = Gc::new(Foo(1));
@@ -63,16 +66,13 @@ struct MultiRef<'a> {
 }
 
 unsafe impl Collectable for MultiRef<'_> {
-    fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
-        self.refs.add_to_ref_graph(ref_graph);
+    #[inline]
+    fn accept<V: Visitor>(&self, visitor: &mut V) {
+        self.refs.accept(visitor);
     }
-
-    fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
-        self.refs.sweep(is_accessible, ref_graph);
-    }
-
-    unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
-        self.refs.destroy_gcs(ref_graph);
+    #[inline]
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
+        self.refs.destroy_gcs(visitor);
     }
 }
 
@@ -88,14 +88,13 @@ fn self_referential() {
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
     unsafe impl Collectable for Foo {
-        fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
-            self.0.add_to_ref_graph(ref_graph);
+        #[inline]
+        fn accept<V: Visitor>(&self, visitor: &mut V) {
+            self.0.accept(visitor);
         }
-        fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
-            self.0.sweep(is_accessible, ref_graph);
-        }
-        unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
-            self.0.destroy_gcs(ref_graph);
+        #[inline]
+        unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
+            self.0.destroy_gcs(visitor);
         }
     }
 
@@ -120,14 +119,13 @@ fn cyclic() {
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
     unsafe impl Collectable for Foo {
-        fn add_to_ref_graph(&self, ref_graph: &mut RefGraph) {
-            self.0.add_to_ref_graph(ref_graph);
+        #[inline]
+        fn accept<V: Visitor>(&self, visitor: &mut V) {
+            self.0.accept(visitor);
         }
-        fn sweep(&self, is_accessible: bool, ref_graph: &mut RefGraph) {
-            self.0.sweep(is_accessible, ref_graph);
-        }
-        unsafe fn destroy_gcs(&mut self, ref_graph: &mut RefGraph) {
-            self.0.destroy_gcs(ref_graph);
+        #[inline]
+        unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
+            self.0.destroy_gcs(visitor);
         }
     }
 
@@ -223,6 +221,27 @@ fn complete100() {
     let mut gcs = complete_graph(&detectors);
 
     for _ in 0..99 {
+        gcs.pop();
+    }
+
+    for detector in &detectors {
+        assert_eq!(detector.load(Ordering::Relaxed), 0);
+    }
+
+    drop(gcs);
+    collect();
+
+    for detector in &detectors {
+        assert_eq!(detector.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[test]
+fn complete1000() {
+    let detectors: Vec<AtomicUsize> = (0..1_000).map(|_| AtomicUsize::new(0)).collect();
+    let mut gcs = complete_graph(&detectors);
+
+    for _ in 0..999 {
         gcs.pop();
     }
 
