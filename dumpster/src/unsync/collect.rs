@@ -22,7 +22,7 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     num::NonZeroUsize,
     ops::Deref,
-    ptr::{drop_in_place, NonNull, addr_of_mut},
+    ptr::{addr_of_mut, drop_in_place, NonNull},
 };
 
 use crate::{unsync::Gc, Collectable, Destroyer, OpaquePtr, Visitor};
@@ -68,32 +68,29 @@ struct Cleanup {
 
 impl Cleanup {
     fn new<T: Collectable + ?Sized>(box_ref: &GcBox<T>) -> Cleanup {
-        dbg!(Cleanup {
+        Cleanup {
             build_graph_fn: apply_visitor::<T, BuildRefGraph>,
             sweep_fn: apply_visitor::<T, Sweep>,
             destroy_gcs_fn: destroy_gcs::<T>,
             ptr: OpaquePtr::new(NonNull::from(box_ref)),
-        })
+        }
     }
 }
 
-#[inline(never)]
 unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: OpaquePtr, visitor: &mut V) {
-    println!("apply visitor!");
     let specified: NonNull<GcBox<T>> = ptr.specify();
-    println!("done specifying - accept!");
     specified.as_ref().value.accept(visitor);
 }
 
 unsafe fn destroy_gcs<T: Collectable + ?Sized>(ptr: OpaquePtr, destroyer: &mut DestroyGcs) {
     let mut specific_ptr = ptr.specify::<GcBox<T>>();
     specific_ptr.as_mut().ref_count.set(0);
-    specific_ptr
-        .as_mut()
-        .value
-        .destroy_gcs(destroyer);
+    specific_ptr.as_mut().value.destroy_gcs(destroyer);
 
-    destroyer.collection_queue.push((specific_ptr.as_ptr().cast(), Layout::for_value(&specific_ptr.as_ref().value)));
+    destroyer.collection_queue.push((
+        specific_ptr.as_ptr().cast(),
+        Layout::for_value(&specific_ptr.as_ref().value),
+    ));
     drop_in_place(addr_of_mut!(specific_ptr.as_mut().value));
 }
 
@@ -112,23 +109,43 @@ impl Dumpster {
             for (k, v) in self.to_collect.borrow().iter() {
                 if !ref_graph_build.visited.contains(k) {
                     ref_graph_build.visited.insert(*k);
-                    println!("call build graph fn {:?}", v.build_graph_fn);
                     (v.build_graph_fn)(v.ptr, &mut ref_graph_build);
                 }
             }
-            println!("ref counts: {:?}", ref_graph_build.ref_state);
+            println!("found references: {:?}", ref_graph_build.ref_state);
+            for (id, count) in ref_graph_build
+                .ref_state
+                .keys()
+                .map(|id| (id, id.0.as_ref().get()))
+            {
+                println!("true count for {:?}: {count}", id.0);
+            }
 
             let mut sweep = Sweep {
                 visited: HashSet::new(),
             };
-            for (id, v) in self.to_collect.borrow().iter() {
-                let is_root = match ref_graph_build.ref_state.get(id) {
-                    None => true,
-                    Some(&n) => id.0.as_ref().get() != n.into(),
-                };
-                if is_root && !sweep.visited.insert(*id) {
-                    (v.sweep_fn)(v.ptr, &mut sweep);
-                }
+            for (id, reachability) in
+                ref_graph_build
+                    .ref_state
+                    .iter()
+                    .filter(|(id, reachability)| {
+                        id.0.as_ref().get() != reachability.cyclic_ref_count.into()
+                    })
+            {
+                sweep.visited.insert(*id);
+                (reachability.sweep_fn)(reachability.ptr, &mut sweep);
+            }
+
+            // any allocations which we didn't find must also be roots
+            for (id, cleanup) in self
+                .to_collect
+                .borrow()
+                .iter()
+                .filter(|(id, _)| !ref_graph_build.ref_state.contains_key(id))
+            {
+                println!("id {:?} not found - must be root", cleanup.ptr);
+                sweep.visited.insert(*id);
+                (cleanup.sweep_fn)(cleanup.ptr, &mut sweep);
             }
 
             println!("reachable: {:?}", sweep.visited);
@@ -148,7 +165,6 @@ impl Dumpster {
             for (ptr, layout) in destroy.collection_queue {
                 dealloc(ptr, layout);
             }
-
         }
     }
 
@@ -179,7 +195,14 @@ impl Drop for Dumpster {
 
 struct BuildRefGraph {
     visited: HashSet<AllocationId>,
-    ref_state: HashMap<AllocationId, NonZeroUsize>,
+    ref_state: HashMap<AllocationId, Reachability>,
+}
+
+#[derive(Debug)]
+struct Reachability {
+    cyclic_ref_count: NonZeroUsize,
+    ptr: OpaquePtr,
+    sweep_fn: unsafe fn(OpaquePtr, &mut Sweep),
 }
 
 impl Visitor for BuildRefGraph {
@@ -199,10 +222,14 @@ impl Visitor for BuildRefGraph {
             let next_id = gc.ptr.unwrap().as_ref().id();
             match self.ref_state.entry(next_id) {
                 Entry::Occupied(ref mut o) => {
-                    *o.get_mut() = o.get().saturating_add(1);
+                    o.get_mut().cyclic_ref_count = o.get().cyclic_ref_count.saturating_add(1);
                 }
                 Entry::Vacant(v) => {
-                    v.insert(NonZeroUsize::MIN);
+                    v.insert(Reachability {
+                        cyclic_ref_count: NonZeroUsize::MIN,
+                        ptr: OpaquePtr::new(NonNull::from(gc)),
+                        sweep_fn: apply_visitor::<T, Sweep>,
+                    });
                 }
             }
             if self.visited.insert(next_id) {
@@ -263,10 +290,10 @@ impl Destroyer for DestroyGcs {
                 if !self.reachable.contains(&id) && self.visited.insert(id) {
                     p.as_mut().ref_count.set(0);
                     p.as_mut().value.destroy_gcs(self);
-                    self.collection_queue.push((id.0.as_ptr().cast(), Layout::for_value(p.as_ref())));
+                    self.collection_queue
+                        .push((id.0.as_ptr().cast(), Layout::for_value(p.as_ref())));
                     drop_in_place(addr_of_mut!(p.as_mut().value));
                 }
-                
             }
         }
     }

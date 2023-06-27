@@ -60,13 +60,14 @@ pub trait Destroyer {
 const MAX_PTR_SIZE: usize = 2 * size_of::<usize>() / size_of::<u8>();
 
 #[repr(align(16))]
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 /// A pointer for an allocation, extracted out as raw data.
 /// This contains both the pointer and all the pointer's metadata, but hidden behind an unknown
 /// interpretation.
 /// We trust that all pointers (even to `?Sized` or `dyn` types) are 2 words or fewer in size.
 /// This is a hack! Like, a big hack!
-struct OpaquePtr([u8; MAX_PTR_SIZE]);
+struct OpaquePtr([usize; 2]);
 
 impl OpaquePtr {
     /// Construct a new opaque pointer to some data from a reference
@@ -75,7 +76,7 @@ impl OpaquePtr {
     ///
     /// This function will panic if the size of a reference is larger than `MAX_PTR_SIZE`.
     fn new<T: ?Sized>(reference: NonNull<T>) -> OpaquePtr {
-        let mut ptr = OpaquePtr([0; MAX_PTR_SIZE]);
+        let mut ptr = OpaquePtr([0; 2]);
         let ptr_size = size_of::<NonNull<T>>();
         println!("create opaque pointer {reference:?} of size {ptr_size}");
 
@@ -89,7 +90,7 @@ impl OpaquePtr {
             // `box_ref` has size equal to `ptr_size`.
             copy_nonoverlapping(
                 addr_of!(reference).cast::<u8>(),
-                addr_of_mut!(ptr.0).cast(),
+                addr_of_mut!(ptr.0).cast::<u8>(),
                 ptr_size,
             );
         }
@@ -104,18 +105,30 @@ impl OpaquePtr {
     /// This function must only be specified to the type that the pointer was constructed with
     /// via [`OpaquePtr::new`].
     unsafe fn specify<T: ?Sized>(self) -> NonNull<T> {
-        assert!(self.0[..size_of::<MaybeUninit<NonNull<T>>>()].iter().any(|&n| n != 0), "specified a null pointer!");
-        // I have no clue why, but for some reason commenting out this assertion causes segfaults
-        // all over the place.
-        assert_eq!(size_of::<MaybeUninit<NonNull<T>>>(), size_of::<NonNull<T>>());
         let mut box_ref: MaybeUninit<NonNull<T>> = MaybeUninit::zeroed();
+
+        // For some reason, switching the ordering of casts causes this to create wacky undefined
+        // behavior. Why? I don't know. I have better things to do than pontificate on this on a
+        // Sunday afternoon.
         copy_nonoverlapping(
-            addr_of!(self.0),
-            addr_of_mut!(box_ref).cast(),
+            addr_of!(self.0).cast::<u8>(),
+            addr_of_mut!(box_ref).cast::<u8>(),
             size_of::<NonNull<T>>(),
         );
 
         println!("specify to {:?}", box_ref.assume_init());
         box_ref.assume_init()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::align_of;
+
+    use super::*;
+
+    #[test]
+    fn opaque_align() {
+        assert_eq!(align_of::<OpaquePtr>(), 16);
     }
 }

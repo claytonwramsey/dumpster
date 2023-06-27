@@ -257,7 +257,6 @@ fn complete1000() {
     }
 }
 
-
 #[test]
 fn parallel_loop() {
     let count1 = AtomicUsize::new(0);
@@ -283,8 +282,20 @@ fn parallel_loop() {
     });
     gc1.refs.borrow_mut().push(Gc::clone(&gc4));
 
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
     drop(gc1);
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
     drop(gc2);
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
     drop(gc3);
     assert_eq!(count1.load(Ordering::Relaxed), 0);
     assert_eq!(count2.load(Ordering::Relaxed), 0);
