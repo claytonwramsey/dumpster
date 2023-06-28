@@ -16,6 +16,8 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+//! Implementations of the single-threaded garbage-collection logic.
+
 use std::{
     alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
@@ -57,6 +59,7 @@ pub struct Dumpster {
 struct AllocationId(pub NonNull<Cell<usize>>);
 
 impl AllocationId {
+    /// Get the reference count of the allocation that this allocation ID points to.
     unsafe fn count(self) -> usize {
         self.0.as_ref().get()
     }
@@ -66,6 +69,7 @@ impl<T> From<NonNull<GcBox<T>>> for AllocationId
 where
     T: Collectable + ?Sized,
 {
+    /// Get an allocation ID from a pointer to an allocation.
     fn from(value: NonNull<GcBox<T>>) -> Self {
         AllocationId(value.cast())
     }
@@ -75,13 +79,21 @@ where
 /// The necessary information required to collect some garbage-collected data.
 /// This data is stored in a map from allocation IDs to the necessary cleanup operation.
 struct Cleanup {
+    /// The function which is called to build the reference graph and find all allocations reachable
+    /// from this allocation.
     build_graph_fn: unsafe fn(OpaquePtr, &mut BuildRefGraph),
+    /// The function which is called to sweep out and mark allocations reachable from this 
+    /// allocation as reachable.
     sweep_fn: unsafe fn(OpaquePtr, &mut Sweep),
+    /// The function which is called to destroy all [`Gc`]s owned by this allocation prior to 
+    /// dropping it.
     destroy_gcs_fn: unsafe fn(OpaquePtr, &mut DestroyGcs),
+    /// An opaque pointer to the allocation.
     ptr: OpaquePtr,
 }
 
 impl Cleanup {
+    /// Construct a new cleanup for an allocation.
     fn new<T: Collectable + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
         Cleanup {
             build_graph_fn: apply_visitor::<T, BuildRefGraph>,
@@ -92,11 +104,21 @@ impl Cleanup {
     }
 }
 
+/// Apply a visitor to some opaque pointer.
+/// 
+/// # Safety
+/// 
+/// `T` must be the same type that `ptr` was created with via [`OpaquePtr::new`].
 unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: OpaquePtr, visitor: &mut V) {
     let specified: NonNull<GcBox<T>> = ptr.specify();
     specified.as_ref().value.accept(visitor);
 }
 
+/// Destroy the garbage-collected values of some opaquely-defined type. 
+/// 
+/// # Safety
+/// 
+/// `T` must be the same type that `ptr` was created with via [`OpaquePtr::new`].
 unsafe fn destroy_gcs<T: Collectable + ?Sized>(ptr: OpaquePtr, destroyer: &mut DestroyGcs) {
     let mut specific_ptr = ptr.specify::<GcBox<T>>();
     specific_ptr.as_mut().ref_count.set(0);
@@ -193,15 +215,23 @@ impl Drop for Dumpster {
     }
 }
 
+/// The data required to construct the graph of reachable allocations.
 struct BuildRefGraph {
+    /// The set of allocations which have already been visited.
     visited: HashSet<AllocationId>,
+    /// A map from allocation identifiers to information about their reachability.
     ref_state: HashMap<AllocationId, Reachability>,
 }
 
 #[derive(Debug)]
+/// Information about the reachability of a structure.
 struct Reachability {
+    /// The number of references found to this structure which are contained within the heap.
+    /// If this number is equal to the allocations reference count, it is unreachable.
     cyclic_ref_count: NonZeroUsize,
+    /// An opaque pointer to the allocation under concern.
     ptr: OpaquePtr,
+    /// A function used to sweep from `ptr` if this allocation is proven reachable.
     sweep_fn: unsafe fn(OpaquePtr, &mut Sweep),
 }
 
@@ -237,7 +267,9 @@ impl Visitor for BuildRefGraph {
     }
 }
 
+/// A sweep, which marks allocations as reachable.
 struct Sweep {
+    /// The set of allocations which have been marked as reachable.
     visited: HashSet<AllocationId>,
 }
 
@@ -260,9 +292,15 @@ impl Visitor for Sweep {
     }
 }
 
+/// The data used to destroy all garbage collected pointers in unreachable allocations.
 struct DestroyGcs {
+    /// The set of allocations which have been visited already.
     visited: HashSet<AllocationId>,
+    /// The data used to call [`dealloc`] on an allocation, deferred until after the destruction of
+    /// all garbage-collected pointers is complete.
     collection_queue: Vec<(*mut u8, Layout)>,
+    /// The set of allocations which are still reachable by the program. 
+    /// These should not be destroyed!
     reachable: HashSet<AllocationId>,
 }
 
