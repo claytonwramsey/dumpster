@@ -239,7 +239,7 @@ impl Visitor for BuildRefGraph {
             Entry::Vacant(v) => {
                 v.insert(Reachability {
                     cyclic_ref_count: NonZeroUsize::MIN,
-                    ptr: OpaquePtr::new(NonNull::from(gc)),
+                    ptr: OpaquePtr::new(gc.ptr.unwrap()),
                     sweep_fn: apply_visitor::<T, Sweep>,
                 });
             }
