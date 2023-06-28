@@ -20,10 +20,11 @@
 
 use std::{
     alloc::{dealloc, Layout},
+    borrow::Borrow,
     cell::Cell,
     marker::PhantomData,
     ops::Deref,
-    ptr::{addr_of, addr_of_mut, drop_in_place, NonNull}, borrow::Borrow,
+    ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
 };
 
 use crate::{Collectable, Destroyer, Visitor};
@@ -186,13 +187,13 @@ impl<T: Collectable + ?Sized> AsRef<T> for Gc<T> {
     }
 }
 
-impl <T: Collectable + ?Sized> Borrow<T> for Gc<T> {
+impl<T: Collectable + ?Sized> Borrow<T> for Gc<T> {
     fn borrow(&self) -> &T {
         self.as_ref()
     }
 }
 
-impl <T: Collectable + Default> Default for Gc<T> {
+impl<T: Collectable + Default> Default for Gc<T> {
     fn default() -> Self {
         Gc::new(T::default())
     }

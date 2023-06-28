@@ -16,10 +16,6 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#![warn(clippy::pedantic)]
-#![warn(clippy::cargo)]
-#![warn(missing_docs)]
-
 //! A cycle-tracking garbage collector.
 //!
 //! Most garbage collecters are _tracing_ garbage collectors, meaning that they keep track of a set
@@ -51,6 +47,11 @@
 //! The project root contains common definitions across both `sync` and `unsync`.
 //! Types which implement [`Collectable`] can immediately be used in `unsync`, but in order to use
 //! `sync`'s garbage collector, the types must also implement [`Sync`].
+
+#![warn(clippy::pedantic)]
+#![warn(clippy::cargo)]
+#![warn(missing_docs)]
+#![feature(lazy_cell)]
 
 use std::{
     mem::{size_of, MaybeUninit},
