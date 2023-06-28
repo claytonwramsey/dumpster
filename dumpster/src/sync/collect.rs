@@ -24,15 +24,17 @@ use std::{
     ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        LazyLock, Mutex,
+        Mutex,
     },
 };
+
+use once_cell::sync::Lazy;
 
 use crate::{Collectable, OpaquePtr};
 
 use super::GcBox;
 
-pub(super) static DUMPSTER: LazyLock<Dumpster> = LazyLock::new(|| Dumpster {
+pub(super) static DUMPSTER: Lazy<Dumpster> = Lazy::new(|| Dumpster {
     to_clean: Mutex::new(HashMap::new()),
     n_gcs_dropped: AtomicUsize::new(0),
     n_gcs_existing: AtomicUsize::new(0),

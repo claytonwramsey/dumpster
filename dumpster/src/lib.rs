@@ -51,7 +51,6 @@
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]
 #![warn(missing_docs)]
-#![feature(lazy_cell)]
 
 use std::{
     mem::{size_of, MaybeUninit},
