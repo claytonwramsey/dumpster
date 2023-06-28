@@ -36,6 +36,10 @@ mod tests;
 
 #[derive(Debug)]
 /// A garbage-collected pointer.
+/// 
+/// This garbage-collected pointer may be used for data which is not safe to share across threads
+/// (such as a [`RefCell`]).
+/// It can also be used for variably sized data.
 ///
 /// # Examples
 ///

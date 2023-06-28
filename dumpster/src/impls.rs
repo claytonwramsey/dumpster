@@ -21,7 +21,7 @@
 use std::{
     cell::RefCell,
     collections::{BinaryHeap, HashSet, LinkedList, VecDeque},
-    sync::atomic::AtomicUsize,
+    sync::atomic::{AtomicUsize, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicI16, AtomicI8, AtomicI32, AtomicIsize, AtomicI64},
 };
 
 use crate::{Collectable, Destroyer, Visitor};
@@ -137,4 +137,14 @@ collectable_trivial_impl!(isize);
 collectable_trivial_impl!(f32);
 collectable_trivial_impl!(f64);
 
+collectable_trivial_impl!(AtomicU8);
+collectable_trivial_impl!(AtomicU16);
+collectable_trivial_impl!(AtomicU32);
+collectable_trivial_impl!(AtomicU64);
 collectable_trivial_impl!(AtomicUsize);
+
+collectable_trivial_impl!(AtomicI8);
+collectable_trivial_impl!(AtomicI16);
+collectable_trivial_impl!(AtomicI32);
+collectable_trivial_impl!(AtomicI64);
+collectable_trivial_impl!(AtomicIsize);

@@ -18,10 +18,13 @@
 
 #![allow(unused)] // TODO: remove this
 
+//! Thread-safe shared garbage collection.
+
 use std::{marker::PhantomData, ptr::NonNull, sync::Mutex};
 
 use crate::Collectable;
 
+/// A thread-safe garbage-collected pointer.
 pub struct Gc<T>
 where
     T: Collectable + Sync + ?Sized,

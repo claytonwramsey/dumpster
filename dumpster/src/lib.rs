@@ -18,6 +18,39 @@
 
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]
+#![warn(missing_docs)]
+
+//! A cycle-tracking garbage collector.
+//!
+//! Most garbage collecters are _tracing_ garbage collectors, meaning that they keep track of a set
+//! of roots which are directly accessible from the stack, and then use those roots to find the set
+//! of all accessible allocations.
+//! However, because Rust does not allow us to hook into when a value is moved, it's quite difficult
+//! to detect when a garbage-collected value stops being a root.
+//!
+//! `dumpster` takes a different approach.
+//! It begins by using simple reference counting, then automatically detects cycles.
+//! Allocations are freed when their reference count reaches zero or when they are only accessible
+//! via their descendants.
+//!
+//! Garbage-collected pointers can be created and destroyed in _O(1)_ amortized time, but destroying
+//! a garbage-collected pointer may take _O(r)_, where _r_ is the number of existing
+//! garbage-collected references, on occasion.
+//! However, the sweeps that require _O(r)_ performance are performed once every _O(1/r)_ times
+//! a reference is dropped, yielding an amortized _O(1)_ runtime.
+//!
+//! # Module structure
+//!
+//! `dumpster` contains 3 core modules: the root (this module), as well as [`sync`] and [`unsync`].
+//! `sync` contains an implementation of thread-safe garbage-collected pointers, while `unsync`
+//! contains an implementation of thread-local garbage-collected pointers which cannot be shared
+//! across threads.
+//! Thread-safety requires some synchronization overhead, so for a single-threaded application,
+//! it is recommended to use `unsync`.
+//!
+//! The project root contains common definitions across both `sync` and `unsync`.
+//! Types which implement [`Collectable`] can immediately be used in `unsync`, but in order to use
+//! `sync`'s garbage collector, the types must also implement [`Sync`].
 
 use std::{
     mem::{size_of, MaybeUninit},
@@ -41,8 +74,49 @@ pub mod unsync;
 /// typically double-frees or use-after-frees.
 /// This includes [`Collectable::accept`], even though it is a safe function, since its correctness
 /// is required for safety.
+///
+/// # Examples
+///
+/// Implementing `Collectable` for a scalar type which contains no garbage-collected references
+/// is very easy.
+/// Accepting a visitor and destroying all garbage-collected fields is simply a no-op.
+///
+/// ```
+/// use dumpster::{Collectable, Destroyer, Visitor};
+///
+/// struct Foo(u8);
+///
+/// unsafe impl Collectable for Foo {
+///     fn accept<V: Visitor>(&self, visitor: &mut V) {}
+///     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {}
+/// }
+/// ```
+///
+/// However, if a data structure contains a garbage collected pointer, it must delegate to its
+/// fields in `accept` and `destroy_gcs`.
+///
+/// ```
+/// use dumpster::{unsync::Gc, Collectable, Destroyer, Visitor};
+///
+/// struct Bar(Gc<Bar>);
+///
+/// unsafe impl Collectable for Bar {
+///     fn accept<V: Visitor>(&self, visitor: &mut V) {
+///         self.0.accept(visitor);
+///     }
+///
+///     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+///         self.0.destroy_gcs(destroyer);
+///     }
+/// }
+/// ```
 pub unsafe trait Collectable {
+    /// Accept a visitor to this garbage-collected value.
+    ///
+    /// Implementors of this function need only delegate to all fields owned by this value which
+    /// may contain a garbage-collected reference (either a [`sync::Gc`] or a [`unsync::Gc`]).
     fn accept<V: Visitor>(&self, visitor: &mut V);
+
     /// Destroy all garbage-collected fields of this structure, immediately prior to dropping it.
     ///
     /// Implementors of this function need only delegate to all of their fields which may contain
@@ -54,25 +128,43 @@ pub unsafe trait Collectable {
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D);
 }
 
+/// A visitor for a garbage collected value.
+/// 
+/// This visitor allows us to hide details of the implementation of the garbage-collection procedure
+/// from implementors of [`Collectable`].
+/// 
+/// When accepted by a `Collectable`, this visitor will be delegated down until it reaches a
+/// garbage-collected pointer. 
+/// Then, the garabge-collected pointer will call one of `visit_sync` or `visit_unsync`, depending
+/// on which type of pointer it is.
 pub trait Visitor {
+    /// Visit a synchronized garbage-collected pointer.
     fn visit_sync<T>(&mut self, gc: &sync::Gc<T>)
     where
         T: Collectable + Sync + ?Sized;
+
+    /// Visit a thread-local garbage-collected pointer.
     fn visit_unsync<T>(&mut self, gc: &unsync::Gc<T>)
     where
         T: Collectable + ?Sized;
 }
 
+/// A destroyer for a garbage-collected pointer.
+/// 
+/// Unlike [`Visitor`], a `Destroyer` can mutate the garbage-collected pointers that it visits.
+/// This enables it to mark garbage-collected pointers for deletion during a bulk cleanp of the 
+/// garbage collected value.
 pub trait Destroyer {
+    /// Visit a synchronized garbage-collected pointer.
     fn visit_sync<T>(&mut self, gc: &mut sync::Gc<T>)
     where
         T: Collectable + Sync + ?Sized;
+
+    /// Visit a thread-local garbage-collected pointer.
     fn visit_unsync<T>(&mut self, gc: &mut unsync::Gc<T>)
     where
         T: Collectable + ?Sized;
 }
-
-const MAX_PTR_SIZE: usize = 2 * size_of::<usize>() / size_of::<u8>();
 
 #[repr(align(16))]
 #[repr(C)]
@@ -95,7 +187,7 @@ impl OpaquePtr {
         let ptr_size = size_of::<NonNull<T>>();
         // Extract out the pointer as raw memory
         assert!(
-            ptr_size <= MAX_PTR_SIZE,
+            ptr_size <= size_of::<OpaquePtr>(),
             "pointers to T are too big for storage"
         );
         unsafe {
