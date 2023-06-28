@@ -23,7 +23,7 @@ use std::{
     cell::Cell,
     marker::PhantomData,
     ops::Deref,
-    ptr::{addr_of_mut, drop_in_place, NonNull},
+    ptr::{addr_of, addr_of_mut, drop_in_place, NonNull}, borrow::Borrow,
 };
 
 use crate::{Collectable, Destroyer, Visitor};
@@ -36,7 +36,7 @@ mod tests;
 
 #[derive(Debug)]
 /// A garbage-collected pointer.
-/// 
+///
 /// This garbage-collected pointer may be used for data which is not safe to share across threads
 /// (such as a [`RefCell`]).
 /// It can also be used for variably sized data.
@@ -177,5 +177,23 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
 
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
         visitor.visit_unsync(self);
+    }
+}
+
+impl<T: Collectable + ?Sized> AsRef<T> for Gc<T> {
+    fn as_ref(&self) -> &T {
+        unsafe { addr_of!(self.ptr.unwrap().as_ref().value).as_ref().unwrap() }
+    }
+}
+
+impl <T: Collectable + ?Sized> Borrow<T> for Gc<T> {
+    fn borrow(&self) -> &T {
+        self.as_ref()
+    }
+}
+
+impl <T: Collectable + Default> Default for Gc<T> {
+    fn default() -> Self {
+        Gc::new(T::default())
     }
 }

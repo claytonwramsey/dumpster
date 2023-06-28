@@ -129,12 +129,12 @@ pub unsafe trait Collectable {
 }
 
 /// A visitor for a garbage collected value.
-/// 
+///
 /// This visitor allows us to hide details of the implementation of the garbage-collection procedure
 /// from implementors of [`Collectable`].
-/// 
+///
 /// When accepted by a `Collectable`, this visitor will be delegated down until it reaches a
-/// garbage-collected pointer. 
+/// garbage-collected pointer.
 /// Then, the garabge-collected pointer will call one of `visit_sync` or `visit_unsync`, depending
 /// on which type of pointer it is.
 pub trait Visitor {
@@ -150,9 +150,9 @@ pub trait Visitor {
 }
 
 /// A destroyer for a garbage-collected pointer.
-/// 
+///
 /// Unlike [`Visitor`], a `Destroyer` can mutate the garbage-collected pointers that it visits.
-/// This enables it to mark garbage-collected pointers for deletion during a bulk cleanp of the 
+/// This enables it to mark garbage-collected pointers for deletion during a bulk cleanp of the
 /// garbage collected value.
 pub trait Destroyer {
     /// Visit a synchronized garbage-collected pointer.
@@ -181,8 +181,8 @@ impl OpaquePtr {
     ///
     /// # Panics
     ///
-    /// This function will panic if the size of a reference is larger than the size of an 
-    /// `OpaquePtr`. 
+    /// This function will panic if the size of a reference is larger than the size of an
+    /// `OpaquePtr`.
     /// To my knowledge, there are no pointer types with this property.
     fn new<T: ?Sized>(reference: NonNull<T>) -> OpaquePtr {
         let mut ptr = OpaquePtr([0; 2]);

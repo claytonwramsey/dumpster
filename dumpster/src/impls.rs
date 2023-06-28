@@ -21,7 +21,10 @@
 use std::{
     cell::RefCell,
     collections::{BinaryHeap, HashSet, LinkedList, VecDeque},
-    sync::atomic::{AtomicUsize, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicI16, AtomicI8, AtomicI32, AtomicIsize, AtomicI64},
+    sync::atomic::{
+        AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32, AtomicU64,
+        AtomicU8, AtomicUsize,
+    },
 };
 
 use crate::{Collectable, Destroyer, Visitor};
@@ -61,6 +64,26 @@ unsafe impl<T: Collectable> Collectable for Option<T> {
     }
 }
 
+unsafe impl<T, E> Collectable for Result<T, E>
+where
+    T: Collectable,
+    E: Collectable,
+{
+    fn accept<V: Visitor>(&self, visitor: &mut V) {
+        match self {
+            Ok(t) => t.accept(visitor),
+            Err(e) => e.accept(visitor),
+        }
+    }
+
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+        match self {
+            Ok(t) => t.destroy_gcs(destroyer),
+            Err(e) => e.destroy_gcs(destroyer),
+        }
+    }
+}
+
 /// Implement [`Collectable`] for a collection data structure which has some method `iter()` that
 /// iterates over all elements of the data structure and `iter_mut()` which does the same over
 /// mutable references.
@@ -83,6 +106,7 @@ macro_rules! collectable_collection_impl {
 collectable_collection_impl!(Vec<T>);
 collectable_collection_impl!(VecDeque<T>);
 collectable_collection_impl!(LinkedList<T>);
+collectable_collection_impl!([T]);
 
 /// Implement [`Collectable`] for a set-like data structure which freezes its elements.
 macro_rules! collectable_set_impl {

@@ -79,13 +79,13 @@ where
 /// The necessary information required to collect some garbage-collected data.
 /// This data is stored in a map from allocation IDs to the necessary cleanup operation.
 struct Cleanup {
-    /// The function which is called to build the reference graph and find all allocations reachable
-    /// from this allocation.
+    /// The function which is called to build the reference graph and find all allocations
+    /// reachable from this allocation.
     build_graph_fn: unsafe fn(OpaquePtr, &mut BuildRefGraph),
-    /// The function which is called to sweep out and mark allocations reachable from this 
+    /// The function which is called to sweep out and mark allocations reachable from this
     /// allocation as reachable.
     sweep_fn: unsafe fn(OpaquePtr, &mut Sweep),
-    /// The function which is called to destroy all [`Gc`]s owned by this allocation prior to 
+    /// The function which is called to destroy all [`Gc`]s owned by this allocation prior to
     /// dropping it.
     destroy_gcs_fn: unsafe fn(OpaquePtr, &mut DestroyGcs),
     /// An opaque pointer to the allocation.
@@ -105,19 +105,19 @@ impl Cleanup {
 }
 
 /// Apply a visitor to some opaque pointer.
-/// 
+///
 /// # Safety
-/// 
+///
 /// `T` must be the same type that `ptr` was created with via [`OpaquePtr::new`].
 unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: OpaquePtr, visitor: &mut V) {
     let specified: NonNull<GcBox<T>> = ptr.specify();
     specified.as_ref().value.accept(visitor);
 }
 
-/// Destroy the garbage-collected values of some opaquely-defined type. 
-/// 
+/// Destroy the garbage-collected values of some opaquely-defined type.
+///
 /// # Safety
-/// 
+///
 /// `T` must be the same type that `ptr` was created with via [`OpaquePtr::new`].
 unsafe fn destroy_gcs<T: Collectable + ?Sized>(ptr: OpaquePtr, destroyer: &mut DestroyGcs) {
     let mut specific_ptr = ptr.specify::<GcBox<T>>();
@@ -299,7 +299,7 @@ struct DestroyGcs {
     /// The data used to call [`dealloc`] on an allocation, deferred until after the destruction of
     /// all garbage-collected pointers is complete.
     collection_queue: Vec<(*mut u8, Layout)>,
-    /// The set of allocations which are still reachable by the program. 
+    /// The set of allocations which are still reachable by the program.
     /// These should not be destroyed!
     reachable: HashSet<AllocationId>,
 }
@@ -325,7 +325,7 @@ impl Destroyer for DestroyGcs {
                     p.as_mut().ref_count.set(0);
                     p.as_mut().value.destroy_gcs(self);
                     self.collection_queue
-                        .push((p.as_ptr().cast(), dbg!(Layout::for_value(p.as_ref()))));
+                        .push((p.as_ptr().cast(), Layout::for_value(p.as_ref())));
                     drop_in_place(addr_of_mut!(p.as_mut().value));
                 }
             }
