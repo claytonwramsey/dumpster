@@ -68,6 +68,7 @@ struct MultiRef<'a> {
 unsafe impl Collectable for MultiRef<'_> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) {
+        println!("accept multiref");
         self.refs.accept(visitor);
     }
     #[inline]
@@ -301,6 +302,7 @@ fn parallel_loop() {
     assert_eq!(count2.load(Ordering::Relaxed), 0);
     assert_eq!(count3.load(Ordering::Relaxed), 0);
     assert_eq!(count4.load(Ordering::Relaxed), 0);
+    println!("gc4 owns {} refs!", gc4.refs.borrow().len());
     drop(gc4);
     collect();
     assert_eq!(count1.load(Ordering::Relaxed), 1);

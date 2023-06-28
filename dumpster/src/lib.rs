@@ -34,8 +34,24 @@ pub mod unsync;
 /// This trait should usually be implemented by using `#[derive(Collectable)]`, using the macro from
 /// the crate `dumpster_derive`.
 /// Only data structures using raw pointers or other magic should manually implement `Collectable`.
+///
+/// # Safety
+///
+/// If the implementation of this trait is incorrect, this will result in undefined behavior,
+/// typically double-frees or use-after-frees.
+///
+/// This includes [`Collectable::accept`], even though it is a safe function, since its correctness
+/// is required for safety.
 pub unsafe trait Collectable {
     fn accept<V: Visitor>(&self, visitor: &mut V);
+    /// Destroy all garbage-collected fields of this structure, immediately prior to dropping it.
+    ///
+    /// Implementors of this function need only delegate to all of their fields which may contain
+    /// a garbage-collected pointer, even if transitively.
+    ///
+    /// # Safety
+    ///
+    /// This function may not dereference any garbage-collected pointers during its execution.
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D);
 }
 
@@ -123,12 +139,26 @@ impl OpaquePtr {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::align_of;
+    use std::{
+        alloc::{dealloc, Layout},
+        mem::align_of,
+    };
 
     use super::*;
 
     #[test]
     fn opaque_align() {
         assert_eq!(align_of::<OpaquePtr>(), 16);
+    }
+
+    #[test]
+    fn opaque_alloc() {
+        let orig_ptr = Box::leak(Box::new(7u8));
+        let opaque_ptr = OpaquePtr::new(NonNull::from(orig_ptr));
+
+        unsafe {
+            let remade_ptr = opaque_ptr.specify::<u8>();
+            dealloc(remade_ptr.as_ptr(), Layout::from_size_align(1, 1).unwrap());
+        }
     }
 }

@@ -23,7 +23,7 @@ use std::{
     cell::Cell,
     marker::PhantomData,
     ops::Deref,
-    ptr::{drop_in_place, NonNull},
+    ptr::{addr_of_mut, drop_in_place, NonNull},
 };
 
 use crate::{Collectable, Destroyer, Visitor};
@@ -144,7 +144,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                         1 => {
                             d.mark_cleaned(box_ref);
                             // this was the last reference, drop unconditionally
-                            drop_in_place(ptr.as_mut());
+                            drop_in_place(addr_of_mut!(ptr.as_mut().value));
                             // note: `box_ref` is no longer usable
                             dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
                         }
@@ -172,6 +172,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
 
 unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) {
+        println!("accept gc");
         visitor.visit_unsync(self);
     }
 

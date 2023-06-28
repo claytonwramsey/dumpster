@@ -89,7 +89,7 @@ unsafe fn destroy_gcs<T: Collectable + ?Sized>(ptr: OpaquePtr, destroyer: &mut D
 
     destroyer.collection_queue.push((
         specific_ptr.as_ptr().cast(),
-        Layout::for_value(&specific_ptr.as_ref().value),
+        Layout::for_value(specific_ptr.as_ref()),
     ));
     drop_in_place(addr_of_mut!(specific_ptr.as_mut().value));
 }
@@ -133,6 +133,7 @@ impl Dumpster {
                     })
             {
                 sweep.visited.insert(*id);
+                println!("id {id:?} is proven a root");
                 (reachability.sweep_fn)(reachability.ptr, &mut sweep);
             }
 
@@ -257,6 +258,7 @@ impl Visitor for Sweep {
         T: Collectable + ?Sized,
     {
         unsafe {
+            println!("visit unsync id {:?}", gc.ptr.unwrap().as_ref().id());
             if self.visited.insert(gc.ptr.unwrap().as_ref().id()) {
                 gc.deref().accept(self);
             }

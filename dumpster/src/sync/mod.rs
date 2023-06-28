@@ -16,6 +16,8 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#![allow(unused)] // TODO: remove this
+
 use std::{marker::PhantomData, ptr::NonNull, sync::Mutex};
 
 use crate::Collectable;
