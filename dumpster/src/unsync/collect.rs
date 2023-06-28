@@ -293,7 +293,7 @@ impl Destroyer for DestroyGcs {
                     p.as_mut().ref_count.set(0);
                     p.as_mut().value.destroy_gcs(self);
                     self.collection_queue
-                        .push((id.0.as_ptr().cast(), Layout::for_value(p.as_ref())));
+                        .push((p.as_ptr().cast(), dbg!(Layout::for_value(p.as_ref()))));
                     drop_in_place(addr_of_mut!(p.as_mut().value));
                 }
             }

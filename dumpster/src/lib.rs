@@ -39,7 +39,6 @@ pub mod unsync;
 ///
 /// If the implementation of this trait is incorrect, this will result in undefined behavior,
 /// typically double-frees or use-after-frees.
-///
 /// This includes [`Collectable::accept`], even though it is a safe function, since its correctness
 /// is required for safety.
 pub unsafe trait Collectable {
@@ -158,7 +157,7 @@ mod tests {
 
         unsafe {
             let remade_ptr = opaque_ptr.specify::<u8>();
-            dealloc(remade_ptr.as_ptr(), Layout::from_size_align(1, 1).unwrap());
+            dealloc(remade_ptr.as_ptr(), Layout::for_value(remade_ptr.as_ref()));
         }
     }
 }
