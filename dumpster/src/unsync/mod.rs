@@ -84,7 +84,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     where
         T: Sized,
     {
-        DUMPSTER.with(|d| d.n_refs_living.set(d.n_refs_living.get() + 1));
+        DUMPSTER.with(|d| d.notify_created_gc());
         Gc {
             ptr: Some(NonNull::from(Box::leak(Box::new(GcBox {
                 ref_count: Cell::new(1),
@@ -118,7 +118,7 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
             let box_ref = self.ptr.unwrap().as_ref();
             box_ref.ref_count.set(box_ref.ref_count.get() + 1);
         }
-        DUMPSTER.with(|d| d.n_refs_living.set(d.n_refs_living.get() + 1));
+        DUMPSTER.with(|d| d.notify_created_gc());
         Self {
             ptr: self.ptr.clone(),
             _phantom: PhantomData,
@@ -134,10 +134,6 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     fn drop(&mut self) {
         if let Some(mut ptr) = self.ptr {
             DUMPSTER.with(|d| {
-                // Decrement the number of living references and increment the total number of
-                // dropped references
-                d.n_ref_drops.set(d.n_ref_drops.get() + 1);
-                d.n_refs_living.set(d.n_refs_living.get() - 1);
                 unsafe {
                     let box_ref = ptr.as_ref();
                     match box_ref.ref_count.get() {
@@ -156,15 +152,10 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                             // remaining references could be a cycle - therefore, mark it as dirty
                             // so we can check later
                             d.mark_dirty(ptr);
-
-                            // check if it's been a long time since the last time we collected all
-                            // the garbage.
-                            // if so, go and collect it all again (amortized O(1))
-                            if d.n_ref_drops.get() << 1 >= d.n_refs_living.get() {
-                                d.collect_all();
-                            }
                         }
                     }
+                    // Notify that a GC has been dropped, potentially triggering a sweep
+                    d.notify_dropped_gc();
                 }
             });
         }

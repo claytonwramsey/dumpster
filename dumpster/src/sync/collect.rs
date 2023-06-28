@@ -18,16 +18,30 @@
 
 //! A synchronized collection algorithm.
 
-use std::{ptr::NonNull, sync::{Mutex, LazyLock}, collections::HashMap, num::NonZeroUsize};
+use std::{
+    collections::HashMap,
+    num::NonZeroUsize,
+    ptr::NonNull,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        LazyLock, Mutex,
+    },
+};
 
-use crate::OpaquePtr;
+use crate::{Collectable, OpaquePtr};
+
+use super::GcBox;
 
 pub(super) static DUMPSTER: LazyLock<Dumpster> = LazyLock::new(|| Dumpster {
     to_clean: Mutex::new(HashMap::new()),
+    n_gcs_dropped: AtomicUsize::new(0),
+    n_gcs_existing: AtomicUsize::new(0),
 });
 
 pub(super) struct Dumpster {
     to_clean: Mutex<HashMap<AllocationId, Cleanup>>,
+    n_gcs_dropped: AtomicUsize,
+    n_gcs_existing: AtomicUsize,
 }
 
 struct AllocationId(NonNull<Mutex<usize>>);
@@ -44,18 +58,31 @@ struct Node {
     true_ref_count: NonZeroUsize,
     found_ref_count: usize,
     ptr: OpaquePtr,
-    
 }
 
 struct BuildRefGraph {
     ref_graph: HashMap<AllocationId, Node>,
-
 }
 
 impl Dumpster {
     pub fn collect_all(&self) {
         let mut to_clean = self.to_clean.lock().unwrap();
+    }
 
+    pub fn notify_dropped_gc(&self) {
+        self.n_gcs_dropped.fetch_add(1, Ordering::Relaxed);
+        self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
 
+        todo!("logic for determining whether to sweep");
+    }
+
+    pub fn notify_created_gc(&self) {
+        self.n_gcs_existing.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_dirty<T>(&self, allocation: NonNull<GcBox<T>>)
+    where
+        T: Collectable + Sync + ?Sized,
+    {
     }
 }

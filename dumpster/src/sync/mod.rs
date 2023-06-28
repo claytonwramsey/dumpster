@@ -22,7 +22,12 @@ mod collect;
 #[cfg(test)]
 mod tests;
 
-use std::{marker::PhantomData, ptr::{NonNull, drop_in_place, addr_of_mut}, sync::Mutex, alloc::{dealloc, Layout}};
+use std::{
+    alloc::{dealloc, Layout},
+    marker::PhantomData,
+    ptr::{addr_of_mut, drop_in_place, NonNull},
+    sync::Mutex,
+};
 
 use crate::Collectable;
 
@@ -66,6 +71,7 @@ where
     where
         T: Sized,
     {
+        DUMPSTER.notify_created_gc();
         Gc {
             ptr: Some(NonNull::from(Box::leak(Box::new(GcBox {
                 ref_count: Mutex::new(1),
@@ -98,20 +104,23 @@ where
     fn drop(&mut self) {
         unsafe {
             if let Some(mut ptr) = self.ptr {
-                let mut count_handle = ptr.as_ref().ref_count.lock().unwrap();
-                match *count_handle {
-                    0 => (), // value already being dropped
-                    1 => {
-                        *count_handle = 0;
-                        drop(count_handle); // must drop handle before dropping the mutex
-                        drop_in_place(addr_of_mut!(ptr.as_mut().value));
-                        dealloc(ptr.as_ptr().cast(), Layout::for_value(ptr.as_ref()));
-                    },
-                    n => {
-                        *count_handle = n - 1;
-                        // todo!();
+                {
+                    // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
+                    let mut count_handle = ptr.as_ref().ref_count.lock().unwrap();
+                    match *count_handle {
+                        0 => (), // value already being dropped
+                        1 => {
+                            *count_handle = 0;
+                            drop(count_handle); // must drop handle before dropping the mutex
+                            drop_in_place(addr_of_mut!(ptr.as_mut().value));
+                            dealloc(ptr.as_ptr().cast(), Layout::for_value(ptr.as_ref()));
+                        }
+                        n => {
+                            *count_handle = n - 1;
+                        }
                     }
                 }
+                DUMPSTER.notify_dropped_gc();
             }
         }
     }

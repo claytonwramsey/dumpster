@@ -33,7 +33,7 @@ use super::GcBox;
 
 thread_local! {
     /// The global collection of allocation information for this thread.
-    pub static DUMPSTER: Dumpster = Dumpster {
+    pub(super) static DUMPSTER: Dumpster = Dumpster {
         to_collect: RefCell::new(HashMap::new()),
         n_ref_drops: Cell::new(0),
         n_refs_living: Cell::new(0),
@@ -42,14 +42,14 @@ thread_local! {
 
 /// A dumpster is a collection of all the garbage that may or may not need to be cleaned up.
 /// It also contains information relevant to when a sweep should be triggered.
-pub struct Dumpster {
+pub(super) struct Dumpster {
     /// A map from allocation IDs for allocations which may need to be collected to pointers to
     /// their allocations.
     to_collect: RefCell<HashMap<AllocationId, Cleanup>>,
     /// The number of times a reference has been dropped since the last collection was triggered.
-    pub n_ref_drops: Cell<usize>,
+    n_ref_drops: Cell<usize>,
     /// The number of references that currently exist in the entire heap and stack.
-    pub n_refs_living: Cell<usize>,
+    n_refs_living: Cell<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -192,7 +192,7 @@ impl Dumpster {
 
     /// Mark an allocation as "dirty," implying that it may need to be swept through later to find
     /// out if it has any references pointing to it.
-    pub(super) unsafe fn mark_dirty<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
+    pub unsafe fn mark_dirty<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
         self.to_collect
             .borrow_mut()
             .entry(AllocationId::from(box_ptr))
@@ -201,10 +201,29 @@ impl Dumpster {
 
     /// Mark an allocation as "cleaned," implying that the allocation is about to be destroyed and
     /// therefore should not be cleaned up later.
-    pub(super) fn mark_cleaned<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
+    pub fn mark_cleaned<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
         self.to_collect
             .borrow_mut()
             .remove(&AllocationId::from(box_ptr));
+    }
+
+    /// Notify the dumpster that a garbage-collected pointer has been dropped.
+    ///
+    /// This may trigger a sweep of the heap, but is guaranteed to be amortized to _O(1)_.
+    pub fn notify_dropped_gc(&self) {
+        self.n_ref_drops.set(self.n_ref_drops.get() + 1);
+        self.n_refs_living.set(self.n_refs_living.get() - 1);
+
+        // check if it's been a long time since the last time we collected all
+        // the garbage.
+        // if so, go and collect it all again (amortized O(1))
+        if self.n_ref_drops.get() << 1 >= self.n_refs_living.get() {
+            self.collect_all();
+        }
+    }
+
+    pub fn notify_created_gc(&self) {
+        self.n_refs_living.set(self.n_refs_living.get() + 1);
     }
 }
 
