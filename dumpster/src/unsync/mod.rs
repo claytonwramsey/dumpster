@@ -28,7 +28,7 @@ use std::{
 
 use crate::{Collectable, Destroyer, Visitor};
 
-use self::collect::{AllocationId, Dumpster, DUMPSTER};
+use self::collect::{Dumpster, DUMPSTER};
 
 mod collect;
 #[cfg(test)]
@@ -142,7 +142,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                     match box_ref.ref_count.get() {
                         0 => (), // allocation is already being destroyed
                         1 => {
-                            d.mark_cleaned(box_ref);
+                            d.mark_cleaned(ptr);
                             // this was the last reference, drop unconditionally
                             drop_in_place(addr_of_mut!(ptr.as_mut().value));
                             // note: `box_ref` is no longer usable
@@ -154,7 +154,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                             box_ref.ref_count.set(n - 1);
                             // remaining references could be a cycle - therefore, mark it as dirty
                             // so we can check later
-                            d.mark_dirty(box_ref);
+                            d.mark_dirty(ptr);
 
                             // check if it's been a long time since the last time we collected all
                             // the garbage.
@@ -178,12 +178,5 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
 
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
         visitor.visit_unsync(self);
-    }
-}
-
-impl<T: Collectable + ?Sized> GcBox<T> {
-    /// Get a unique ID for this allocation.
-    fn id(&self) -> AllocationId {
-        AllocationId(NonNull::from(&self.ref_count))
     }
 }

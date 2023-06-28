@@ -54,7 +54,19 @@ pub struct Dumpster {
 /// A unique identifier for an allocated garbage-collected block.
 ///
 /// It contains a pointer to the reference count of the allocation.
-pub struct AllocationId(pub NonNull<Cell<usize>>);
+struct AllocationId(pub NonNull<Cell<usize>>);
+
+impl AllocationId {
+    unsafe fn count(self) -> usize {
+        self.0.as_ref().get()
+    }
+}
+
+impl <T> From<NonNull<GcBox<T>>> for AllocationId where T: Collectable + ?Sized {
+    fn from(value: NonNull<GcBox<T>>) -> Self {
+        AllocationId(value.cast())
+    }
+}
 
 #[derive(Debug)]
 /// The necessary information required to collect some garbage-collected data.
@@ -67,12 +79,12 @@ struct Cleanup {
 }
 
 impl Cleanup {
-    fn new<T: Collectable + ?Sized>(box_ref: &GcBox<T>) -> Cleanup {
+    fn new<T: Collectable + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
         Cleanup {
             build_graph_fn: apply_visitor::<T, BuildRefGraph>,
             sweep_fn: apply_visitor::<T, Sweep>,
             destroy_gcs_fn: destroy_gcs::<T>,
-            ptr: OpaquePtr::new(NonNull::from(box_ref)),
+            ptr: OpaquePtr::new(box_ptr),
         }
     }
 }
@@ -116,7 +128,7 @@ impl Dumpster {
             for (id, count) in ref_graph_build
                 .ref_state
                 .keys()
-                .map(|id| (id, id.0.as_ref().get()))
+                .map(|id| (id, id.count()))
             {
                 println!("true count for {:?}: {count}", id.0);
             }
@@ -129,7 +141,7 @@ impl Dumpster {
                     .ref_state
                     .iter()
                     .filter(|(id, reachability)| {
-                        id.0.as_ref().get() != reachability.cyclic_ref_count.into()
+                        id.count() != reachability.cyclic_ref_count.into()
                     })
             {
                 sweep.visited.insert(*id);
@@ -171,19 +183,19 @@ impl Dumpster {
 
     /// Mark an allocation as "dirty," implying that it may need to be swept through later to find
     /// out if it has any references pointing to it.
-    pub(super) fn mark_dirty<T: Collectable + ?Sized>(&self, box_ref: &GcBox<T>) {
-        println!("mark {:?} as dirty", std::ptr::addr_of!(*box_ref));
+    pub(super) unsafe fn mark_dirty<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
+        println!("mark {:?} as dirty", std::ptr::addr_of!(*box_ptr.as_ref()));
         self.to_collect
             .borrow_mut()
-            .entry(box_ref.id())
-            .or_insert_with(|| Cleanup::new(box_ref));
+            .entry(AllocationId::from(box_ptr))
+            .or_insert_with(|| Cleanup::new(box_ptr));
     }
 
     /// Mark an allocation as "cleaned," implying that the allocation is about to be destroyed and
     /// therefore should not be cleaned up later.
-    pub(super) fn mark_cleaned<T: Collectable + ?Sized>(&self, box_ref: &GcBox<T>) {
-        println!("mark {:?} as cleaned", NonNull::from(box_ref));
-        self.to_collect.borrow_mut().remove(&box_ref.id());
+    pub(super) fn mark_cleaned<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
+        println!("mark {box_ptr:?} as cleaned");
+        self.to_collect.borrow_mut().remove(&AllocationId::from(box_ptr));
     }
 }
 
@@ -219,23 +231,21 @@ impl Visitor for BuildRefGraph {
     where
         T: Collectable + ?Sized,
     {
-        unsafe {
-            let next_id = gc.ptr.unwrap().as_ref().id();
-            match self.ref_state.entry(next_id) {
-                Entry::Occupied(ref mut o) => {
-                    o.get_mut().cyclic_ref_count = o.get().cyclic_ref_count.saturating_add(1);
-                }
-                Entry::Vacant(v) => {
-                    v.insert(Reachability {
-                        cyclic_ref_count: NonZeroUsize::MIN,
-                        ptr: OpaquePtr::new(NonNull::from(gc)),
-                        sweep_fn: apply_visitor::<T, Sweep>,
-                    });
-                }
+        let next_id = AllocationId::from(gc.ptr.unwrap());
+        match self.ref_state.entry(next_id) {
+            Entry::Occupied(ref mut o) => {
+                o.get_mut().cyclic_ref_count = o.get().cyclic_ref_count.saturating_add(1);
             }
-            if self.visited.insert(next_id) {
-                gc.deref().accept(self);
+            Entry::Vacant(v) => {
+                v.insert(Reachability {
+                    cyclic_ref_count: NonZeroUsize::MIN,
+                    ptr: OpaquePtr::new(NonNull::from(gc)),
+                    sweep_fn: apply_visitor::<T, Sweep>,
+                });
             }
+        }
+        if self.visited.insert(next_id) {
+            gc.deref().accept(self);
         }
     }
 }
@@ -257,11 +267,9 @@ impl Visitor for Sweep {
     where
         T: Collectable + ?Sized,
     {
-        unsafe {
-            println!("visit unsync id {:?}", gc.ptr.unwrap().as_ref().id());
-            if self.visited.insert(gc.ptr.unwrap().as_ref().id()) {
-                gc.deref().accept(self);
-            }
+        println!("visit unsync id {:?}", AllocationId::from(gc.ptr.unwrap()));
+        if self.visited.insert(AllocationId::from(gc.ptr.unwrap())) {
+            gc.deref().accept(self);
         }
     }
 }
@@ -287,7 +295,7 @@ impl Destroyer for DestroyGcs {
     {
         unsafe {
             if let Some(mut p) = gc.ptr {
-                let id = p.as_ref().id();
+                let id = AllocationId::from(p);
                 gc.ptr = None;
                 if !self.reachable.contains(&id) && self.visited.insert(id) {
                     p.as_mut().ref_count.set(0);
