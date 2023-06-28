@@ -36,7 +36,6 @@ unsafe impl<'a, T> Collectable for &'a T {
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) {
-        println!("accept refcell");
         self.borrow().accept(visitor);
     }
 
@@ -70,7 +69,6 @@ macro_rules! collectable_collection_impl {
         unsafe impl<T: Collectable> Collectable for $x {
             #[inline]
             fn accept<V: Visitor>(&self, visitor: &mut V) {
-                println!("accept collection (len {})", self.len());
                 self.iter().for_each(|elem| elem.accept(visitor));
             }
 

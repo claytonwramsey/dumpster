@@ -93,8 +93,6 @@ impl OpaquePtr {
     fn new<T: ?Sized>(reference: NonNull<T>) -> OpaquePtr {
         let mut ptr = OpaquePtr([0; 2]);
         let ptr_size = size_of::<NonNull<T>>();
-        println!("create opaque pointer {reference:?} of size {ptr_size}");
-
         // Extract out the pointer as raw memory
         assert!(
             ptr_size <= MAX_PTR_SIZE,
@@ -131,7 +129,6 @@ impl OpaquePtr {
             size_of::<NonNull<T>>(),
         );
 
-        println!("specify to {:?}", box_ref.assume_init());
         box_ref.assume_init()
     }
 }

@@ -62,7 +62,10 @@ impl AllocationId {
     }
 }
 
-impl <T> From<NonNull<GcBox<T>>> for AllocationId where T: Collectable + ?Sized {
+impl<T> From<NonNull<GcBox<T>>> for AllocationId
+where
+    T: Collectable + ?Sized,
+{
     fn from(value: NonNull<GcBox<T>>) -> Self {
         AllocationId(value.cast())
     }
@@ -117,35 +120,22 @@ impl Dumpster {
                 ref_state: HashMap::new(),
             };
 
-            println!("building ref graph");
             for (k, v) in self.to_collect.borrow().iter() {
                 if !ref_graph_build.visited.contains(k) {
                     ref_graph_build.visited.insert(*k);
                     (v.build_graph_fn)(v.ptr, &mut ref_graph_build);
                 }
             }
-            println!("found references: {:?}", ref_graph_build.ref_state);
-            for (id, count) in ref_graph_build
-                .ref_state
-                .keys()
-                .map(|id| (id, id.count()))
-            {
-                println!("true count for {:?}: {count}", id.0);
-            }
 
             let mut sweep = Sweep {
                 visited: HashSet::new(),
             };
-            for (id, reachability) in
-                ref_graph_build
-                    .ref_state
-                    .iter()
-                    .filter(|(id, reachability)| {
-                        id.count() != reachability.cyclic_ref_count.into()
-                    })
+            for (id, reachability) in ref_graph_build
+                .ref_state
+                .iter()
+                .filter(|(id, reachability)| id.count() != reachability.cyclic_ref_count.into())
             {
                 sweep.visited.insert(*id);
-                println!("id {id:?} is proven a root");
                 (reachability.sweep_fn)(reachability.ptr, &mut sweep);
             }
 
@@ -156,12 +146,9 @@ impl Dumpster {
                 .iter()
                 .filter(|(id, _)| !ref_graph_build.ref_state.contains_key(id))
             {
-                println!("id {:?} not found - must be root", cleanup.ptr);
                 sweep.visited.insert(*id);
                 (cleanup.sweep_fn)(cleanup.ptr, &mut sweep);
             }
-
-            println!("reachable: {:?}", sweep.visited);
 
             let mut destroy = DestroyGcs {
                 visited: HashSet::new(),
@@ -184,7 +171,6 @@ impl Dumpster {
     /// Mark an allocation as "dirty," implying that it may need to be swept through later to find
     /// out if it has any references pointing to it.
     pub(super) unsafe fn mark_dirty<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
-        println!("mark {:?} as dirty", std::ptr::addr_of!(*box_ptr.as_ref()));
         self.to_collect
             .borrow_mut()
             .entry(AllocationId::from(box_ptr))
@@ -194,8 +180,9 @@ impl Dumpster {
     /// Mark an allocation as "cleaned," implying that the allocation is about to be destroyed and
     /// therefore should not be cleaned up later.
     pub(super) fn mark_cleaned<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
-        println!("mark {box_ptr:?} as cleaned");
-        self.to_collect.borrow_mut().remove(&AllocationId::from(box_ptr));
+        self.to_collect
+            .borrow_mut()
+            .remove(&AllocationId::from(box_ptr));
     }
 }
 
@@ -267,7 +254,6 @@ impl Visitor for Sweep {
     where
         T: Collectable + ?Sized,
     {
-        println!("visit unsync id {:?}", AllocationId::from(gc.ptr.unwrap()));
         if self.visited.insert(AllocationId::from(gc.ptr.unwrap())) {
             gc.deref().accept(self);
         }
