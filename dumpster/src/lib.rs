@@ -181,7 +181,9 @@ impl OpaquePtr {
     ///
     /// # Panics
     ///
-    /// This function will panic if the size of a reference is larger than `MAX_PTR_SIZE`.
+    /// This function will panic if the size of a reference is larger than the size of an 
+    /// `OpaquePtr`. 
+    /// To my knowledge, there are no pointer types with this property.
     fn new<T: ?Sized>(reference: NonNull<T>) -> OpaquePtr {
         let mut ptr = OpaquePtr([0; 2]);
         let ptr_size = size_of::<NonNull<T>>();
