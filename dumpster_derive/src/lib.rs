@@ -18,6 +18,7 @@
 
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]
+#![allow(clippy::multiple_crate_versions)]
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};

@@ -52,6 +52,8 @@
 #![warn(clippy::cargo)]
 #![warn(missing_docs)]
 
+#![allow(clippy::multiple_crate_versions)]
+
 use std::{
     mem::{size_of, MaybeUninit},
     ptr::{addr_of, addr_of_mut, copy_nonoverlapping, NonNull},
