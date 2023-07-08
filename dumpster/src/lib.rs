@@ -51,7 +51,6 @@
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]
 #![warn(missing_docs)]
-
 #![allow(clippy::multiple_crate_versions)]
 
 use std::{

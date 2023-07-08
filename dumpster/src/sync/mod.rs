@@ -25,11 +25,12 @@ mod tests;
 use std::{
     alloc::{dealloc, Layout},
     marker::PhantomData,
+    ops::Deref,
     ptr::{addr_of_mut, drop_in_place, NonNull},
     sync::Mutex,
 };
 
-use crate::Collectable;
+use crate::{Collectable, Destroyer, Visitor};
 
 use self::collect::DUMPSTER;
 
@@ -127,5 +128,23 @@ where
                 DUMPSTER.notify_dropped_gc();
             }
         }
+    }
+}
+
+unsafe impl<T: Collectable + Sync + ?Sized> Collectable for Gc<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) {
+        visitor.visit_sync(self);
+    }
+
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+        destroyer.visit_sync(self);
+    }
+}
+
+impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &self.ptr.unwrap().as_ref().value }
     }
 }

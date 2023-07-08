@@ -21,9 +21,12 @@
 use std::{
     cell::RefCell,
     collections::{BinaryHeap, HashSet, LinkedList, VecDeque},
-    sync::atomic::{
-        AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32, AtomicU64,
-        AtomicU8, AtomicUsize,
+    sync::{
+        atomic::{
+            AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
+            AtomicU64, AtomicU8, AtomicUsize,
+        },
+        Mutex,
     },
 };
 
@@ -45,6 +48,16 @@ unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     #[inline]
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
         self.borrow_mut().destroy_gcs(visitor);
+    }
+}
+
+unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) {
+        self.lock().unwrap().accept(visitor);
+    }
+
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+        self.get_mut().unwrap().destroy_gcs(destroyer);
     }
 }
 

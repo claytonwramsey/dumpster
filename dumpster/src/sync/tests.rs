@@ -18,6 +18,8 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::{Destroyer, Visitor};
+
 use super::*;
 
 struct DropCount<'a>(&'a AtomicUsize);
@@ -55,4 +57,34 @@ fn ref_count() {
     assert_eq!(drop_count.load(Ordering::Relaxed), 0);
     drop(gc2);
     assert_eq!(drop_count.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn self_referential() {
+    struct Foo(Mutex<Option<Gc<Foo>>>);
+    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe impl Collectable for Foo {
+        fn accept<V: Visitor>(&self, visitor: &mut V) {
+            self.0.accept(visitor);
+        }
+
+        unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+            self.0.destroy_gcs(destroyer);
+        }
+    }
+
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let gc1 = Gc::new(Foo(Mutex::new(None)));
+    *gc1.0.lock().unwrap() = Some(Gc::clone(&gc1));
+
+    assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 0);
+    drop(gc1);
+    collect();
+    assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
 }
