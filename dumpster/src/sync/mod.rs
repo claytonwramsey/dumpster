@@ -57,7 +57,7 @@ where
 unsafe impl<T> Send for Gc<T> where T: Collectable + Sync + ?Sized {}
 unsafe impl<T> Sync for Gc<T> where T: Collectable + Sync + ?Sized {}
 
-/// Collect all unreachable [`Gc`]s on the heap.
+/// Collect all unreachable thread-safe [`Gc`]s on the heap.
 pub fn collect() {
     DUMPSTER.collect_all();
 }
@@ -112,11 +112,15 @@ where
                         1 => {
                             *count_handle = 0;
                             drop(count_handle); // must drop handle before dropping the mutex
+
+                            DUMPSTER.mark_clean(ptr);
+
                             drop_in_place(addr_of_mut!(ptr.as_mut().value));
                             dealloc(ptr.as_ptr().cast(), Layout::for_value(ptr.as_ref()));
                         }
                         n => {
                             *count_handle = n - 1;
+                            DUMPSTER.mark_dirty(ptr);
                         }
                     }
                 }

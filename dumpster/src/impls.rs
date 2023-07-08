@@ -108,6 +108,16 @@ collectable_collection_impl!(VecDeque<T>);
 collectable_collection_impl!(LinkedList<T>);
 collectable_collection_impl!([T]);
 
+unsafe impl<T: Collectable, const N: usize> Collectable for [T; N] {
+    fn accept<V: Visitor>(&self, visitor: &mut V) {
+        self.iter().for_each(|elem| elem.accept(visitor));
+    }
+
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+        self.iter_mut().for_each(|elem| elem.destroy_gcs(destroyer));
+    }
+}
+
 /// Implement [`Collectable`] for a set-like data structure which freezes its elements.
 macro_rules! collectable_set_impl {
     ($x: ty) => {

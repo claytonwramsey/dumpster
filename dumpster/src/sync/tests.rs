@@ -35,7 +35,6 @@ unsafe impl Collectable for DropCount<'_> {
 }
 
 #[test]
-#[ignore = "awaiting implementation of sweep logic"]
 fn single_alloc() {
     let drop_count = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&drop_count));
@@ -46,7 +45,6 @@ fn single_alloc() {
 }
 
 #[test]
-#[ignore = "awaiting implementation of sweep logic"]
 fn ref_count() {
     let drop_count = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&drop_count));

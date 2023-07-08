@@ -84,7 +84,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     where
         T: Sized,
     {
-        DUMPSTER.with(|d| d.notify_created_gc());
+        DUMPSTER.with(Dumpster::notify_created_gc);
         Gc {
             ptr: Some(NonNull::from(Box::leak(Box::new(GcBox {
                 ref_count: Cell::new(1),
@@ -118,7 +118,7 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
             let box_ref = self.ptr.unwrap().as_ref();
             box_ref.ref_count.set(box_ref.ref_count.get() + 1);
         }
-        DUMPSTER.with(|d| d.notify_created_gc());
+        DUMPSTER.with(Dumpster::notify_created_gc);
         Self {
             ptr: self.ptr.clone(),
             _phantom: PhantomData,
