@@ -54,6 +54,7 @@
 #![allow(clippy::multiple_crate_versions)]
 
 use std::{
+    fmt,
     mem::{size_of, MaybeUninit},
     ptr::{addr_of, addr_of_mut, copy_nonoverlapping, NonNull},
 };
@@ -169,7 +170,7 @@ pub trait Destroyer {
 
 #[repr(align(16))]
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 /// A pointer for an allocation, extracted out as raw data.
 /// This contains both the pointer and all the pointer's metadata, but hidden behind an unknown
 /// interpretation.
@@ -225,6 +226,12 @@ impl OpaquePtr {
         );
 
         box_ref.assume_init()
+    }
+}
+
+impl fmt::Debug for OpaquePtr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "OpaquePtr({:x?})", self.0)
     }
 }
 
