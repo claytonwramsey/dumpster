@@ -24,8 +24,8 @@ use std::{
     num::NonZeroUsize,
     ptr::NonNull,
     sync::{
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
-        Mutex, MutexGuard,
+        atomic::{AtomicUsize, Ordering},
+        Mutex, MutexGuard, RwLock,
     },
 };
 
@@ -40,13 +40,13 @@ use super::{Gc, GcBox};
 /// The global collection of allocations to clean up.
 // wishing dreams: chashmap gets a const new function so that we can remove the once cell
 pub(super) static DUMPSTER: Dumpster = Dumpster {
-    to_clean: Lazy::new(|| AtomicPtr::new(Box::into_raw(Box::new(CHashMap::new())))),
+    to_clean: Lazy::new(|| RwLock::new(CHashMap::new())),
     n_gcs_dropped: AtomicUsize::new(0),
     n_gcs_existing: AtomicUsize::new(0),
 };
 
 pub(super) struct Dumpster {
-    to_clean: Lazy<AtomicPtr<CHashMap<AllocationId, Cleanup>>>,
+    to_clean: Lazy<RwLock<CHashMap<AllocationId, Cleanup>>>,
     n_gcs_dropped: AtomicUsize,
     n_gcs_existing: AtomicUsize,
 }
@@ -136,13 +136,10 @@ impl Dumpster {
     where
         T: Collectable + Sync + ?Sized,
     {
-        unsafe {
-            self.to_clean
-                .load(Ordering::Relaxed)
-                .as_ref()
-                .unwrap()
-                .insert(AllocationId::from(allocation), Cleanup::new(allocation));
-        }
+        self.to_clean
+            .read()
+            .unwrap()
+            .insert(AllocationId::from(allocation), Cleanup::new(allocation));
     }
 
     /// Mark an allocation as "clean," implying that it has already been cleaned up and does not
@@ -151,13 +148,10 @@ impl Dumpster {
     where
         T: Collectable + Sync + ?Sized,
     {
-        unsafe {
-            self.to_clean
-                .load(Ordering::Relaxed)
-                .as_ref()
-                .unwrap()
-                .remove(&AllocationId::from(allocation));
-        }
+        self.to_clean
+            .read()
+            .unwrap()
+            .remove(&AllocationId::from(allocation));
     }
 }
 
