@@ -36,6 +36,22 @@ unsafe impl Collectable for DropCount<'_> {
     unsafe fn destroy_gcs<D: crate::Destroyer>(&mut self, _: &mut D) {}
 }
 
+struct MultiRef<'a> {
+    refs: Mutex<Vec<Gc<MultiRef<'a>>>>,
+    #[allow(unused)]
+    count: DropCount<'a>,
+}
+
+unsafe impl<'a> Collectable for MultiRef<'a> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) {
+        self.refs.accept(visitor);
+    }
+
+    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+        self.refs.destroy_gcs(destroyer);
+    }
+}
+
 #[test]
 fn single_alloc() {
     let drop_count = AtomicUsize::new(0);
@@ -87,4 +103,31 @@ fn self_referential() {
     drop(gc1);
     collect();
     assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn two_cycle() {
+    let drop0 = AtomicUsize::new(0);
+    let drop1 = AtomicUsize::new(0);
+
+    let gc0 = Gc::new(MultiRef {
+        refs: Mutex::new(Vec::new()),
+        count: DropCount(&drop0),
+    });
+    let gc1 = Gc::new(MultiRef {
+        refs: Mutex::new(vec![Gc::clone(&gc0)]),
+        count: DropCount(&drop1),
+    });
+    gc0.refs.lock().unwrap().push(Gc::clone(&gc1));
+
+    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    drop(gc0);
+    collect();
+    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    drop(gc1);
+    collect();
+    assert_eq!(drop0.load(Ordering::Relaxed), 1);
+    assert_eq!(drop0.load(Ordering::Relaxed), 1);
 }

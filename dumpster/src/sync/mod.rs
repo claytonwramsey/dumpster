@@ -25,6 +25,7 @@ mod tests;
 use std::{
     alloc::{dealloc, Layout},
     marker::PhantomData,
+    num::NonZeroUsize,
     ops::Deref,
     ptr::{addr_of_mut, drop_in_place, NonNull},
     sync::Mutex,
@@ -51,7 +52,7 @@ struct GcBox<T>
 where
     T: Collectable + Sync + ?Sized,
 {
-    ref_count: Mutex<usize>,
+    ref_count: Mutex<NonZeroUsize>,
     value: T,
 }
 
@@ -75,7 +76,7 @@ where
         DUMPSTER.notify_created_gc();
         Gc {
             ptr: Some(NonNull::from(Box::leak(Box::new(GcBox {
-                ref_count: Mutex::new(1),
+                ref_count: Mutex::new(NonZeroUsize::MIN),
                 value,
             })))),
             _phantom: PhantomData,
@@ -89,7 +90,10 @@ where
 {
     fn clone(&self) -> Gc<T> {
         unsafe {
-            *self.ptr.unwrap().as_ref().ref_count.lock().unwrap() += 1;
+            let mut ref_count_guard = self.ptr.unwrap().as_ref().ref_count.lock().unwrap();
+            *ref_count_guard = ref_count_guard
+                .checked_add(1)
+                .expect("integer overflow when incrementing reference count");
         }
         Gc {
             ptr: self.ptr,
@@ -108,19 +112,19 @@ where
                 {
                     // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
                     let mut count_handle = ptr.as_ref().ref_count.lock().unwrap();
-                    match *count_handle {
-                        0 => (), // value already being dropped
+                    match count_handle.get() {
+                        0 => unreachable!(),
                         1 => {
-                            *count_handle = 0;
                             drop(count_handle); // must drop handle before dropping the mutex
 
                             DUMPSTER.mark_clean(ptr);
 
+                            ptr.as_mut().value.destroy_gcs(&mut DestroyGcs);
                             drop_in_place(addr_of_mut!(ptr.as_mut().value));
                             dealloc(ptr.as_ptr().cast(), Layout::for_value(ptr.as_ref()));
                         }
                         n => {
-                            *count_handle = n - 1;
+                            *count_handle = NonZeroUsize::new(n - 1).unwrap();
                             DUMPSTER.mark_dirty(ptr);
                         }
                     }
@@ -146,5 +150,23 @@ impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
 
     fn deref(&self) -> &Self::Target {
         unsafe { &self.ptr.unwrap().as_ref().value }
+    }
+}
+
+struct DestroyGcs;
+
+impl Destroyer for DestroyGcs {
+    fn visit_sync<T>(&mut self, gc: &mut Gc<T>)
+    where
+        T: Collectable + Sync + ?Sized,
+    {
+        gc.ptr = None;
+    }
+
+    fn visit_unsync<T>(&mut self, _: &mut crate::unsync::Gc<T>)
+    where
+        T: Collectable + ?Sized,
+    {
+        panic!("A `dumpster::sync::Gc` may not own a `dumpster::unsync::Gc` because `dumpster::unsync::Gc` is `Sync`");
     }
 }

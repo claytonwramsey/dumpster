@@ -34,9 +34,9 @@ use chashmap::CHashMap;
 
 use once_cell::sync::Lazy;
 
-use crate::{Collectable, Destroyer, OpaquePtr, Visitor};
+use crate::{Collectable, OpaquePtr, Visitor};
 
-use super::{Gc, GcBox};
+use super::{DestroyGcs, Gc, GcBox};
 
 /// The global collection of allocations to clean up.
 // wishing dreams: chashmap gets a const new function so that we can remove the once cell
@@ -53,7 +53,7 @@ pub(super) struct Dumpster {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-struct AllocationId(NonNull<Mutex<usize>>);
+struct AllocationId(NonNull<Mutex<NonZeroUsize>>);
 
 unsafe impl Send for AllocationId {}
 unsafe impl Sync for AllocationId {}
@@ -71,7 +71,7 @@ type BuildFn = unsafe fn(
     OpaquePtr,
     AllocationId,
     &mut HashMap<AllocationId, Node>,
-    &mut Vec<MutexGuard<'static, usize>>,
+    &mut Vec<MutexGuard<'static, NonZeroUsize>>,
 );
 
 struct Cleanup {
@@ -102,13 +102,19 @@ impl Dumpster {
         }
 
         drop(guards);
-        println!("{ref_graph:?}");
+        println!("{ref_graph:#?}");
 
         let mut reachable = HashSet::new();
-        for &root_id in ref_graph
-            .iter()
-            .filter_map(|(k, v)| (v.true_ref_count.get() != v.found_ref_count).then_some(k))
-        {
+        for &root_id in ref_graph.iter().filter_map(|(k, v)| {
+            ({
+                assert!(
+                    v.true_ref_count.get() >= v.found_ref_count,
+                    "set of references found by the search may not be more than the total quantity"
+                );
+                v.true_ref_count.get() != v.found_ref_count
+            })
+            .then_some(k)
+        }) {
             sweep(root_id, &ref_graph, &mut reachable);
         }
 
@@ -181,7 +187,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     ptr: OpaquePtr,
     starting_id: AllocationId,
     ref_graph: &mut HashMap<AllocationId, Node>,
-    guards: &mut Vec<MutexGuard<'static, usize>>,
+    guards: &mut Vec<MutexGuard<'static, NonZeroUsize>>,
 ) {
     #[derive(Debug)]
     /// The visitor structure used for building the found-reference-graph of allocations.
@@ -190,20 +196,12 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
         /// Each allocation is assigned a node.
         ref_graph: &'a mut HashMap<AllocationId, Node>,
         /// The allocation ID currently being visited.
-        ///
-        /// At the start of the graph-building process, `current_id` is `None`.
-        /// However, as we depth-first-search through the graph, we keep track of what allocation
-        /// we most recently visited so that we can correctly mark the children of a node.
+        /// Used for knowing which node is the parent of another.
         current_id: AllocationId,
-        /// The currently-held mutex guards as we construct graph.
-        /// Immediately after we finish our search, we should clear this vector to let other
-        /// threads get back to their work.
-        ///
-        /// Although these guards have `'static` lifetime as declared, this is a workaround because
-        /// our allocations' lifetimes interact poorly under the hood with Rust's lifetime
-        /// system. These guards must be dropped _before_ we start dropping allocations to
-        /// prevent disaster.
-        guards: &'a mut Vec<MutexGuard<'static, usize>>,
+        /// The currently-held mutex guards as we construct the graph.
+        /// If an allocation has an entry in the reference graph, it should also be covered by a
+        /// guard.
+        guards: &'a mut Vec<MutexGuard<'static, NonZeroUsize>>,
     }
 
     impl<'a> Visitor for BuildRefGraph<'a> {
@@ -224,15 +222,14 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                 }
                 Entry::Vacant(v) => {
                     let guard = unsafe { new_id.0.as_ref().lock().unwrap() };
-                    let true_ref_count = NonZeroUsize::new(*guard).unwrap();
-                    self.guards.push(guard);
                     v.insert(Node {
                         children: Vec::new(),
-                        true_ref_count,
+                        true_ref_count: *guard,
                         found_ref_count: 1,
                         destroy_fn: destroy_gcs::<T>,
                         ptr: OpaquePtr::new(gc.ptr.unwrap()),
                     });
+                    self.guards.push(guard);
 
                     // Save the previously visited ID, then carry on to the next one
                     swap(&mut new_id, &mut self.current_id);
@@ -259,7 +256,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
         v.insert(Node {
             children: Vec::new(),
             found_ref_count: 0,
-            true_ref_count: NonZeroUsize::new(*guard).unwrap(),
+            true_ref_count: *guard,
             destroy_fn: destroy_gcs::<T>,
             ptr,
         });
@@ -296,24 +293,6 @@ fn sweep(
 ///
 /// `ptr` must have been created from a pointer to a `GcBox<T>`.
 unsafe fn destroy_gcs<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
-    struct DestroyGcs;
-
-    impl Destroyer for DestroyGcs {
-        fn visit_sync<T>(&mut self, gc: &mut Gc<T>)
-        where
-            T: Collectable + Sync + ?Sized,
-        {
-            gc.ptr = None;
-        }
-
-        fn visit_unsync<T>(&mut self, _: &mut crate::unsync::Gc<T>)
-        where
-            T: Collectable + ?Sized,
-        {
-            panic!("A `dumpster::sync::Gc` may not own a `dumpster::unsync::Gc` because `dumpster::unsync::Gc` is `Sync`");
-        }
-    }
-
     let specified = ptr.specify::<GcBox<T>>().as_mut();
     specified.value.destroy_gcs(&mut DestroyGcs);
     let layout = Layout::for_value(specified);
