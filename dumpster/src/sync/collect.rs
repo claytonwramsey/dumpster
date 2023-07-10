@@ -210,6 +210,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
             T: Collectable + Sync + ?Sized,
         {
             let mut new_id = AllocationId::from(gc.ptr.unwrap());
+            println!("visit {new_id:?}");
             self.ref_graph
                 .get_mut(&self.current_id)
                 .unwrap()
@@ -218,15 +219,17 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
 
             match self.ref_graph.entry(new_id) {
                 Entry::Occupied(mut o) => {
+                    println!("find another reference to {new_id:?}");
                     o.get_mut().found_ref_count += 1;
                 }
                 Entry::Vacant(v) => {
+                    println!("first visit to {new_id:?}, create entry");
                     let guard = unsafe { new_id.0.as_ref().lock().unwrap() };
                     v.insert(Node {
                         children: Vec::new(),
                         true_ref_count: *guard,
                         found_ref_count: 1,
-                        destroy_fn: destroy_gcs::<T>,
+                        destroy_fn: destroy_opaque::<T>,
                         ptr: OpaquePtr::new(gc.ptr.unwrap()),
                     });
                     self.guards.push(guard);
@@ -234,7 +237,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                     // Save the previously visited ID, then carry on to the next one
                     swap(&mut new_id, &mut self.current_id);
 
-                    (*gc).accept(self);
+                    (**gc).accept(self);
 
                     // Restore current_id and carry on
                     swap(&mut new_id, &mut self.current_id);
@@ -251,27 +254,28 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     }
 
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
+        println!("begin a search from {starting_id:?}, create entry");
         let guard = unsafe { starting_id.0.as_ref().lock().unwrap() };
 
         v.insert(Node {
             children: Vec::new(),
             found_ref_count: 0,
             true_ref_count: *guard,
-            destroy_fn: destroy_gcs::<T>,
+            destroy_fn: destroy_opaque::<T>,
             ptr,
         });
 
         guards.push(guard);
-    }
 
-    ptr.specify::<GcBox<T>>()
-        .as_ref()
-        .value
-        .accept(&mut BuildRefGraph {
-            ref_graph,
-            current_id: starting_id,
-            guards,
-        });
+        ptr.specify::<GcBox<T>>()
+            .as_ref()
+            .value
+            .accept(&mut BuildRefGraph {
+                ref_graph,
+                current_id: starting_id,
+                guards,
+            });
+    }
 }
 
 fn sweep(
@@ -287,12 +291,12 @@ fn sweep(
     }
 }
 
-/// Destroy all `Gc`s owned by a value.
+/// Destroy an allocation, obliterating its GCs, dropping it, and deallocating it.
 ///
 /// # Safety
 ///
 /// `ptr` must have been created from a pointer to a `GcBox<T>`.
-unsafe fn destroy_gcs<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
+unsafe fn destroy_opaque<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
     let specified = ptr.specify::<GcBox<T>>().as_mut();
     specified.value.destroy_gcs(&mut DestroyGcs);
     let layout = Layout::for_value(specified);

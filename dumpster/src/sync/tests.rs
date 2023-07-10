@@ -120,6 +120,7 @@ fn two_cycle() {
     });
     gc0.refs.lock().unwrap().push(Gc::clone(&gc1));
 
+    collect();
     assert_eq!(drop0.load(Ordering::Relaxed), 0);
     assert_eq!(drop0.load(Ordering::Relaxed), 0);
     drop(gc0);
