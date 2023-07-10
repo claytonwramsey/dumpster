@@ -132,3 +132,32 @@ fn two_cycle() {
     assert_eq!(drop0.load(Ordering::Relaxed), 1);
     assert_eq!(drop0.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn self_ref_two_cycle() {
+    let drop0 = AtomicUsize::new(0);
+    let drop1 = AtomicUsize::new(0);
+
+    let gc0 = Gc::new(MultiRef {
+        refs: Mutex::new(Vec::new()),
+        count: DropCount(&drop0),
+    });
+    let gc1 = Gc::new(MultiRef {
+        refs: Mutex::new(vec![Gc::clone(&gc0)]),
+        count: DropCount(&drop1),
+    });
+    gc0.refs.lock().unwrap().extend([gc0.clone(), gc1.clone()]);
+    gc1.refs.lock().unwrap().push(gc1.clone());
+
+    collect();
+    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    drop(gc0);
+    collect();
+    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    drop(gc1);
+    collect();
+    assert_eq!(drop0.load(Ordering::Relaxed), 1);
+    assert_eq!(drop0.load(Ordering::Relaxed), 1);
+}
