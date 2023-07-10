@@ -161,3 +161,55 @@ fn self_ref_two_cycle() {
     assert_eq!(drop0.load(Ordering::Relaxed), 1);
     assert_eq!(drop0.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn parallel_loop() {
+    let count1 = AtomicUsize::new(0);
+    let count2 = AtomicUsize::new(0);
+    let count3 = AtomicUsize::new(0);
+    let count4 = AtomicUsize::new(0);
+
+    let gc1 = Gc::new(MultiRef {
+        count: DropCount(&count1),
+        refs: Mutex::new(Vec::new()),
+    });
+    let gc2 = Gc::new(MultiRef {
+        count: DropCount(&count2),
+        refs: Mutex::new(vec![Gc::clone(&gc1)]),
+    });
+    let gc3 = Gc::new(MultiRef {
+        count: DropCount(&count3),
+        refs: Mutex::new(vec![Gc::clone(&gc1)]),
+    });
+    let gc4 = Gc::new(MultiRef {
+        count: DropCount(&count4),
+        refs: Mutex::new(vec![Gc::clone(&gc2), Gc::clone(&gc3)]),
+    });
+    gc1.refs.lock().unwrap().push(Gc::clone(&gc4));
+
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    drop(gc1);
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    drop(gc2);
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    drop(gc3);
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count3.load(Ordering::Relaxed), 0);
+    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    drop(gc4);
+    collect();
+    assert_eq!(count1.load(Ordering::Relaxed), 1);
+    assert_eq!(count2.load(Ordering::Relaxed), 1);
+    assert_eq!(count3.load(Ordering::Relaxed), 1);
+    assert_eq!(count4.load(Ordering::Relaxed), 1);
+}
