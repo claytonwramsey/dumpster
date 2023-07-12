@@ -1,0 +1,17 @@
+[package]
+name = "dumpster_bench"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["Clayton Ramsey"]
+description = "Benchmark for dumpster garbage collection crate"
+repository = "https://github.com/claytonwramsey/dumpster"
+readme = "../README.md"
+keywords = ["dumpster", "garbage collector", "benchmark"]
+categories = ["data-structures", "memory-management"]
+
+[dependencies]
+dumpster = {version = "0.1.0", path = "../dumpster"}
+dumpster_derive = {version= "0.1.0", path = "../dumpster_derive"}
+gc = "0.4.1"
+bacon_rajan_cc = "0.3"

@@ -3,5 +3,6 @@ members = [
     "dumpster",
     "dumpster_derive",
     "dumpster_test",
+    "dumpster_bench",
 ]
 resolver = "2"
