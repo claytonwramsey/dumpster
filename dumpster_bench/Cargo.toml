@@ -15,3 +15,4 @@ dumpster = {version = "0.1.0", path = "../dumpster"}
 dumpster_derive = {version= "0.1.0", path = "../dumpster_derive"}
 gc = "0.4.1"
 bacon_rajan_cc = "0.3"
+fastrand = "2.0.0"

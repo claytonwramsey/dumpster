@@ -42,7 +42,12 @@ unsafe impl<'a, T> Collectable for &'a T {
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) {
-        self.borrow().accept(visitor);
+        unsafe {
+            // SAFETY: We assume that even if a `mut` reference exists to the contents of this
+            // ref-cell, it will never be dereferenced while we perform this cleanup, making this
+            // technically not violate mutability guarantees.
+            self.as_ptr().as_ref().unwrap().accept(visitor);
+        }
     }
 
     #[inline]

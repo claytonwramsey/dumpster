@@ -19,16 +19,16 @@ pub trait SyncMultiref: Sync + Multiref {}
 impl<T> SyncMultiref for T where T: Sync + Multiref {}
 
 #[derive(dumpster_derive::Collectable)]
-struct DumpsterSyncMultiref {
+pub struct DumpsterSyncMultiref {
     refs: Mutex<Vec<dumpster::sync::Gc<DumpsterSyncMultiref>>>,
 }
 
 #[derive(dumpster_derive::Collectable)]
-struct DumpsterUnsyncMultiref {
+pub struct DumpsterUnsyncMultiref {
     refs: RefCell<Vec<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>>,
 }
 
-struct GcMultiref {
+pub struct GcMultiref {
     refs: gc::GcCell<Vec<gc::Gc<GcMultiref>>>,
 }
 
