@@ -20,13 +20,13 @@
 
 use std::{
     alloc::{dealloc, Layout},
-    collections::{hash_map::Entry, HashMap, HashSet},
-    mem::{swap, take},
+    collections::{hash_map::Entry, HashMap},
+    mem::{replace, swap, take},
     num::NonZeroUsize,
     ptr::{drop_in_place, NonNull},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex, MutexGuard, RwLock,
+        Mutex, MutexGuard, RwLock, TryLockError,
     },
 };
 
@@ -71,7 +71,7 @@ type BuildFn = unsafe fn(
     OpaquePtr,
     AllocationId,
     &mut HashMap<AllocationId, Node>,
-    &mut Vec<MutexGuard<'static, NonZeroUsize>>,
+    &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
 );
 
 struct Cleanup {
@@ -80,12 +80,14 @@ struct Cleanup {
 }
 
 #[derive(Debug)]
-struct Node {
-    children: Vec<AllocationId>,
-    true_ref_count: NonZeroUsize,
-    found_ref_count: usize,
-    destroy_fn: unsafe fn(OpaquePtr),
-    ptr: OpaquePtr,
+enum Node {
+    Unknown {
+        children: Vec<AllocationId>,
+        n_unaccounted: usize,
+        destroy_fn: unsafe fn(OpaquePtr),
+        ptr: OpaquePtr,
+    },
+    Reachable,
 }
 
 impl Dumpster {
@@ -95,7 +97,7 @@ impl Dumpster {
     pub fn collect_all(&self) {
         let to_collect = take(&mut *self.to_clean.write().unwrap());
         let mut ref_graph = HashMap::new();
-        let mut guards = Vec::new();
+        let mut guards = HashMap::new();
 
         for (id, cleanup) in to_collect {
             unsafe { (cleanup.build_fn)(cleanup.ptr, id, &mut ref_graph, &mut guards) };
@@ -103,26 +105,24 @@ impl Dumpster {
 
         drop(guards);
         println!("{ref_graph:#?}");
-
-        let mut reachable = HashSet::new();
-        for &root_id in ref_graph.iter().filter_map(|(k, v)| {
-            ({
-                assert!(
-                    v.true_ref_count.get() >= v.found_ref_count,
-                    "set of references found by the search may not be more than the total quantity"
-                );
-                v.true_ref_count.get() != v.found_ref_count
+        let root_ids = ref_graph
+            .iter()
+            .filter_map(|(&k, v)| match v {
+                Node::Reachable => Some(k),
+                Node::Unknown { n_unaccounted, .. } => (*n_unaccounted > 0).then_some(k),
             })
-            .then_some(k)
-        }) {
-            sweep(root_id, &ref_graph, &mut reachable);
+            .collect::<Vec<_>>();
+        for root_id in root_ids {
+            sweep(root_id, &mut ref_graph);
         }
 
-        for node in ref_graph
-            .into_iter()
-            .filter_map(|(k, v)| (!reachable.contains(&k)).then_some(v))
-        {
-            unsafe { (node.destroy_fn)(node.ptr) };
+        for (destroy_fn, ptr) in ref_graph.into_iter().filter_map(|(_, v)| match v {
+            Node::Reachable => None,
+            Node::Unknown {
+                destroy_fn, ptr, ..
+            } => Some((destroy_fn, ptr)),
+        }) {
+            unsafe { destroy_fn(ptr) };
         }
     }
 
@@ -187,7 +187,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     ptr: OpaquePtr,
     starting_id: AllocationId,
     ref_graph: &mut HashMap<AllocationId, Node>,
-    guards: &mut Vec<MutexGuard<'static, NonZeroUsize>>,
+    guards: &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
 ) {
     #[derive(Debug)]
     /// The visitor structure used for building the found-reference-graph of allocations.
@@ -201,7 +201,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
         /// The currently-held mutex guards as we construct the graph.
         /// If an allocation has an entry in the reference graph, it should also be covered by a
         /// guard.
-        guards: &'a mut Vec<MutexGuard<'static, NonZeroUsize>>,
+        guards: &'a mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
     }
 
     impl<'a> Visitor for BuildRefGraph<'a> {
@@ -211,36 +211,61 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
         {
             let mut new_id = AllocationId::from(gc.ptr.unwrap());
             println!("visit {new_id:?}");
-            self.ref_graph
-                .get_mut(&self.current_id)
-                .unwrap()
-                .children
-                .push(new_id);
+            let Some(Node::Unknown {
+                ref mut children, ..
+            }) = self.ref_graph.get_mut(&self.current_id)
+            else {
+                panic!("prior node does not exist");
+            };
+            children.push(new_id);
 
             match self.ref_graph.entry(new_id) {
                 Entry::Occupied(mut o) => {
                     println!("find another reference to {new_id:?}");
-                    o.get_mut().found_ref_count += 1;
+                    match o.get_mut() {
+                        Node::Reachable => (),
+                        Node::Unknown {
+                            ref mut n_unaccounted,
+                            ..
+                        } => {
+                            *n_unaccounted -= 1;
+                        }
+                    }
                 }
                 Entry::Vacant(v) => {
-                    println!("first visit to {new_id:?}, create entry");
-                    let guard = unsafe { new_id.0.as_ref().lock().unwrap() };
-                    v.insert(Node {
-                        children: Vec::new(),
-                        true_ref_count: *guard,
-                        found_ref_count: 1,
-                        destroy_fn: destroy_opaque::<T>,
-                        ptr: OpaquePtr::new(gc.ptr.unwrap()),
-                    });
-                    self.guards.push(guard);
+                    // This allocation has never been visited by the reference graph builder.
+                    // Attempt to acquire its lock.
+                    match unsafe { new_id.0.as_ref().try_lock() } {
+                        Ok(guard) => {
+                            // This allocation is not currently being inspected by anything else and
+                            // is therefore of unknown reachability.
 
-                    // Save the previously visited ID, then carry on to the next one
-                    swap(&mut new_id, &mut self.current_id);
+                            let _ = v.insert(Node::Unknown {
+                                children: Vec::new(),
+                                n_unaccounted: guard.get() - 1,
+                                destroy_fn: destroy_opaque::<T>,
+                                ptr: OpaquePtr::new(gc.ptr.unwrap()),
+                            });
+                            self.guards.insert(new_id, guard);
 
-                    (**gc).accept(self);
+                            // Save the previously visited ID, then carry on to the next one
+                            swap(&mut new_id, &mut self.current_id);
 
-                    // Restore current_id and carry on
-                    swap(&mut new_id, &mut self.current_id);
+                            // TODO: on failure of acceptance, overwrite new_entry and sweep from it
+                            (**gc).accept(self);
+
+                            // Restore current_id and carry on
+                            swap(&mut new_id, &mut self.current_id);
+                        }
+                        Err(TryLockError::WouldBlock) => {
+                            // This allocation is currently being inspected by another thread and is
+                            // therefore reachable.
+                            v.insert(Node::Reachable);
+                        }
+                        _ => {
+                            panic!("poisoned lock in Gc!");
+                        }
+                    };
                 }
             }
         }
@@ -255,39 +280,41 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
 
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
         println!("begin a search from {starting_id:?}, create entry");
-        let guard = unsafe { starting_id.0.as_ref().lock().unwrap() };
+        match unsafe { starting_id.0.as_ref().try_lock() } {
+            Ok(guard) => {
+                v.insert(Node::Unknown {
+                    children: Vec::new(),
+                    n_unaccounted: guard.get(),
+                    destroy_fn: destroy_opaque::<T>,
+                    ptr,
+                });
+                guards.insert(starting_id, guard);
 
-        v.insert(Node {
-            children: Vec::new(),
-            found_ref_count: 0,
-            true_ref_count: *guard,
-            destroy_fn: destroy_opaque::<T>,
-            ptr,
-        });
-
-        guards.push(guard);
-
-        ptr.specify::<GcBox<T>>()
-            .as_ref()
-            .value
-            .accept(&mut BuildRefGraph {
-                ref_graph,
-                current_id: starting_id,
-                guards,
-            });
+                ptr.specify::<GcBox<T>>()
+                    .as_ref()
+                    .value
+                    .accept(&mut BuildRefGraph {
+                        ref_graph,
+                        current_id: starting_id,
+                        guards,
+                    });
+            }
+            Err(TryLockError::WouldBlock) => {
+                v.insert(Node::Reachable);
+            }
+            _ => {
+                panic!("poisoned lock in Gc!");
+            }
+        }
     }
 }
 
-fn sweep(
-    root: AllocationId,
-    graph: &HashMap<AllocationId, Node>,
-    reachable: &mut HashSet<AllocationId>,
-) {
-    if reachable.insert(root) {
-        graph[&root]
-            .children
-            .iter()
-            .for_each(|&rt| sweep(rt, graph, reachable));
+fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, Node>) {
+    let node = graph.get_mut(&root).unwrap();
+    if let Node::Unknown { children, .. } = replace(node, Node::Reachable) {
+        for child in children {
+            sweep(child, graph);
+        }
     }
 }
 
