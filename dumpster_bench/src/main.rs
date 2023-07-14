@@ -1,11 +1,8 @@
 //! Benchmarks for the `dumpster` garbage collection library.
 
-use std::{
-    thread::{spawn, JoinHandle},
-    time::Instant,
-};
+use std::{thread::spawn, time::Instant};
 
-use dumpster_bench::{DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref, Multiref};
+use dumpster_bench::{DumpsterUnsyncMultiref, GcMultiref, Multiref};
 
 fn main() {
     single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>("dumpster::unsync");
@@ -21,8 +18,8 @@ fn single_threaded<M: Multiref>(name: &str) {
 
     println!("{name}: running...");
     let tic = Instant::now();
-    for n in 0..1_000_000 {
-        // println!("iter {n}");
+    for _n in 0..1_000_000 {
+        // println!("iter {_n}");
         if gcs.is_empty() {
             gcs.push(M::new(Vec::new()));
         } else {
@@ -68,6 +65,7 @@ fn single_threaded<M: Multiref>(name: &str) {
     println!("finished {name} in {:?}", (toc - tic));
 }
 
+#[allow(dead_code)]
 fn concurrent_scaling() {
     for nthreads in 1..16 {
         let handles = (0..nthreads)

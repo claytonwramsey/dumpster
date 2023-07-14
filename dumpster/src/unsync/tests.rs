@@ -304,3 +304,22 @@ fn parallel_loop() {
     assert_eq!(count3.load(Ordering::Relaxed), 1);
     assert_eq!(count4.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+/// Check that we can drop a Gc which points to some allocation with a borrowed `RefCell` in it.
+fn double_borrow() {
+    let drop_count = AtomicUsize::new(0);
+
+    let gc = Gc::new(MultiRef {
+        refs: RefCell::new(Vec::new()),
+        drop_count: &drop_count,
+    });
+    gc.refs.borrow_mut().push(gc.clone());
+    gc.refs.borrow_mut().swap_remove(0);
+
+    assert_eq!(drop_count.load(Ordering::Relaxed), 0);
+    collect();
+    drop(gc);
+    collect();
+    assert_eq!(drop_count.load(Ordering::Relaxed), 1);
+}

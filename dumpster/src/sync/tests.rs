@@ -213,3 +213,16 @@ fn parallel_loop() {
     assert_eq!(count3.load(Ordering::Relaxed), 1);
     assert_eq!(count4.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+/// Test that we can drop a Gc which points to some allocation with a locked Mutex inside it
+// note: I tried using `ntest::timeout` but for some reason that caused this test to trivially pass.
+fn deadlock() {
+    let gc1 = Gc::new(Mutex::new(()));
+    let gc2 = gc1.clone();
+
+    let guard = gc1.lock();
+    drop(gc2);
+    collect();
+    drop(guard);
+}
