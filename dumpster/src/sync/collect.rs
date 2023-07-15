@@ -96,6 +96,7 @@ impl Dumpster {
     /// If so, drop those allocations.
     pub fn collect_all(&self) {
         let to_collect = take(&mut *self.to_clean.write().unwrap());
+        self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let mut ref_graph = HashMap::new();
         let mut guards = HashMap::new();
 
