@@ -89,7 +89,9 @@ pub mod unsync;
 /// struct Foo(u8);
 ///
 /// unsafe impl Collectable for Foo {
-///     fn accept<V: Visitor>(&self, visitor: &mut V) {}
+///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()>  {
+///         Ok(())
+///     }
 ///     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {}
 /// }
 /// ```
@@ -103,12 +105,38 @@ pub mod unsync;
 /// struct Bar(Gc<Bar>);
 ///
 /// unsafe impl Collectable for Bar {
-///     fn accept<V: Visitor>(&self, visitor: &mut V) {
-///         self.0.accept(visitor);
+///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+///         self.0.accept(visitor)
 ///     }
 ///
 ///     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
 ///         self.0.destroy_gcs(destroyer);
+///     }
+/// }
+/// ```
+///
+/// A data structure with two or more fields which could own a garbage-collected pointer should
+/// delegate to both fields in a consistent order:
+///
+/// ```
+///
+/// use dumpster::{unsync::Gc, Collectable, Destroyer, Visitor};
+///
+/// struct Baz {
+///     a: Gc<Baz>,
+///     b: Gc<Baz>,
+/// }
+///
+/// unsafe impl Collectable for Baz {
+///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+///         self.a.accept(visitor)?;
+///         self.b.accept(visitor)?;
+///         Ok(())
+///     }
+///
+///     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+///         self.a.destroy_gcs(destroyer);
+///         self.b.destroy_gcs(destroyer);
 ///     }
 /// }
 /// ```
@@ -117,6 +145,18 @@ pub unsafe trait Collectable {
     ///
     /// Implementors of this function need only delegate to all fields owned by this value which
     /// may contain a garbage-collected reference (either a [`sync::Gc`] or a [`unsync::Gc`]).
+    ///
+    /// For structures which have more than one field, they should return immediately after the
+    /// first `Err` is returned from one of its fields.
+    /// To do so efficiently, we recommend using the try operator (`?`) on each field and then
+    /// returning `Ok(())` after delegating to each field.
+    ///
+    /// # Errors
+    ///
+    /// Errors are returned from this function whenever a field of this object returns an error
+    /// after delegating acceptance to it, or if this value's data is inaccessible (such as
+    /// attempting) to borrow from a [`RefCell`](std::cell::RefCell) which has already been
+    /// mutably borrowed.
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()>;
 
     /// Destroy all garbage-collected fields of this structure, immediately prior to dropping it.
@@ -141,12 +181,12 @@ pub unsafe trait Collectable {
 /// on which type of pointer it is.
 pub trait Visitor {
     /// Visit a synchronized garbage-collected pointer.
-    fn visit_sync<T>(&mut self, gc: &sync::Gc<T>) -> Result<(), ()>
+    fn visit_sync<T>(&mut self, gc: &sync::Gc<T>)
     where
         T: Collectable + Sync + ?Sized;
 
     /// Visit a thread-local garbage-collected pointer.
-    fn visit_unsync<T>(&mut self, gc: &unsync::Gc<T>) -> Result<(), ()>
+    fn visit_unsync<T>(&mut self, gc: &unsync::Gc<T>)
     where
         T: Collectable + ?Sized;
 }

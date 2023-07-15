@@ -189,97 +189,6 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     ref_graph: &mut HashMap<AllocationId, Node>,
     guards: &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
 ) {
-    #[derive(Debug)]
-    /// The visitor structure used for building the found-reference-graph of allocations.
-    struct BuildRefGraph<'a> {
-        /// The reference graph.
-        /// Each allocation is assigned a node.
-        ref_graph: &'a mut HashMap<AllocationId, Node>,
-        /// The allocation ID currently being visited.
-        /// Used for knowing which node is the parent of another.
-        current_id: AllocationId,
-        /// The currently-held mutex guards as we construct the graph.
-        /// If an allocation has an entry in the reference graph, it should also be covered by a
-        /// guard.
-        guards: &'a mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
-    }
-
-    impl<'a> Visitor for BuildRefGraph<'a> {
-        fn visit_sync<T>(&mut self, gc: &Gc<T>) -> Result<(), ()>
-        where
-            T: Collectable + Sync + ?Sized,
-        {
-            let mut new_id = AllocationId::from(gc.ptr.unwrap());
-            println!("visit {new_id:?}");
-            let Some(Node::Unknown {
-                ref mut children, ..
-            }) = self.ref_graph.get_mut(&self.current_id)
-            else {
-                panic!("prior node does not exist");
-            };
-            children.push(new_id);
-
-            match self.ref_graph.entry(new_id) {
-                Entry::Occupied(mut o) => {
-                    println!("find another reference to {new_id:?}");
-                    match o.get_mut() {
-                        Node::Reachable => (),
-                        Node::Unknown {
-                            ref mut n_unaccounted,
-                            ..
-                        } => {
-                            *n_unaccounted -= 1;
-                        }
-                    }
-                }
-                Entry::Vacant(v) => {
-                    // This allocation has never been visited by the reference graph builder.
-                    // Attempt to acquire its lock.
-                    match unsafe { new_id.0.as_ref().try_lock() } {
-                        Ok(guard) => {
-                            // This allocation is not currently being inspected by anything else and
-                            // is therefore of unknown reachability.
-
-                            let _ = v.insert(Node::Unknown {
-                                children: Vec::new(),
-                                n_unaccounted: guard.get() - 1,
-                                destroy_fn: destroy_opaque::<T>,
-                                ptr: OpaquePtr::new(gc.ptr.unwrap()),
-                            });
-                            self.guards.insert(new_id, guard);
-
-                            // Save the previously visited ID, then carry on to the next one
-                            swap(&mut new_id, &mut self.current_id);
-
-                            // TODO: on failure of acceptance, overwrite new_entry and sweep from it
-                            (**gc).accept(self).unwrap();
-
-                            // Restore current_id and carry on
-                            swap(&mut new_id, &mut self.current_id);
-                        }
-                        Err(TryLockError::WouldBlock) => {
-                            // This allocation is currently being inspected by another thread and is
-                            // therefore reachable.
-                            v.insert(Node::Reachable);
-                        }
-                        _ => {
-                            panic!("poisoned lock in Gc!");
-                        }
-                    };
-                }
-            };
-
-            Ok(())
-        }
-
-        fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>) -> Result<(), ()>
-        where
-            T: Collectable + ?Sized,
-        {
-            panic!("A `dumpster::sync::Gc` may not own a `dumpster::unsync::Gc` because `dumpster::unsync::Gc` is `Sync`");
-        }
-    }
-
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
         println!("begin a search from {starting_id:?}, create entry");
         match unsafe { starting_id.0.as_ref().try_lock() } {
@@ -292,7 +201,8 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                 });
                 guards.insert(starting_id, guard);
 
-                ptr.specify::<GcBox<T>>()
+                if ptr
+                    .specify::<GcBox<T>>()
                     .as_ref()
                     .value
                     .accept(&mut BuildRefGraph {
@@ -300,7 +210,18 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                         current_id: starting_id,
                         guards,
                     })
-                    .unwrap();
+                    .is_err()
+                {
+                    let Node::Unknown { children, .. } =
+                        replace(ref_graph.get_mut(&starting_id).unwrap(), Node::Reachable)
+                    else {
+                        panic!("initial allocaiton magically marked as reachable by other thread?");
+                    };
+
+                    for child in children {
+                        sweep(child, ref_graph);
+                    }
+                }
             }
             Err(TryLockError::WouldBlock) => {
                 v.insert(Node::Reachable);
@@ -309,6 +230,107 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                 panic!("poisoned lock in Gc!");
             }
         }
+    }
+}
+
+#[derive(Debug)]
+/// The visitor structure used for building the found-reference-graph of allocations.
+struct BuildRefGraph<'a> {
+    /// The reference graph.
+    /// Each allocation is assigned a node.
+    ref_graph: &'a mut HashMap<AllocationId, Node>,
+    /// The allocation ID currently being visited.
+    /// Used for knowing which node is the parent of another.
+    current_id: AllocationId,
+    /// The currently-held mutex guards as we construct the graph.
+    /// If an allocation has an entry in the reference graph, it should also be covered by a
+    /// guard.
+    guards: &'a mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
+}
+
+impl<'a> Visitor for BuildRefGraph<'a> {
+    fn visit_sync<T>(&mut self, gc: &Gc<T>)
+    where
+        T: Collectable + Sync + ?Sized,
+    {
+        let mut new_id = AllocationId::from(gc.ptr.unwrap());
+        println!("visit {new_id:?}");
+        let Some(Node::Unknown {
+            ref mut children, ..
+        }) = self.ref_graph.get_mut(&self.current_id)
+        else {
+            panic!("prior node does not exist");
+        };
+        children.push(new_id);
+
+        match self.ref_graph.entry(new_id) {
+            Entry::Occupied(mut o) => {
+                println!("find another reference to {new_id:?}");
+                match o.get_mut() {
+                    Node::Reachable => (),
+                    Node::Unknown {
+                        ref mut n_unaccounted,
+                        ..
+                    } => {
+                        *n_unaccounted -= 1;
+                    }
+                }
+            }
+            Entry::Vacant(v) => {
+                // This allocation has never been visited by the reference graph builder.
+                // Attempt to acquire its lock.
+                match unsafe { new_id.0.as_ref().try_lock() } {
+                    Ok(guard) => {
+                        // This allocation is not currently being inspected by anything else and
+                        // is therefore of unknown reachability.
+
+                        let _ = v.insert(Node::Unknown {
+                            children: Vec::new(),
+                            n_unaccounted: guard.get() - 1,
+                            destroy_fn: destroy_opaque::<T>,
+                            ptr: OpaquePtr::new(gc.ptr.unwrap()),
+                        });
+                        self.guards.insert(new_id, guard);
+
+                        // Save the previously visited ID, then carry on to the next one
+                        swap(&mut new_id, &mut self.current_id);
+
+                        // TODO: on failure of acceptance, overwrite new_entry and sweep from it
+                        if (**gc).accept(self).is_err() {
+                            // On failure, this means `**gc` is accessible, and should be marked
+                            // as such
+                            let Node::Unknown { children, .. } =
+                                replace(self.ref_graph.get_mut(&new_id).unwrap(), Node::Reachable)
+                            else {
+                                panic!("expected unknown node after proving it is accessible")
+                            };
+
+                            for child in children {
+                                sweep(child, self.ref_graph);
+                            }
+                        }
+
+                        // Restore current_id and carry on
+                        swap(&mut new_id, &mut self.current_id);
+                    }
+                    Err(TryLockError::WouldBlock) => {
+                        // This allocation is currently being inspected by another thread and is
+                        // therefore reachable.
+                        v.insert(Node::Reachable);
+                    }
+                    _ => {
+                        panic!("poisoned lock in Gc!");
+                    }
+                };
+            }
+        };
+    }
+
+    fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
+    where
+        T: Collectable + ?Sized,
+    {
+        panic!("A `dumpster::sync::Gc` may not own a `dumpster::unsync::Gc` because `dumpster::unsync::Gc` is `Sync`");
     }
 }
 

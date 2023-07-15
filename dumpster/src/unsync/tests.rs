@@ -313,7 +313,9 @@ fn double_borrow() {
         drop_count: &drop_count,
     });
     gc.refs.borrow_mut().push(gc.clone());
-    gc.refs.borrow_mut().swap_remove(0);
+    let mut my_borrow = gc.refs.borrow_mut();
+    my_borrow.pop();
+    drop(my_borrow);
 
     assert_eq!(drop_count.load(Ordering::Relaxed), 0);
     collect();

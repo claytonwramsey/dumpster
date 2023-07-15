@@ -46,7 +46,7 @@ pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let generated = quote! {
         unsafe impl #impl_generics dumpster::Collectable for #name #ty_generics #where_clause {
             #[inline]
-            fn accept<V: dumpster::Visitor>(&self, visitor: &mut V) {
+            fn accept<V: dumpster::Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
                 #do_visitor
             }
 
@@ -82,7 +82,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                         dumpster::Collectable::accept(
                             &self.#name,
                             visitor
-                        );
+                        )?;
                     }
                 });
 
@@ -96,7 +96,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                     }
                 });
                 (
-                    quote! { #(#delegate_visit)* },
+                    quote! { #(#delegate_visit)* Ok(()) },
                     quote! { #(#delegate_destroy)* },
                 )
             }
@@ -107,7 +107,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                         dumpster::Collectable::accept(
                             &self.#index,
                             visitor
-                        );
+                        )?;
                     }
                 });
 
@@ -118,11 +118,11 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                     }
                 });
                 (
-                    quote! { #(#delegate_visit)* },
+                    quote! { #(#delegate_visit)* Ok(()) },
                     quote! { #(#delegate_destroy)* },
                 )
             }
-            Fields::Unit => (TokenStream::new(), TokenStream::new()),
+            Fields::Unit => (quote! { Ok(()) }, TokenStream::new()),
         },
         Data::Enum(e) => {
             let mut delegate_visit = TokenStream::new();
@@ -152,7 +152,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                                 dumpster::Collectable::accept(
                                     #field_name,
                                     visitor
-                                );
+                                )?;
                             });
 
                             execution_destroy.extend(quote! {
@@ -162,8 +162,9 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                             });
                         }
 
-                        delegate_visit
-                            .extend(quote! {#name::#var_name{#binding} => {#execution_visit},});
+                        delegate_visit.extend(
+                            quote! {#name::#var_name{#binding} => {#execution_visit Ok(())},},
+                        );
                         delegate_destroy
                             .extend(quote! {#name::#var_name{#binding} => {#execution_destroy},});
                     }
@@ -187,7 +188,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                                 dumpster::Collectable::accept(
                                     #field_name,
                                     visitor
-                                );
+                                )?;
                             });
 
                             execution_destroy.extend(quote! {
@@ -195,13 +196,14 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                             });
                         }
 
-                        delegate_visit
-                            .extend(quote! {#name::#var_name(#binding) => {#execution_visit},});
+                        delegate_visit.extend(
+                            quote! {#name::#var_name(#binding) => {#execution_visit Ok(())},},
+                        );
                         delegate_destroy
                             .extend(quote! {#name::#var_name(#binding) => {#execution_destroy},});
                     }
                     Fields::Unit => {
-                        delegate_visit.extend(quote! {#name::#var_name => (),});
+                        delegate_visit.extend(quote! {#name::#var_name => Ok(()),});
                         delegate_destroy.extend(quote! {#name::#var_name => (),});
                     }
                 }

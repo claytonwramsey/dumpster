@@ -255,16 +255,15 @@ struct Reachability {
 }
 
 impl Visitor for BuildRefGraph {
-    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>) -> Result<(), ()>
+    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
         T: Collectable + Sync + ?Sized,
     {
         // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
         // immediately.
-        Ok(())
     }
 
-    fn visit_unsync<T>(&mut self, gc: &Gc<T>) -> Result<(), ()>
+    fn visit_unsync<T>(&mut self, gc: &Gc<T>)
     where
         T: Collectable + ?Sized,
     {
@@ -284,8 +283,6 @@ impl Visitor for BuildRefGraph {
         if self.visited.insert(next_id) {
             gc.deref().accept(self).unwrap();
         }
-
-        Ok(())
     }
 }
 
@@ -296,24 +293,21 @@ struct Sweep {
 }
 
 impl Visitor for Sweep {
-    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>) -> Result<(), ()>
+    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
         T: Collectable + Sync + ?Sized,
     {
         // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
         // immediately.
-        Ok(())
     }
 
-    fn visit_unsync<T>(&mut self, gc: &Gc<T>) -> Result<(), ()>
+    fn visit_unsync<T>(&mut self, gc: &Gc<T>)
     where
         T: Collectable + ?Sized,
     {
         if self.visited.insert(AllocationId::from(gc.ptr.unwrap())) {
             gc.deref().accept(self).unwrap();
         }
-
-        Ok(())
     }
 }
 
