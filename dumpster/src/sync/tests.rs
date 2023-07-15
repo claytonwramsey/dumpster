@@ -228,3 +228,53 @@ fn deadlock() {
     collect();
     drop(guard);
 }
+
+#[test]
+fn open_drop() {
+    let count1 = AtomicUsize::new(0);
+    let gc1 = Gc::new(MultiRef {
+        refs: Mutex::new(Vec::new()),
+        count: DropCount(&count1),
+    });
+
+    gc1.refs.lock().unwrap().push(gc1.clone());
+    let guard = gc1.refs.lock();
+    collect();
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    drop(guard);
+    drop(gc1);
+    collect();
+
+    assert_eq!(count1.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn eventually_collect() {
+    let count1 = AtomicUsize::new(0);
+    let count2 = AtomicUsize::new(0);
+
+    let gc1 = Gc::new(MultiRef {
+        refs: Mutex::new(Vec::new()),
+        count: DropCount(&count1),
+    });
+    let gc2 = Gc::new(MultiRef {
+        refs: Mutex::new(vec![gc1.clone()]),
+        count: DropCount(&count2),
+    });
+    gc1.refs.lock().unwrap().push(gc2.clone());
+
+    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count2.load(Ordering::Relaxed), 0);
+
+    drop(gc1);
+    drop(gc2);
+
+    for _ in 0..100 {
+        let gc = Gc::new(());
+        drop(gc);
+    }
+
+    // after enough time, gc1 and gc2 should have been collected
+    assert_eq!(count1.load(Ordering::Relaxed), 1);
+    assert_eq!(count2.load(Ordering::Relaxed), 1);
+}

@@ -95,6 +95,7 @@ where
                 .checked_add(1)
                 .expect("integer overflow when incrementing reference count");
         }
+        DUMPSTER.notify_created_gc();
         Gc {
             ptr: self.ptr,
             _phantom: PhantomData,

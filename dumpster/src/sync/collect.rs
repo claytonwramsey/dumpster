@@ -105,7 +105,7 @@ impl Dumpster {
         }
 
         drop(guards);
-        // println!("{ref_graph:#?}");
+        println!("{ref_graph:#?}");
         let root_ids = ref_graph
             .iter()
             .filter_map(|(&k, v)| match v {
@@ -135,8 +135,12 @@ impl Dumpster {
     pub fn notify_dropped_gc(&self) {
         let prev_gcs_dropped = self.n_gcs_dropped.fetch_add(1, Ordering::Relaxed);
         let prev_gcs_existing = self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
+        assert_ne!(prev_gcs_existing, 0, "underflow on number of existing GCs");
 
-        if prev_gcs_dropped >= prev_gcs_existing >> 1 {
+        println!("prev dropped {prev_gcs_dropped}, prev existing {prev_gcs_existing}");
+
+        if prev_gcs_dropped >= prev_gcs_existing >> 1 && prev_gcs_dropped > 0 {
+            println!("collect all");
             self.collect_all();
         }
     }
@@ -149,7 +153,8 @@ impl Dumpster {
 
     /// Notify that a GC was destroyed as part of the behavior of `DestryGcs`.
     pub fn notify_destroyed_gc(&self) {
-        self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
+        let prev_gcs_existing = self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
+        assert_ne!(prev_gcs_existing, 0, "underflow on number of existing GCs");
     }
 
     /// Mark an allocation as "dirty," implying that it may or may not be inaccessible and need to
@@ -196,7 +201,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     guards: &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
 ) {
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
-        // println!("begin a search from {starting_id:?}, create entry");
+        println!("begin a search from {starting_id:?}, create entry");
         match unsafe { starting_id.0.as_ref().try_lock() } {
             Ok(guard) => {
                 v.insert(Node::Unknown {
@@ -260,7 +265,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
         T: Collectable + Sync + ?Sized,
     {
         let mut new_id = AllocationId::from(gc.ptr.unwrap());
-        // println!("visit {new_id:?}");
+        println!("visit {new_id:?}");
         let Node::Unknown {
             ref mut children, ..
         } = self.ref_graph.get_mut(&self.current_id).unwrap()
@@ -273,7 +278,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 
         match self.ref_graph.entry(new_id) {
             Entry::Occupied(mut o) => {
-                // println!("find another reference to {new_id:?}");
+                println!("find another reference to {new_id:?}");
                 match o.get_mut() {
                     Node::Reachable => (),
                     Node::Unknown {
@@ -305,7 +310,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 
                         // TODO: on failure of acceptance, overwrite new_entry and sweep from it
                         if (**gc).accept(self).is_err() {
-                            // println!("node proven accessible, re-sweeping");
+                            println!("node proven accessible, re-sweeping");
                             // On failure, this means `**gc` is accessible, and should be marked
                             // as such
                             let Node::Unknown { children, .. } =

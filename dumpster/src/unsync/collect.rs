@@ -212,7 +212,12 @@ impl Dumpster {
     /// This may trigger a sweep of the heap, but is guaranteed to be amortized to _O(1)_.
     pub fn notify_dropped_gc(&self) {
         self.n_ref_drops.set(self.n_ref_drops.get() + 1);
-        self.n_refs_living.set(self.n_refs_living.get() - 1);
+        let old_refs_living = self.n_refs_living.get();
+        assert_ne!(
+            old_refs_living, 0,
+            "underflow on unsync::Gc number of living Gcs"
+        );
+        self.n_refs_living.set(old_refs_living - 1);
 
         // check if it's been a long time since the last time we collected all
         // the garbage.
