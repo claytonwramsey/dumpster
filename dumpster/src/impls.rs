@@ -26,7 +26,7 @@ use std::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
             AtomicU64, AtomicU8, AtomicUsize,
         },
-        Mutex,
+        Mutex, TryLockError,
     },
 };
 
@@ -34,15 +34,17 @@ use crate::{Collectable, Destroyer, Visitor};
 
 unsafe impl<'a, T> Collectable for &'a T {
     #[inline]
-    fn accept<V: Visitor>(&self, _: &mut V) {}
+    fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+        Ok(())
+    }
     #[inline]
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
-        self.borrow().accept(visitor);
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.try_borrow().map_err(|_| ())?.accept(visitor)
     }
 
     #[inline]
@@ -52,8 +54,13 @@ unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
-        self.lock().unwrap().accept(visitor);
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.try_lock()
+            .map_err(|e| match e {
+                TryLockError::Poisoned(_) => panic!(),
+                TryLockError::WouldBlock => (),
+            })?
+            .accept(visitor)
     }
 
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
@@ -63,9 +70,10 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
 
 unsafe impl<T: Collectable> Collectable for Option<T> {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
-        if let Some(ref x) = self {
-            x.accept(visitor);
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        match self {
+            Some(x) => x.accept(visitor),
+            None => Ok(()),
         }
     }
 
@@ -82,7 +90,7 @@ where
     T: Collectable,
     E: Collectable,
 {
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             Ok(t) => t.accept(visitor),
             Err(e) => e.accept(visitor),
@@ -104,8 +112,11 @@ macro_rules! collectable_collection_impl {
     ($x: ty) => {
         unsafe impl<T: Collectable> Collectable for $x {
             #[inline]
-            fn accept<V: Visitor>(&self, visitor: &mut V) {
-                self.iter().for_each(|elem| elem.accept(visitor));
+            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+                for elem in self.iter() {
+                    elem.accept(visitor)?;
+                }
+                Ok(())
             }
 
             #[inline]
@@ -122,8 +133,11 @@ collectable_collection_impl!(LinkedList<T>);
 collectable_collection_impl!([T]);
 
 unsafe impl<T: Collectable, const N: usize> Collectable for [T; N] {
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
-        self.iter().for_each(|elem| elem.accept(visitor));
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        for elem in self.iter() {
+            elem.accept(visitor)?;
+        }
+        Ok(())
     }
 
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
@@ -136,8 +150,11 @@ macro_rules! collectable_set_impl {
     ($x: ty) => {
         unsafe impl<T: Collectable> Collectable for $x {
             #[inline]
-            fn accept<V: Visitor>(&self, visitor: &mut V) {
-                self.iter().for_each(|elem| elem.accept(visitor));
+            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+                for elem in self.iter() {
+                    elem.accept(visitor)?;
+                }
+                Ok(())
             }
 
             #[inline]
@@ -158,7 +175,9 @@ macro_rules! collectable_trivial_impl {
     ($x: ty) => {
         unsafe impl Collectable for $x {
             #[inline]
-            fn accept<V: Visitor>(&self, _: &mut V) {}
+            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+                Ok(())
+            }
             #[inline]
             unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
         }

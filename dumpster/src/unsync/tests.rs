@@ -39,9 +39,9 @@ fn simple() {
     }
 
     unsafe impl Collectable for Foo {
-        #[inline]
-        fn accept<V: Visitor>(&self, _: &mut V) {}
-        #[inline]
+        fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+            Ok(())
+        }
         unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
     }
 
@@ -66,11 +66,9 @@ struct MultiRef<'a> {
 }
 
 unsafe impl Collectable for MultiRef<'_> {
-    #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
-        self.refs.accept(visitor);
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.refs.accept(visitor)
     }
-    #[inline]
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
         self.refs.destroy_gcs(visitor);
     }
@@ -89,8 +87,8 @@ fn self_referential() {
 
     unsafe impl Collectable for Foo {
         #[inline]
-        fn accept<V: Visitor>(&self, visitor: &mut V) {
-            self.0.accept(visitor);
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
         }
         #[inline]
         unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
@@ -119,8 +117,8 @@ fn cyclic() {
 
     unsafe impl Collectable for Foo {
         #[inline]
-        fn accept<V: Visitor>(&self, visitor: &mut V) {
-            self.0.accept(visitor);
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
         }
         #[inline]
         unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {

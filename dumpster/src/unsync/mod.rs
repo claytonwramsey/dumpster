@@ -163,8 +163,8 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
-        visitor.visit_unsync(self);
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        visitor.visit_unsync(self)
     }
 
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {

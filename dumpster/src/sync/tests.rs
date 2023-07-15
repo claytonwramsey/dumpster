@@ -31,7 +31,9 @@ impl<'a> Drop for DropCount<'a> {
 }
 
 unsafe impl Collectable for DropCount<'_> {
-    fn accept<V: crate::Visitor>(&self, _: &mut V) {}
+    fn accept<V: crate::Visitor>(&self, _: &mut V) -> Result<(), ()> {
+        Ok(())
+    }
 
     unsafe fn destroy_gcs<D: crate::Destroyer>(&mut self, _: &mut D) {}
 }
@@ -43,8 +45,8 @@ struct MultiRef<'a> {
 }
 
 unsafe impl<'a> Collectable for MultiRef<'a> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
-        self.refs.accept(visitor);
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.refs.accept(visitor)
     }
 
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
@@ -81,8 +83,8 @@ fn self_referential() {
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
     unsafe impl Collectable for Foo {
-        fn accept<V: Visitor>(&self, visitor: &mut V) {
-            self.0.accept(visitor);
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
         }
 
         unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {

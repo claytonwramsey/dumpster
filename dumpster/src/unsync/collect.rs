@@ -111,7 +111,7 @@ impl Cleanup {
 /// `T` must be the same type that `ptr` was created with via [`OpaquePtr::new`].
 unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: OpaquePtr, visitor: &mut V) {
     let specified: NonNull<GcBox<T>> = ptr.specify();
-    specified.as_ref().value.accept(visitor);
+    let _ = specified.as_ref().value.accept(visitor);
 }
 
 /// Destroy the garbage-collected values of some opaquely-defined type.
@@ -255,15 +255,16 @@ struct Reachability {
 }
 
 impl Visitor for BuildRefGraph {
-    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
+    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>) -> Result<(), ()>
     where
         T: Collectable + Sync + ?Sized,
     {
         // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
         // immediately.
+        Ok(())
     }
 
-    fn visit_unsync<T>(&mut self, gc: &Gc<T>)
+    fn visit_unsync<T>(&mut self, gc: &Gc<T>) -> Result<(), ()>
     where
         T: Collectable + ?Sized,
     {
@@ -281,8 +282,10 @@ impl Visitor for BuildRefGraph {
             }
         }
         if self.visited.insert(next_id) {
-            gc.deref().accept(self);
+            gc.deref().accept(self).unwrap();
         }
+
+        Ok(())
     }
 }
 
@@ -293,21 +296,24 @@ struct Sweep {
 }
 
 impl Visitor for Sweep {
-    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
+    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>) -> Result<(), ()>
     where
         T: Collectable + Sync + ?Sized,
     {
         // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
         // immediately.
+        Ok(())
     }
 
-    fn visit_unsync<T>(&mut self, gc: &Gc<T>)
+    fn visit_unsync<T>(&mut self, gc: &Gc<T>) -> Result<(), ()>
     where
         T: Collectable + ?Sized,
     {
         if self.visited.insert(AllocationId::from(gc.ptr.unwrap())) {
-            gc.deref().accept(self);
+            gc.deref().accept(self).unwrap();
         }
+
+        Ok(())
     }
 }
 

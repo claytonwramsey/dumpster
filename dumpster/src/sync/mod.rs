@@ -136,8 +136,8 @@ where
 }
 
 unsafe impl<T: Collectable + Sync + ?Sized> Collectable for Gc<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) {
-        visitor.visit_sync(self);
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        visitor.visit_sync(self)
     }
 
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {

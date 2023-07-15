@@ -51,7 +51,7 @@
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]
 #![warn(missing_docs)]
-#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::multiple_crate_versions, clippy::result_unit_err)]
 
 use std::{
     fmt,
@@ -117,7 +117,7 @@ pub unsafe trait Collectable {
     ///
     /// Implementors of this function need only delegate to all fields owned by this value which
     /// may contain a garbage-collected reference (either a [`sync::Gc`] or a [`unsync::Gc`]).
-    fn accept<V: Visitor>(&self, visitor: &mut V);
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()>;
 
     /// Destroy all garbage-collected fields of this structure, immediately prior to dropping it.
     ///
@@ -141,12 +141,12 @@ pub unsafe trait Collectable {
 /// on which type of pointer it is.
 pub trait Visitor {
     /// Visit a synchronized garbage-collected pointer.
-    fn visit_sync<T>(&mut self, gc: &sync::Gc<T>)
+    fn visit_sync<T>(&mut self, gc: &sync::Gc<T>) -> Result<(), ()>
     where
         T: Collectable + Sync + ?Sized;
 
     /// Visit a thread-local garbage-collected pointer.
-    fn visit_unsync<T>(&mut self, gc: &unsync::Gc<T>)
+    fn visit_unsync<T>(&mut self, gc: &unsync::Gc<T>) -> Result<(), ()>
     where
         T: Collectable + ?Sized;
 }

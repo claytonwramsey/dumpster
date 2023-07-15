@@ -205,7 +205,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     }
 
     impl<'a> Visitor for BuildRefGraph<'a> {
-        fn visit_sync<T>(&mut self, gc: &Gc<T>)
+        fn visit_sync<T>(&mut self, gc: &Gc<T>) -> Result<(), ()>
         where
             T: Collectable + Sync + ?Sized,
         {
@@ -252,7 +252,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                             swap(&mut new_id, &mut self.current_id);
 
                             // TODO: on failure of acceptance, overwrite new_entry and sweep from it
-                            (**gc).accept(self);
+                            (**gc).accept(self).unwrap();
 
                             // Restore current_id and carry on
                             swap(&mut new_id, &mut self.current_id);
@@ -267,10 +267,12 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                         }
                     };
                 }
-            }
+            };
+
+            Ok(())
         }
 
-        fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
+        fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>) -> Result<(), ()>
         where
             T: Collectable + ?Sized,
         {
@@ -297,7 +299,8 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                         ref_graph,
                         current_id: starting_id,
                         guards,
-                    });
+                    })
+                    .unwrap();
             }
             Err(TryLockError::WouldBlock) => {
                 v.insert(Node::Reachable);
