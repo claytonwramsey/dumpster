@@ -161,6 +161,7 @@ impl Destroyer for DestroyGcs {
     where
         T: Collectable + Sync + ?Sized,
     {
+        DUMPSTER.notify_destroyed_gc();
         gc.ptr = None;
     }
 

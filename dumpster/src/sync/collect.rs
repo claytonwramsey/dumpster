@@ -147,6 +147,11 @@ impl Dumpster {
         self.n_gcs_existing.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Notify that a GC was destroyed as part of the behavior of `DestryGcs`.
+    pub fn notify_destroyed_gc(&self) {
+        self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
+    }
+
     /// Mark an allocation as "dirty," implying that it may or may not be inaccessible and need to
     /// be cleaned up.
     pub fn mark_dirty<T>(&self, allocation: NonNull<GcBox<T>>)
