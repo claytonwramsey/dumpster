@@ -35,18 +35,22 @@ pub struct GcMultiref {
 impl gc::Finalize for GcMultiref {}
 
 unsafe impl gc::Trace for GcMultiref {
+    #[inline]
     unsafe fn trace(&self) {
         self.refs.trace();
     }
 
+    #[inline]
     unsafe fn root(&self) {
         self.refs.root();
     }
 
+    #[inline]
     unsafe fn unroot(&self) {
         self.refs.unroot();
     }
 
+    #[inline]
     fn finalize_glue(&self) {
         self.refs.finalize_glue()
     }

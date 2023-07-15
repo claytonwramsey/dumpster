@@ -2,13 +2,12 @@
 
 use std::{thread::spawn, time::Instant};
 
-use dumpster_bench::{DumpsterUnsyncMultiref, GcMultiref, Multiref};
+use dumpster_bench::{DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref, Multiref};
 
 fn main() {
-    single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>("dumpster::unsync");
-    // TODO fix deadlock?
-    // single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>("dumpster::sync");
-    single_threaded::<gc::Gc<GcMultiref>>("gc");
+    // single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>("dumpster::unsync");
+    single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>("dumpster::sync");
+    // single_threaded::<gc::Gc<GcMultiref>>("gc");
 }
 
 /// Run a benchmark of a multi-threaded garbage collector.
@@ -16,7 +15,7 @@ fn single_threaded<M: Multiref>(name: &str) {
     fastrand::seed(12345);
     let mut gcs = Vec::new();
 
-    println!("{name}: running...");
+    // println!("{name}: running...");
     let tic = Instant::now();
     for _n in 0..1_000_000 {
         // println!("iter {_n}");

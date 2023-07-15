@@ -54,6 +54,7 @@ unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
+    #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_lock()
             .map_err(|e| match e {
@@ -63,6 +64,7 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
             .accept(visitor)
     }
 
+    #[inline]
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
         self.get_mut().unwrap().destroy_gcs(destroyer);
     }
@@ -90,6 +92,7 @@ where
     T: Collectable,
     E: Collectable,
 {
+    #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             Ok(t) => t.accept(visitor),
@@ -97,6 +100,7 @@ where
         }
     }
 
+    #[inline]
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
         match self {
             Ok(t) => t.destroy_gcs(destroyer),
@@ -133,6 +137,7 @@ collectable_collection_impl!(LinkedList<T>);
 collectable_collection_impl!([T]);
 
 unsafe impl<T: Collectable, const N: usize> Collectable for [T; N] {
+    #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         for elem in self.iter() {
             elem.accept(visitor)?;
@@ -140,6 +145,7 @@ unsafe impl<T: Collectable, const N: usize> Collectable for [T; N] {
         Ok(())
     }
 
+    #[inline]
     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
         self.iter_mut().for_each(|elem| elem.destroy_gcs(destroyer));
     }

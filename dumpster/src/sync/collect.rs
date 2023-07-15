@@ -104,7 +104,7 @@ impl Dumpster {
         }
 
         drop(guards);
-        println!("{ref_graph:#?}");
+        // println!("{ref_graph:#?}");
         let root_ids = ref_graph
             .iter()
             .filter_map(|(&k, v)| match v {
@@ -190,7 +190,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     guards: &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
 ) {
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
-        println!("begin a search from {starting_id:?}, create entry");
+        // println!("begin a search from {starting_id:?}, create entry");
         match unsafe { starting_id.0.as_ref().try_lock() } {
             Ok(guard) => {
                 v.insert(Node::Unknown {
@@ -254,18 +254,20 @@ impl<'a> Visitor for BuildRefGraph<'a> {
         T: Collectable + Sync + ?Sized,
     {
         let mut new_id = AllocationId::from(gc.ptr.unwrap());
-        println!("visit {new_id:?}");
-        let Some(Node::Unknown {
+        // println!("visit {new_id:?}");
+        let Node::Unknown {
             ref mut children, ..
-        }) = self.ref_graph.get_mut(&self.current_id)
+        } = self.ref_graph.get_mut(&self.current_id).unwrap()
         else {
-            panic!("prior node does not exist");
+            // this node has been proven reachable by something higher up. No need to keep building
+            // its ref graph
+            return;
         };
         children.push(new_id);
 
         match self.ref_graph.entry(new_id) {
             Entry::Occupied(mut o) => {
-                println!("find another reference to {new_id:?}");
+                // println!("find another reference to {new_id:?}");
                 match o.get_mut() {
                     Node::Reachable => (),
                     Node::Unknown {
@@ -297,6 +299,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 
                         // TODO: on failure of acceptance, overwrite new_entry and sweep from it
                         if (**gc).accept(self).is_err() {
+                            // println!("node proven accessible, re-sweeping");
                             // On failure, this means `**gc` is accessible, and should be marked
                             // as such
                             let Node::Unknown { children, .. } =
