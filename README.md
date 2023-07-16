@@ -12,6 +12,7 @@ You should use this library if:
 - You cannot remove cyclic references from your data structures.
 - You're only moderately picky about performance.
 - You don't mind a little instability.
+- You need to work with `?Sized` data.
 
 ## How it works
 
@@ -20,6 +21,19 @@ Other GCs keep track of a set of roots, which can then be used to perform a swee
 which allocations are reachable and which are not.
 Instead, `dumpster` extends reference-counted garbage collection (such as `std::rc::Rc`) with a
 cycle-detection algorithm, enabling it to effectively clean up self-referential data structures.
+
+## What this library contains
+
+`dumpster` actually contains two garbage collector implementations: one thread-local, non-`Send` 
+garbarge collector in the module `unsync`, and one thread-safe garbage collector in the module
+`sync`.
+These garbage collectors can be safely mixed and matched.
+
+## Examples
+
+```rust
+
+```
 
 ## License
 

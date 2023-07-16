@@ -126,7 +126,7 @@ impl Dumpster {
         let collecting_guard = self.collecting_lock.read().unwrap();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.to_clean.write().unwrap());
-        println!("collecting! {to_collect:?}");
+        // println!("collecting! {to_collect:?}");
         let mut ref_graph = HashMap::new();
         let mut guards = HashMap::new();
 
@@ -134,7 +134,7 @@ impl Dumpster {
             unsafe { (cleanup.build_fn)(cleanup.ptr, id, &mut ref_graph, &mut guards) };
         }
 
-        println!("final ref graph is: {ref_graph:#?}");
+        // println!("final ref graph is: {ref_graph:#?}");
         drop(guards);
         let root_ids = ref_graph
             .iter()
@@ -153,7 +153,7 @@ impl Dumpster {
                 destroy_fn, ptr, ..
             } => Some((destroy_fn, ptr)),
         }) {
-            println!("destroy {ptr:?} with destroy fn {destroy_fn:?}");
+            // println!("destroy {ptr:?} with destroy fn {destroy_fn:?}");
             unsafe { destroy_fn(ptr) };
         }
         drop(collecting_guard);
@@ -174,14 +174,14 @@ impl Dumpster {
         let prev_gcs_existing = self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
         assert_ne!(prev_gcs_existing, 0, "underflow on number of existing GCs");
 
-        println!("prev dropped {prev_gcs_dropped}, prev existing {prev_gcs_existing}");
-        println!(
-            "collection queue length {}",
-            self.to_clean.read().unwrap().len()
-        );
+        // println!("prev dropped {prev_gcs_dropped}, prev existing {prev_gcs_existing}");
+        // println!(
+        //     "collection queue length {}",
+        //     self.to_clean.read().unwrap().len()
+        // );
 
         if prev_gcs_dropped >= prev_gcs_existing >> 1 && prev_gcs_dropped > 0 {
-            println!("automatic collect all");
+            // println!("automatic collect all");
             self.collect_all();
         }
     }
@@ -263,7 +263,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     guards: &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
 ) {
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
-        println!("begin a search from {starting_id:?}, create entry");
+        // println!("begin a search from {starting_id:?}, create entry");
         match unsafe { starting_id.0.as_ref().try_lock() } {
             Ok(guard) => {
                 v.insert(Node::Unknown {
@@ -327,7 +327,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
         T: Collectable + Sync + ?Sized,
     {
         let mut new_id = AllocationId::from(gc.ptr.unwrap());
-        println!("visit {new_id:?}");
+        // println!("visit {new_id:?}");
         let Node::Unknown {
             ref mut children, ..
         } = self.ref_graph.get_mut(&self.current_id).unwrap()
@@ -340,14 +340,14 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 
         match self.ref_graph.entry(new_id) {
             Entry::Occupied(mut o) => {
-                println!("entry {new_id:?} was already in the graph");
+                // println!("entry {new_id:?} was already in the graph");
                 match o.get_mut() {
                     Node::Unknown {
                         ref mut n_unaccounted,
                         ..
                     } => {
                         *n_unaccounted -= 1;
-                        println!("-> decrement its ref count to {n_unaccounted}");
+                        // println!("-> decrement its ref count to {n_unaccounted}");
                     }
                     Node::Reachable => (),
                 }
@@ -372,7 +372,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                         swap(&mut new_id, &mut self.current_id);
 
                         if (**gc).accept(self).is_err() {
-                            println!("node proven accessible, re-sweeping");
+                            // println!("node proven accessible, re-sweeping");
                             // On failure, this means `**gc` is accessible, and should be marked
                             // as such
                             sweep_delete_guards(new_id, self.ref_graph, self.guards);
@@ -446,7 +446,7 @@ unsafe fn destroy_opaque<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
 
 impl Drop for Dumpster {
     fn drop(&mut self) {
-        println!("collect all on drop");
+        // println!("collect all on drop");
         self.collect_all();
     }
 }
