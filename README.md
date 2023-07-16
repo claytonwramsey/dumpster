@@ -64,13 +64,8 @@ dumpster::unsync::collect();
 
 ## Installation
 
-The easiest way to install `dumpster` and `dumpster_derive` is via the command line with 
-`cargo add`.
-
-```sh
-cargo add dumpster
-cargo add dumspter_derive
-```
+`dumpster` has not been published to [crates.io](https://crates.io) yet. 
+Check back later for installation instructions.
 
 ## License
 
