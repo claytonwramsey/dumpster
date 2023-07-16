@@ -118,9 +118,9 @@ impl Dumpster {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     pub fn collect_all(&self) {
+        self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.to_clean.write().unwrap());
         println!("collecting! {to_collect:?}");
-        self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let mut ref_graph = HashMap::new();
         let mut guards = HashMap::new();
 
@@ -128,8 +128,8 @@ impl Dumpster {
             unsafe { (cleanup.build_fn)(cleanup.ptr, id, &mut ref_graph, &mut guards) };
         }
 
+        println!("final ref graph is: {ref_graph:#?}");
         drop(guards);
-        println!("{ref_graph:#?}");
         let root_ids = ref_graph
             .iter()
             .filter_map(|(&k, v)| match v {
@@ -147,6 +147,7 @@ impl Dumpster {
                 destroy_fn, ptr, ..
             } => Some((destroy_fn, ptr)),
         }) {
+            println!("destroy {ptr:?} with destroy fn {destroy_fn:?}");
             unsafe { destroy_fn(ptr) };
         }
     }
@@ -168,7 +169,7 @@ impl Dumpster {
         );
 
         if prev_gcs_dropped >= prev_gcs_existing >> 1 && prev_gcs_dropped > 0 {
-            println!("collect all");
+            println!("automatic collect all");
             self.collect_all();
         }
     }
@@ -327,13 +328,14 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 
         match self.ref_graph.entry(new_id) {
             Entry::Occupied(mut o) => {
-                println!("find another reference to {new_id:?}");
+                println!("entry {new_id:?} was already in the graph");
                 match o.get_mut() {
                     Node::Unknown {
                         ref mut n_unaccounted,
                         ..
                     } => {
                         *n_unaccounted -= 1;
+                        println!("-> decrement its ref count to {n_unaccounted}");
                     }
                     Node::Reachable => (),
                 }
@@ -432,6 +434,7 @@ unsafe fn destroy_opaque<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
 
 impl Drop for Dumpster {
     fn drop(&mut self) {
+        println!("collect all on drop");
         self.collect_all();
     }
 }

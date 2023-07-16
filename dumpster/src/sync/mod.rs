@@ -69,6 +69,7 @@ unsafe impl<T> Sync for Gc<T> where T: Collectable + Sync + ?Sized {}
 
 /// Collect all unreachable thread-safe [`Gc`]s on the heap.
 pub fn collect() {
+    println!("manual collection called");
     DUMPSTER.collect_all();
 }
 

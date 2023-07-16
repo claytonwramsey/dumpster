@@ -16,7 +16,11 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    thread::sleep,
+    time::Duration,
+};
 
 use crate::{Destroyer, Visitor};
 
@@ -26,7 +30,7 @@ struct DropCount<'a>(&'a AtomicUsize);
 
 impl<'a> Drop for DropCount<'a> {
     fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
+        self.0.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -60,9 +64,9 @@ fn single_alloc() {
     let drop_count = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&drop_count));
 
-    assert_eq!(drop_count.load(Ordering::Relaxed), 0);
+    assert_eq!(drop_count.load(Ordering::Acquire), 0);
     drop(gc1);
-    assert_eq!(drop_count.load(Ordering::Relaxed), 1);
+    assert_eq!(drop_count.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -72,11 +76,11 @@ fn ref_count() {
     let gc1 = Gc::new(DropCount(&drop_count));
     let gc2 = Gc::clone(&gc1);
 
-    assert_eq!(drop_count.load(Ordering::Relaxed), 0);
+    assert_eq!(drop_count.load(Ordering::Acquire), 0);
     drop(gc1);
-    assert_eq!(drop_count.load(Ordering::Relaxed), 0);
+    assert_eq!(drop_count.load(Ordering::Acquire), 0);
     drop(gc2);
-    assert_eq!(drop_count.load(Ordering::Relaxed), 1);
+    assert_eq!(drop_count.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -90,23 +94,25 @@ fn self_referential() {
         }
 
         unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
+            println!("calling destroy_gcs in self_referential");
             self.0.destroy_gcs(destroyer);
         }
     }
 
     impl Drop for Foo {
         fn drop(&mut self) {
-            DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+            println!("begin increment of the drop count!");
+            DROP_COUNT.fetch_add(1, Ordering::Release);
         }
     }
 
     let gc1 = Gc::new(Foo(Mutex::new(None)));
     *gc1.0.lock().unwrap() = Some(Gc::clone(&gc1));
 
-    assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 0);
+    assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
     collect();
-    assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+    assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -126,20 +132,19 @@ fn two_cycle() {
     gc0.refs.lock().unwrap().push(Gc::clone(&gc1));
 
     collect();
-    assert_eq!(drop0.load(Ordering::Relaxed), 0);
-    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    assert_eq!(drop0.load(Ordering::Acquire), 0);
+    assert_eq!(drop0.load(Ordering::Acquire), 0);
     drop(gc0);
     collect();
-    assert_eq!(drop0.load(Ordering::Relaxed), 0);
-    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    assert_eq!(drop0.load(Ordering::Acquire), 0);
+    assert_eq!(drop0.load(Ordering::Acquire), 0);
     drop(gc1);
     collect();
-    assert_eq!(drop0.load(Ordering::Relaxed), 1);
-    assert_eq!(drop0.load(Ordering::Relaxed), 1);
+    assert_eq!(drop0.load(Ordering::Acquire), 1);
+    assert_eq!(drop0.load(Ordering::Acquire), 1);
 }
 
 #[test]
-#[ignore = "searching for the broken one"]
 fn self_ref_two_cycle() {
     let drop0 = AtomicUsize::new(0);
     let drop1 = AtomicUsize::new(0);
@@ -156,16 +161,16 @@ fn self_ref_two_cycle() {
     gc1.refs.lock().unwrap().push(gc1.clone());
 
     collect();
-    assert_eq!(drop0.load(Ordering::Relaxed), 0);
-    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    assert_eq!(drop0.load(Ordering::Acquire), 0);
+    assert_eq!(drop0.load(Ordering::Acquire), 0);
     drop(gc0);
     collect();
-    assert_eq!(drop0.load(Ordering::Relaxed), 0);
-    assert_eq!(drop0.load(Ordering::Relaxed), 0);
+    assert_eq!(drop0.load(Ordering::Acquire), 0);
+    assert_eq!(drop0.load(Ordering::Acquire), 0);
     drop(gc1);
     collect();
-    assert_eq!(drop0.load(Ordering::Relaxed), 1);
-    assert_eq!(drop0.load(Ordering::Relaxed), 1);
+    assert_eq!(drop0.load(Ordering::Acquire), 1);
+    assert_eq!(drop0.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -194,34 +199,34 @@ fn parallel_loop() {
     });
     gc1.refs.lock().unwrap().push(Gc::clone(&gc4));
 
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(count1.load(Ordering::Acquire), 0);
+    assert_eq!(count2.load(Ordering::Acquire), 0);
+    assert_eq!(count3.load(Ordering::Acquire), 0);
+    assert_eq!(count4.load(Ordering::Acquire), 0);
     drop(gc1);
     collect();
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(count1.load(Ordering::Acquire), 0);
+    assert_eq!(count2.load(Ordering::Acquire), 0);
+    assert_eq!(count3.load(Ordering::Acquire), 0);
+    assert_eq!(count4.load(Ordering::Acquire), 0);
     drop(gc2);
     collect();
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(count1.load(Ordering::Acquire), 0);
+    assert_eq!(count2.load(Ordering::Acquire), 0);
+    assert_eq!(count3.load(Ordering::Acquire), 0);
+    assert_eq!(count4.load(Ordering::Acquire), 0);
     drop(gc3);
     collect();
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(count1.load(Ordering::Acquire), 0);
+    assert_eq!(count2.load(Ordering::Acquire), 0);
+    assert_eq!(count3.load(Ordering::Acquire), 0);
+    assert_eq!(count4.load(Ordering::Acquire), 0);
     drop(gc4);
     collect();
-    assert_eq!(count1.load(Ordering::Relaxed), 1);
-    assert_eq!(count2.load(Ordering::Relaxed), 1);
-    assert_eq!(count3.load(Ordering::Relaxed), 1);
-    assert_eq!(count4.load(Ordering::Relaxed), 1);
+    assert_eq!(count1.load(Ordering::Acquire), 1);
+    assert_eq!(count2.load(Ordering::Acquire), 1);
+    assert_eq!(count3.load(Ordering::Acquire), 1);
+    assert_eq!(count4.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -250,12 +255,12 @@ fn open_drop() {
     gc1.refs.lock().unwrap().push(gc1.clone());
     let guard = gc1.refs.lock();
     collect();
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
+    assert_eq!(count1.load(Ordering::Acquire), 0);
     drop(guard);
     drop(gc1);
     collect();
 
-    assert_eq!(count1.load(Ordering::Relaxed), 1);
+    assert_eq!(count1.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -274,8 +279,8 @@ fn eventually_collect() {
     });
     gc1.refs.lock().unwrap().push(gc2.clone());
 
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
+    assert_eq!(count1.load(Ordering::Acquire), 0);
+    assert_eq!(count2.load(Ordering::Acquire), 0);
 
     drop(gc1);
     drop(gc2);
@@ -286,6 +291,6 @@ fn eventually_collect() {
     }
 
     // after enough time, gc1 and gc2 should have been collected
-    assert_eq!(count1.load(Ordering::Relaxed), 1);
-    assert_eq!(count2.load(Ordering::Relaxed), 1);
+    assert_eq!(count1.load(Ordering::Acquire), 1);
+    assert_eq!(count2.load(Ordering::Acquire), 1);
 }
