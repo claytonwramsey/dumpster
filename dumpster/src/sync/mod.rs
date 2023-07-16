@@ -48,11 +48,19 @@ where
 }
 
 #[repr(C)]
+/// The backing allocation for a [`Gc`].
 struct GcBox<T>
 where
     T: Collectable + Sync + ?Sized,
 {
+    /// The reference count for this allocation.
+    ///
+    /// We use a mutex instead of an atomic here for algorithmic reasons - it allows us to achieve
+    /// mutual exclusion when searching for cycles, preventing a malicious thread from fooling us
+    /// into believing that an allocation is unreachable (therefore, preventing us from accidentally
+    /// UAFing)
     ref_count: Mutex<NonZeroUsize>,
+    /// The actual data stored in the allocation.
     value: T,
 }
 
@@ -88,6 +96,21 @@ impl<T> Clone for Gc<T>
 where
     T: Collectable + Sync + ?Sized,
 {
+    /// Clone a garbage-collected reference.
+    /// This does not clone the underlying data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::atomic::{AtomicU8, Ordering};
+    /// use dumpster::sync::Gc;
+    ///
+    /// let gc1 = Gc::new(AtomicU8::new(0));
+    /// let gc2 = gc1.clone();
+    ///
+    /// gc1.store(1, Ordering::Relaxed);
+    /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
+    /// ```
     fn clone(&self) -> Gc<T> {
         unsafe {
             let mut ref_count_guard = self.ptr.unwrap().as_ref().ref_count.lock().unwrap();
@@ -126,6 +149,7 @@ where
                         }
                         n => {
                             *count_handle = NonZeroUsize::new(n - 1).unwrap();
+                            drop(count_handle);
                             DUMPSTER.mark_dirty(ptr);
                         }
                     }
@@ -155,6 +179,7 @@ impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
     }
 }
 
+/// The visitor structure used for overwriting [`Gc`]s to be destroyed.
 struct DestroyGcs;
 
 impl Destroyer for DestroyGcs {

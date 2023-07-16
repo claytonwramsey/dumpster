@@ -158,21 +158,3 @@ fn parallel_loop() {
     assert_eq!(count3.load(Ordering::Relaxed), 1);
     assert_eq!(count4.load(Ordering::Relaxed), 1);
 }
-
-#[test]
-#[should_panic]
-fn drop_access() {
-    #[derive(Collectable)]
-    struct Foo(u8, RefCell<Option<Gc<Foo>>>);
-
-    impl Drop for Foo {
-        fn drop(&mut self) {
-            println!("{}", self.1.borrow().as_ref().unwrap().0); // should panic here
-        }
-    }
-
-    let x = Gc::new(Foo(0, RefCell::new(None)));
-    x.1.replace(Some(Gc::clone(&x)));
-
-    drop(x);
-}

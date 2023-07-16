@@ -46,13 +46,19 @@ pub(super) static DUMPSTER: Dumpster = Dumpster {
     n_gcs_existing: AtomicUsize::new(0),
 };
 
+/// A structure containing the global information for the garbage collector.
 pub(super) struct Dumpster {
+    /// A lookupt table for the allocations which may need to be cleaned up later.
     to_clean: Lazy<RwLock<CHashMap<AllocationId, Cleanup>>>,
+    /// The number of [`Gc`]s dropped since the last time [`Dumpster::collect_all()`] was called.
     n_gcs_dropped: AtomicUsize,
+    /// The number of [`Gc`]s currently existing (which have not had their internals replaced with
+    /// `None`).
     n_gcs_existing: AtomicUsize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+/// A unique identifier for an allocation.
 struct AllocationId(NonNull<Mutex<NonZeroUsize>>);
 
 unsafe impl Send for AllocationId {}
@@ -67,6 +73,7 @@ where
     }
 }
 
+/// A function which can be used to create a reference graph.
 type BuildFn = unsafe fn(
     OpaquePtr,
     AllocationId,
@@ -74,19 +81,35 @@ type BuildFn = unsafe fn(
     &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
 );
 
+#[derive(Debug)]
+/// The information which describes an allocation that may need to be cleaned up later.
 struct Cleanup {
+    /// A pointer to the allocation to be cleaned up.
     ptr: OpaquePtr,
+    /// The function which can be used to build a reference graph.
+    /// This function is safe to call on `ptr`.
     build_fn: BuildFn,
 }
 
 #[derive(Debug)]
+/// A node in the reference graph, which is constructed while searching for unreachable allocations.
 enum Node {
+    /// The information describing an allocation whose accessibility is unknown.
     Unknown {
+        /// The IDs for the allocations directly accessible from this allocation.
         children: Vec<AllocationId>,
+        /// The number of references in the reference count for this allocation which are
+        /// "unaccounted," which have not been found while constructing the graph.
+        /// It is the difference between the allocations indegree in the "true" reference graph vs
+        /// the one we are currently building.
         n_unaccounted: usize,
+        /// A function used to destroy the allocation.
         destroy_fn: unsafe fn(OpaquePtr),
+        /// A pointer to the allocation.
         ptr: OpaquePtr,
     },
+    /// The allocation here is reachable.
+    /// No further information is needed.
     Reachable,
 }
 
@@ -96,6 +119,7 @@ impl Dumpster {
     /// If so, drop those allocations.
     pub fn collect_all(&self) {
         let to_collect = take(&mut *self.to_clean.write().unwrap());
+        println!("collecting! {to_collect:?}");
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let mut ref_graph = HashMap::new();
         let mut guards = HashMap::new();
@@ -138,6 +162,10 @@ impl Dumpster {
         assert_ne!(prev_gcs_existing, 0, "underflow on number of existing GCs");
 
         println!("prev dropped {prev_gcs_dropped}, prev existing {prev_gcs_existing}");
+        println!(
+            "collection queue length {}",
+            self.to_clean.read().unwrap().len()
+        );
 
         if prev_gcs_dropped >= prev_gcs_existing >> 1 && prev_gcs_dropped > 0 {
             println!("collect all");
@@ -183,6 +211,7 @@ impl Dumpster {
 }
 
 impl Cleanup {
+    /// Construct a new Cleanup from the allocation needed to clean it up.
     fn new<T>(ptr: NonNull<GcBox<T>>) -> Cleanup
     where
         T: Collectable + Sync + ?Sized,
@@ -194,6 +223,26 @@ impl Cleanup {
     }
 }
 
+/// Build out a part of the reference graph, making note of all allocations which are reachable from
+/// the one described in `ptr`.
+///
+/// # Inputs
+///
+/// - `ptr`: A pointer to the allocation that we should start constructing from.
+/// - `starting_id`: The ID of the allocation pointed to by `ptr`.
+/// - `ref_graph`: A lookup from allocation IDs to node information about that allocation.
+/// - `guards`: A lookup from allocation IDs to the mutex guards they control.
+///   This prevents data races during reference graph construction.
+///
+/// # Effects
+///
+/// `ref_graph` will be expanded to include all allocations reachable from `ptr`.
+/// Any allocation which is of "unknown" status will also receive a mutex guard in `guards`.
+///
+/// # Safety
+///
+/// `ptr` must have been created as a pointer to a `GcBox<T>`.
+/// `starting_id` must refer to the reference count for the allocation pointed to by `ptr`.
 unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     ptr: OpaquePtr,
     starting_id: AllocationId,
@@ -280,13 +329,13 @@ impl<'a> Visitor for BuildRefGraph<'a> {
             Entry::Occupied(mut o) => {
                 println!("find another reference to {new_id:?}");
                 match o.get_mut() {
-                    Node::Reachable => (),
                     Node::Unknown {
                         ref mut n_unaccounted,
                         ..
                     } => {
                         *n_unaccounted -= 1;
                     }
+                    Node::Reachable => (),
                 }
             }
             Entry::Vacant(v) => {
@@ -308,20 +357,11 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                         // Save the previously visited ID, then carry on to the next one
                         swap(&mut new_id, &mut self.current_id);
 
-                        // TODO: on failure of acceptance, overwrite new_entry and sweep from it
                         if (**gc).accept(self).is_err() {
                             println!("node proven accessible, re-sweeping");
                             // On failure, this means `**gc` is accessible, and should be marked
                             // as such
-                            let Node::Unknown { children, .. } =
-                                replace(self.ref_graph.get_mut(&new_id).unwrap(), Node::Reachable)
-                            else {
-                                panic!("expected unknown node after proving it is accessible")
-                            };
-
-                            for child in children {
-                                sweep(child, self.ref_graph);
-                            }
+                            sweep_delete_guards(new_id, self.ref_graph, self.guards);
                         }
 
                         // Restore current_id and carry on
@@ -348,6 +388,26 @@ impl<'a> Visitor for BuildRefGraph<'a> {
     }
 }
 
+/// Sweep through the reference graph, marking `root` and any allocations reachable from `root` as
+/// reachable.
+///
+/// Removes the mutex guard associated with each of those allocations as well.
+fn sweep_delete_guards(
+    root: AllocationId,
+    graph: &mut HashMap<AllocationId, Node>,
+    guards: &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
+) {
+    let node = graph.get_mut(&root).unwrap();
+    if let Node::Unknown { children, .. } = replace(node, Node::Reachable) {
+        guards.remove(&root);
+        for child in children {
+            sweep_delete_guards(child, graph, guards);
+        }
+    }
+}
+
+/// Sweep through the reference graph, marking `root` and any allocations reachable from `root` as
+/// reachable.
 fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, Node>) {
     let node = graph.get_mut(&root).unwrap();
     if let Node::Unknown { children, .. } = replace(node, Node::Reachable) {
@@ -368,4 +428,10 @@ unsafe fn destroy_opaque<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
     let layout = Layout::for_value(specified);
     drop_in_place(specified);
     dealloc((specified as *mut GcBox<T>).cast(), layout);
+}
+
+impl Drop for Dumpster {
+    fn drop(&mut self) {
+        self.collect_all();
+    }
 }

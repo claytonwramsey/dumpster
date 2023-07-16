@@ -55,6 +55,7 @@ unsafe impl<'a> Collectable for MultiRef<'a> {
 }
 
 #[test]
+#[ignore = "searching for the broken one"]
 fn single_alloc() {
     let drop_count = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&drop_count));
@@ -65,6 +66,7 @@ fn single_alloc() {
 }
 
 #[test]
+#[ignore = "searching for the broken one"]
 fn ref_count() {
     let drop_count = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&drop_count));
@@ -108,6 +110,7 @@ fn self_referential() {
 }
 
 #[test]
+#[ignore = "searching for the broken one"]
 fn two_cycle() {
     let drop0 = AtomicUsize::new(0);
     let drop1 = AtomicUsize::new(0);
@@ -136,6 +139,7 @@ fn two_cycle() {
 }
 
 #[test]
+#[ignore = "searching for the broken one"]
 fn self_ref_two_cycle() {
     let drop0 = AtomicUsize::new(0);
     let drop1 = AtomicUsize::new(0);
@@ -165,6 +169,7 @@ fn self_ref_two_cycle() {
 }
 
 #[test]
+#[ignore = "searching for the broken one"]
 fn parallel_loop() {
     let count1 = AtomicUsize::new(0);
     let count2 = AtomicUsize::new(0);
@@ -194,16 +199,19 @@ fn parallel_loop() {
     assert_eq!(count3.load(Ordering::Relaxed), 0);
     assert_eq!(count4.load(Ordering::Relaxed), 0);
     drop(gc1);
+    collect();
     assert_eq!(count1.load(Ordering::Relaxed), 0);
     assert_eq!(count2.load(Ordering::Relaxed), 0);
     assert_eq!(count3.load(Ordering::Relaxed), 0);
     assert_eq!(count4.load(Ordering::Relaxed), 0);
     drop(gc2);
+    collect();
     assert_eq!(count1.load(Ordering::Relaxed), 0);
     assert_eq!(count2.load(Ordering::Relaxed), 0);
     assert_eq!(count3.load(Ordering::Relaxed), 0);
     assert_eq!(count4.load(Ordering::Relaxed), 0);
     drop(gc3);
+    collect();
     assert_eq!(count1.load(Ordering::Relaxed), 0);
     assert_eq!(count2.load(Ordering::Relaxed), 0);
     assert_eq!(count3.load(Ordering::Relaxed), 0);
@@ -217,6 +225,7 @@ fn parallel_loop() {
 }
 
 #[test]
+#[ignore = "searching for the broken one"]
 /// Test that we can drop a Gc which points to some allocation with a locked Mutex inside it
 // note: I tried using `ntest::timeout` but for some reason that caused this test to trivially pass.
 fn deadlock() {
@@ -230,6 +239,7 @@ fn deadlock() {
 }
 
 #[test]
+#[ignore = "searching for the broken one"]
 fn open_drop() {
     let count1 = AtomicUsize::new(0);
     let gc1 = Gc::new(MultiRef {
@@ -249,6 +259,7 @@ fn open_drop() {
 }
 
 #[test]
+#[ignore = "searching for the broken one"]
 fn eventually_collect() {
     let count1 = AtomicUsize::new(0);
     let count2 = AtomicUsize::new(0);

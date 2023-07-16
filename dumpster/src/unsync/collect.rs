@@ -227,6 +227,7 @@ impl Dumpster {
         }
     }
 
+    /// Notify the dumpster that a new [`Gc`] has been created.
     pub fn notify_created_gc(&self) {
         self.n_refs_living.set(self.n_refs_living.get() + 1);
     }
