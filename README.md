@@ -29,10 +29,47 @@ garbarge collector in the module `unsync`, and one thread-safe garbage collector
 `sync`.
 These garbage collectors can be safely mixed and matched.
 
+Additionally, we provide a second crate, `dumpster_derive`, which implements derive macros for 
+the `Collectable` trait mandated for all data that is used in a garbage-collected allocation.
+
 ## Examples
 
 ```rust
+use dumpster::unsync::Gc;
+use dumpster_derive::Collectable;
 
+#[derive(Collectable)]
+struct Foo {
+    ptr: RefCell<Option<Gc<Foo>>>,
+}
+
+// Create a new garbage-collected Foo.
+let foo = Foo {
+   ptr: RefCell::new(None),
+}
+
+// Insert a circular reference inside of the foo.
+*foo.ptr.borrow_mut() = Some(foo.clone());
+
+// Render the foo inaccessible.
+// This may trigger a collection, but it's not guaranteed.
+// If we had used `Rc` instead of `Gc`, this would have caused a memory leak.
+drop(foo);
+
+// Trigger a collection. 
+// This isn't necessary, but it guarantees that `foo` will be collected immediately (instead of 
+// later).
+dumpster::unsync::collect();
+```
+
+## Installation
+
+The easiest way to install `dumpster` and `dumpster_derive` is via the command line with 
+`cargo add`.
+
+```sh
+cargo add dumpster
+cargo add dumspter_derive
 ```
 
 ## License
