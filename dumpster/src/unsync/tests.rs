@@ -231,7 +231,6 @@ fn complete100() {
 }
 
 #[test]
-#[ignore = "testing with miri means this is slow"]
 fn complete1000() {
     let detectors: Vec<AtomicUsize> = (0..1_000).map(|_| AtomicUsize::new(0)).collect();
     let mut gcs = complete_graph(&detectors);
