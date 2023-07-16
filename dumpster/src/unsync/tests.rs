@@ -27,7 +27,6 @@ use std::{
 };
 
 #[test]
-#[ignore = "searching for the broken one"]
 /// Test a simple data structure
 fn simple() {
     static DROPPED: AtomicBool = AtomicBool::new(false);
@@ -82,7 +81,6 @@ impl Drop for MultiRef<'_> {
 }
 
 #[test]
-#[ignore = "searching for the broken one"]
 fn self_referential() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
@@ -113,7 +111,6 @@ fn self_referential() {
 }
 
 #[test]
-#[ignore = "searching for the broken one"]
 fn cyclic() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
@@ -165,7 +162,6 @@ fn complete_graph(detectors: &[AtomicUsize]) -> Vec<Gc<MultiRef<'_>>> {
 }
 
 #[test]
-#[ignore = "searching for the broken one"]
 fn complete4() {
     let detectors: [AtomicUsize; 4] = [
         AtomicUsize::new(0),
@@ -193,7 +189,6 @@ fn complete4() {
 }
 
 #[test]
-#[ignore = "searching for the broken one"]
 fn complete20() {
     let detectors: Vec<AtomicUsize> = (0..20).map(|_| AtomicUsize::new(0)).collect();
     let mut gcs = complete_graph(&detectors);
@@ -215,7 +210,6 @@ fn complete20() {
 }
 
 #[test]
-#[ignore = "searching for the broken one"]
 fn complete100() {
     let detectors: Vec<AtomicUsize> = (0..1_00).map(|_| AtomicUsize::new(0)).collect();
     let mut gcs = complete_graph(&detectors);
@@ -259,7 +253,6 @@ fn complete1000() {
 }
 
 #[test]
-#[ignore = "searching for the broken one"]
 fn parallel_loop() {
     let count1 = AtomicUsize::new(0);
     let count2 = AtomicUsize::new(0);
@@ -312,7 +305,6 @@ fn parallel_loop() {
 }
 
 #[test]
-#[ignore = "searching for the broken one"]
 /// Check that we can drop a Gc which points to some allocation with a borrowed `RefCell` in it.
 fn double_borrow() {
     let drop_count = AtomicUsize::new(0);

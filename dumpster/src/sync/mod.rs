@@ -68,9 +68,20 @@ unsafe impl<T> Send for Gc<T> where T: Collectable + Sync + ?Sized {}
 unsafe impl<T> Sync for Gc<T> where T: Collectable + Sync + ?Sized {}
 
 /// Collect all unreachable thread-safe [`Gc`]s on the heap.
+///
+/// This function may return while some `Gc`s created by this thread but which are unreachable have
+/// still not been collected, due to concurrency.
+/// For a blocking version, refer to [`collect_await`].
 pub fn collect() {
     println!("manual collection called");
     DUMPSTER.collect_all();
+}
+
+/// Collect all unreachable thread-safe [`Gc`]s on the heap, blocking until no more collection
+/// operations are occurring.
+pub fn collect_await() {
+    collect();
+    DUMPSTER.await_collection_end();
 }
 
 impl<T> Gc<T>

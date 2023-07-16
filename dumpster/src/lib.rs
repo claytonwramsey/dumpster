@@ -285,13 +285,11 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "searching for the broken one"]
     fn opaque_align() {
         assert_eq!(align_of::<OpaquePtr>(), 16);
     }
 
     #[test]
-    #[ignore = "searching for the broken one"]
     fn opaque_alloc() {
         let orig_ptr = Box::leak(Box::new(7u8));
         let opaque_ptr = OpaquePtr::new(NonNull::from(orig_ptr));

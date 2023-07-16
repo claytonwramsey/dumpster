@@ -42,6 +42,7 @@ use super::{DestroyGcs, Gc, GcBox};
 // wishing dreams: chashmap gets a const new function so that we can remove the once cell
 pub(super) static DUMPSTER: Dumpster = Dumpster {
     to_clean: Lazy::new(|| RwLock::new(CHashMap::new())),
+    collecting_lock: RwLock::new(()),
     n_gcs_dropped: AtomicUsize::new(0),
     n_gcs_existing: AtomicUsize::new(0),
 };
@@ -50,6 +51,10 @@ pub(super) static DUMPSTER: Dumpster = Dumpster {
 pub(super) struct Dumpster {
     /// A lookupt table for the allocations which may need to be cleaned up later.
     to_clean: Lazy<RwLock<CHashMap<AllocationId, Cleanup>>>,
+    /// A lock used for synchronizing threads that are awaiting completion of a collection process.
+    /// This lock should be acquired for reads by threads running a collection and for writes by
+    /// threads awaiting collection completion.
+    collecting_lock: RwLock<()>,
     /// The number of [`Gc`]s dropped since the last time [`Dumpster::collect_all()`] was called.
     n_gcs_dropped: AtomicUsize,
     /// The number of [`Gc`]s currently existing (which have not had their internals replaced with
@@ -118,6 +123,7 @@ impl Dumpster {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     pub fn collect_all(&self) {
+        let collecting_guard = self.collecting_lock.read().unwrap();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.to_clean.write().unwrap());
         println!("collecting! {to_collect:?}");
@@ -150,6 +156,12 @@ impl Dumpster {
             println!("destroy {ptr:?} with destroy fn {destroy_fn:?}");
             unsafe { destroy_fn(ptr) };
         }
+        drop(collecting_guard);
+    }
+
+    /// Block this thread until all threads which are currently running a collection have finished.
+    pub fn await_collection_end(&self) {
+        drop(self.collecting_lock.write().unwrap());
     }
 
     /// Notify this dumpster that a `Gc` was destroyed, and update the tracking count for the number
