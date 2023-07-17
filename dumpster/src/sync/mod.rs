@@ -131,6 +131,8 @@ where
                 .expect("integer overflow when incrementing reference count");
         }
         DUMPSTER.notify_created_gc();
+        // If we can clone a Gc pointing to this allocation, it must be accessible
+        DUMPSTER.mark_clean(self.ptr.unwrap());
         Gc {
             ptr: self.ptr,
             _phantom: PhantomData,

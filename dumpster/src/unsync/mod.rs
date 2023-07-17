@@ -118,7 +118,10 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
             let box_ref = self.ptr.unwrap().as_ref();
             box_ref.ref_count.set(box_ref.ref_count.get() + 1);
         }
-        DUMPSTER.with(Dumpster::notify_created_gc);
+        DUMPSTER.with(|d| {
+            d.notify_created_gc();
+            d.mark_cleaned(self.ptr.unwrap());
+        });
         Self {
             ptr: self.ptr.clone(),
             _phantom: PhantomData,
