@@ -32,6 +32,16 @@ pub struct GcMultiref {
     refs: gc::GcCell<Vec<gc::Gc<GcMultiref>>>,
 }
 
+pub struct BaconRajanMultiref {
+    refs: RefCell<Vec<bacon_rajan_cc::Cc<BaconRajanMultiref>>>,
+}
+
+impl bacon_rajan_cc::Trace for BaconRajanMultiref {
+    fn trace(&self, tracer: &mut bacon_rajan_cc::Tracer) {
+        self.refs.borrow().trace(tracer);
+    }
+}
+
 impl gc::Finalize for GcMultiref {}
 
 unsafe impl gc::Trace for GcMultiref {
@@ -101,5 +111,21 @@ impl Multiref for gc::Gc<GcMultiref> {
 
     fn collect() {
         gc::force_collect();
+    }
+}
+
+impl Multiref for bacon_rajan_cc::Cc<BaconRajanMultiref> {
+    fn new(points_to: Vec<Self>) -> Self {
+        bacon_rajan_cc::Cc::new(BaconRajanMultiref {
+            refs: RefCell::new(points_to),
+        })
+    }
+
+    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
+        f(self.refs.borrow_mut().as_mut());
+    }
+
+    fn collect() {
+        bacon_rajan_cc::collect_cycles();
     }
 }

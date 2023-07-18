@@ -35,9 +35,9 @@ struct Empty;
 struct UnitTuple();
 
 #[derive(Collectable)]
-struct MultiRef<'a> {
-    counter: &'a AtomicUsize,
-    pointers: RefCell<Vec<Gc<MultiRef<'a>>>>,
+struct MultiRef {
+    counter: &'static AtomicUsize,
+    pointers: RefCell<Vec<Gc<MultiRef>>>,
 }
 
 #[derive(Collectable)]
@@ -60,7 +60,7 @@ enum B {
     One(Gc<B>),
 }
 
-impl<'a> Drop for MultiRef<'a> {
+impl Drop for MultiRef {
     fn drop(&mut self) {
         self.counter.fetch_add(1, Ordering::Relaxed);
     }
@@ -89,57 +89,57 @@ fn unit() {
 
 #[test]
 fn self_referential() {
-    let count = AtomicUsize::new(0);
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
 
     let gc1 = Gc::new(MultiRef {
-        counter: &count,
+        counter: &COUNT,
         pointers: RefCell::new(Vec::new()),
     });
     gc1.pointers.borrow_mut().push(Gc::clone(&gc1));
 
-    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT.load(Ordering::Relaxed), 0);
     drop(gc1);
-    assert_eq!(count.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT.load(Ordering::Relaxed), 1);
 }
 
 #[test]
 fn double_loop() {
-    let count = AtomicUsize::new(0);
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
 
     let gc1 = Gc::new(MultiRef {
-        counter: &count,
+        counter: &COUNT,
         pointers: RefCell::new(Vec::new()),
     });
     gc1.pointers
         .borrow_mut()
         .extend([Gc::clone(&gc1), Gc::clone(&gc1)]);
 
-    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT.load(Ordering::Relaxed), 0);
     drop(gc1);
-    assert_eq!(count.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT.load(Ordering::Relaxed), 1);
 }
 
 #[test]
 fn parallel_loop() {
-    let count1 = AtomicUsize::new(0);
-    let count2 = AtomicUsize::new(0);
-    let count3 = AtomicUsize::new(0);
-    let count4 = AtomicUsize::new(0);
+    static COUNT_1: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_2: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_3: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_4: AtomicUsize = AtomicUsize::new(0);
 
     let gc1 = Gc::new(MultiRef {
-        counter: &count1,
+        counter: &COUNT_1,
         pointers: RefCell::new(Vec::new()),
     });
     let gc2 = Gc::new(MultiRef {
-        counter: &count2,
+        counter: &COUNT_2,
         pointers: RefCell::new(vec![Gc::clone(&gc1)]),
     });
     let gc3 = Gc::new(MultiRef {
-        counter: &count3,
+        counter: &COUNT_3,
         pointers: RefCell::new(vec![Gc::clone(&gc1)]),
     });
     let gc4 = Gc::new(MultiRef {
-        counter: &count4,
+        counter: &COUNT_4,
         pointers: RefCell::new(vec![Gc::clone(&gc2), Gc::clone(&gc3)]),
     });
     gc1.pointers.borrow_mut().push(Gc::clone(&gc4));
@@ -147,14 +147,14 @@ fn parallel_loop() {
     drop(gc1);
     drop(gc2);
     drop(gc3);
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_1.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_2.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_3.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_4.load(Ordering::Relaxed), 0);
     drop(gc4);
     collect();
-    assert_eq!(count1.load(Ordering::Relaxed), 1);
-    assert_eq!(count2.load(Ordering::Relaxed), 1);
-    assert_eq!(count3.load(Ordering::Relaxed), 1);
-    assert_eq!(count4.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT_1.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT_2.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT_3.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT_4.load(Ordering::Relaxed), 1);
 }

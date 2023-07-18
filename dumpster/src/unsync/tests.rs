@@ -23,6 +23,7 @@ use crate::Visitor;
 use super::*;
 use std::{
     cell::RefCell,
+    mem::{transmute, MaybeUninit},
     sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
 };
 
@@ -60,12 +61,12 @@ fn simple() {
 }
 
 #[derive(Debug)]
-struct MultiRef<'a> {
-    refs: RefCell<Vec<Gc<MultiRef<'a>>>>,
-    drop_count: &'a AtomicUsize,
+struct MultiRef {
+    refs: RefCell<Vec<Gc<MultiRef>>>,
+    drop_count: &'static AtomicUsize,
 }
 
-unsafe impl Collectable for MultiRef<'_> {
+unsafe impl Collectable for MultiRef {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
     }
@@ -74,7 +75,7 @@ unsafe impl Collectable for MultiRef<'_> {
     }
 }
 
-impl Drop for MultiRef<'_> {
+impl Drop for MultiRef {
     fn drop(&mut self) {
         self.drop_count.fetch_add(1, Ordering::Relaxed);
     }
@@ -144,7 +145,7 @@ fn cyclic() {
 }
 
 /// Construct a complete graph of garbage-collected
-fn complete_graph(detectors: &[AtomicUsize]) -> Vec<Gc<MultiRef<'_>>> {
+fn complete_graph(detectors: &'static [AtomicUsize]) -> Vec<Gc<MultiRef>> {
     let mut gcs = Vec::new();
     for d in detectors {
         let gc = Gc::new(MultiRef {
@@ -161,165 +162,181 @@ fn complete_graph(detectors: &[AtomicUsize]) -> Vec<Gc<MultiRef<'_>>> {
     gcs
 }
 
+/// Construct an array of `N` `AtomicUsize`s initialized to 0.
+const fn const_atomics<const N: usize>() -> [AtomicUsize; N] {
+    unsafe {
+        #[allow(clippy::uninit_assumed_init)]
+        let mut x: [AtomicUsize; N] = MaybeUninit::uninit().assume_init();
+
+        let mut i = 0;
+        while i < N {
+            x[i] = AtomicUsize::new(0);
+            i += 1;
+        }
+
+        x
+    }
+}
+
 #[test]
 fn complete4() {
-    let detectors: [AtomicUsize; 4] = [
+    static DETECTORS: [AtomicUsize; 4] = [
         AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
     ];
 
-    let mut gcs = complete_graph(&detectors);
+    let mut gcs = complete_graph(&DETECTORS);
 
     for _ in 0..3 {
         gcs.pop();
     }
 
-    for detector in &detectors {
+    for detector in &DETECTORS {
         assert_eq!(detector.load(Ordering::Relaxed), 0);
     }
 
     drop(gcs);
     collect();
 
-    for detector in &detectors {
+    for detector in &DETECTORS {
         assert_eq!(detector.load(Ordering::Relaxed), 1);
     }
 }
 
 #[test]
 fn complete20() {
-    let detectors: Vec<AtomicUsize> = (0..20).map(|_| AtomicUsize::new(0)).collect();
-    let mut gcs = complete_graph(&detectors);
+    static DETECTORS: [AtomicUsize; 20] = const_atomics();
+    let mut gcs = complete_graph(&DETECTORS);
 
     for _ in 0..19 {
         gcs.pop();
     }
 
-    for detector in &detectors {
+    for detector in &DETECTORS {
         assert_eq!(detector.load(Ordering::Relaxed), 0);
     }
 
     drop(gcs);
     collect();
 
-    for detector in &detectors {
+    for detector in &DETECTORS {
         assert_eq!(detector.load(Ordering::Relaxed), 1);
     }
 }
 
 #[test]
 fn complete100() {
-    let detectors: Vec<AtomicUsize> = (0..1_00).map(|_| AtomicUsize::new(0)).collect();
-    let mut gcs = complete_graph(&detectors);
+    static DETECTORS: [AtomicUsize; 100] = const_atomics();
+    let mut gcs = complete_graph(&DETECTORS);
 
     for _ in 0..99 {
         gcs.pop();
     }
 
-    for detector in &detectors {
+    for detector in &DETECTORS {
         assert_eq!(detector.load(Ordering::Relaxed), 0);
     }
 
     drop(gcs);
     collect();
 
-    for detector in &detectors {
+    for detector in &DETECTORS {
         assert_eq!(detector.load(Ordering::Relaxed), 1);
     }
 }
 
 #[test]
 fn complete1000() {
-    let detectors: Vec<AtomicUsize> = (0..1_000).map(|_| AtomicUsize::new(0)).collect();
-    let mut gcs = complete_graph(&detectors);
+    static DETECTORS: [AtomicUsize; 1000] = const_atomics();
+    let mut gcs = complete_graph(&DETECTORS);
 
-    for _ in 0..999 {
+    for _ in 0..99 {
         gcs.pop();
     }
 
-    for detector in &detectors {
+    for detector in &DETECTORS {
         assert_eq!(detector.load(Ordering::Relaxed), 0);
     }
 
     drop(gcs);
     collect();
 
-    for detector in &detectors {
+    for detector in &DETECTORS {
         assert_eq!(detector.load(Ordering::Relaxed), 1);
     }
 }
 
 #[test]
 fn parallel_loop() {
-    let count1 = AtomicUsize::new(0);
-    let count2 = AtomicUsize::new(0);
-    let count3 = AtomicUsize::new(0);
-    let count4 = AtomicUsize::new(0);
+    static COUNT_1: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_2: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_3: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_4: AtomicUsize = AtomicUsize::new(0);
 
     let gc1 = Gc::new(MultiRef {
-        drop_count: &count1,
+        drop_count: &COUNT_1,
         refs: RefCell::new(Vec::new()),
     });
     let gc2 = Gc::new(MultiRef {
-        drop_count: &count2,
+        drop_count: &COUNT_2,
         refs: RefCell::new(vec![Gc::clone(&gc1)]),
     });
     let gc3 = Gc::new(MultiRef {
-        drop_count: &count3,
+        drop_count: &COUNT_3,
         refs: RefCell::new(vec![Gc::clone(&gc1)]),
     });
     let gc4 = Gc::new(MultiRef {
-        drop_count: &count4,
+        drop_count: &COUNT_4,
         refs: RefCell::new(vec![Gc::clone(&gc2), Gc::clone(&gc3)]),
     });
     gc1.refs.borrow_mut().push(Gc::clone(&gc4));
 
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_1.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_2.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_3.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_4.load(Ordering::Relaxed), 0);
     drop(gc1);
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_1.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_2.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_3.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_4.load(Ordering::Relaxed), 0);
     drop(gc2);
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_1.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_2.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_3.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_4.load(Ordering::Relaxed), 0);
     drop(gc3);
-    assert_eq!(count1.load(Ordering::Relaxed), 0);
-    assert_eq!(count2.load(Ordering::Relaxed), 0);
-    assert_eq!(count3.load(Ordering::Relaxed), 0);
-    assert_eq!(count4.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_1.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_2.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_3.load(Ordering::Relaxed), 0);
+    assert_eq!(COUNT_4.load(Ordering::Relaxed), 0);
     drop(gc4);
     collect();
-    assert_eq!(count1.load(Ordering::Relaxed), 1);
-    assert_eq!(count2.load(Ordering::Relaxed), 1);
-    assert_eq!(count3.load(Ordering::Relaxed), 1);
-    assert_eq!(count4.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT_1.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT_2.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT_3.load(Ordering::Relaxed), 1);
+    assert_eq!(COUNT_4.load(Ordering::Relaxed), 1);
 }
 
 #[test]
 /// Check that we can drop a Gc which points to some allocation with a borrowed `RefCell` in it.
 fn double_borrow() {
-    let drop_count = AtomicUsize::new(0);
+    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
     let gc = Gc::new(MultiRef {
         refs: RefCell::new(Vec::new()),
-        drop_count: &drop_count,
+        drop_count: &DROP_COUNT,
     });
     gc.refs.borrow_mut().push(gc.clone());
     let mut my_borrow = gc.refs.borrow_mut();
     my_borrow.pop();
     drop(my_borrow);
 
-    assert_eq!(drop_count.load(Ordering::Relaxed), 0);
+    assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 0);
     collect();
     drop(gc);
     collect();
-    assert_eq!(drop_count.load(Ordering::Relaxed), 1);
+    assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
 }

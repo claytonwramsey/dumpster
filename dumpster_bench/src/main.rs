@@ -2,12 +2,15 @@
 
 use std::{thread::spawn, time::Instant};
 
-use dumpster_bench::{DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref, Multiref};
+use dumpster_bench::{
+    BaconRajanMultiref, DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref, Multiref,
+};
 
 fn main() {
     single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>("dumpster::unsync");
     single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>("dumpster::sync");
     single_threaded::<gc::Gc<GcMultiref>>("gc");
+    single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon-rajan-cc");
 }
 
 /// Run a benchmark of a multi-threaded garbage collector.

@@ -38,7 +38,7 @@ use self::collect::DUMPSTER;
 /// A thread-safe garbage-collected pointer.
 pub struct Gc<T>
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Sync + ?Sized + 'static,
 {
     /// A pointer to the heap allocation containing the data under concern.
     /// The pointee box should never be mutated.

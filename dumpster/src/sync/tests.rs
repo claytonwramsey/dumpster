@@ -38,13 +38,13 @@ unsafe impl Collectable for DropCount<'_> {
     unsafe fn destroy_gcs<D: crate::Destroyer>(&mut self, _: &mut D) {}
 }
 
-struct MultiRef<'a> {
-    refs: Mutex<Vec<Gc<MultiRef<'a>>>>,
+struct MultiRef {
+    refs: Mutex<Vec<Gc<MultiRef>>>,
     #[allow(unused)]
-    count: DropCount<'a>,
+    count: DropCount<'static>,
 }
 
-unsafe impl<'a> Collectable for MultiRef<'a> {
+unsafe impl Collectable for MultiRef {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
     }
@@ -56,25 +56,25 @@ unsafe impl<'a> Collectable for MultiRef<'a> {
 
 #[test]
 fn single_alloc() {
-    let drop_count = AtomicUsize::new(0);
-    let gc1 = Gc::new(DropCount(&drop_count));
+    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    let gc1 = Gc::new(DropCount(&DROP_COUNT));
 
-    assert_eq!(drop_count.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
-    assert_eq!(drop_count.load(Ordering::Acquire), 1);
+    assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 
 #[test]
 fn ref_count() {
-    let drop_count = AtomicUsize::new(0);
-    let gc1 = Gc::new(DropCount(&drop_count));
+    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    let gc1 = Gc::new(DropCount(&DROP_COUNT));
     let gc2 = Gc::clone(&gc1);
 
-    assert_eq!(drop_count.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
-    assert_eq!(drop_count.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc2);
-    assert_eq!(drop_count.load(Ordering::Acquire), 1);
+    assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -111,114 +111,114 @@ fn self_referential() {
 
 #[test]
 fn two_cycle() {
-    let drop0 = AtomicUsize::new(0);
-    let drop1 = AtomicUsize::new(0);
+    static DROP_0: AtomicUsize = AtomicUsize::new(0);
+    static DROP_1: AtomicUsize = AtomicUsize::new(0);
 
     let gc0 = Gc::new(MultiRef {
         refs: Mutex::new(Vec::new()),
-        count: DropCount(&drop0),
+        count: DropCount(&DROP_0),
     });
     let gc1 = Gc::new(MultiRef {
         refs: Mutex::new(vec![Gc::clone(&gc0)]),
-        count: DropCount(&drop1),
+        count: DropCount(&DROP_1),
     });
     gc0.refs.lock().unwrap().push(Gc::clone(&gc1));
 
     collect_await();
-    assert_eq!(drop0.load(Ordering::Acquire), 0);
-    assert_eq!(drop0.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     drop(gc0);
     collect_await();
-    assert_eq!(drop0.load(Ordering::Acquire), 0);
-    assert_eq!(drop0.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     drop(gc1);
     collect_await();
-    assert_eq!(drop0.load(Ordering::Acquire), 1);
-    assert_eq!(drop0.load(Ordering::Acquire), 1);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 1);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 1);
 }
 
 #[test]
 fn self_ref_two_cycle() {
-    let drop0 = AtomicUsize::new(0);
-    let drop1 = AtomicUsize::new(0);
+    static DROP_0: AtomicUsize = AtomicUsize::new(0);
+    static DROP_1: AtomicUsize = AtomicUsize::new(0);
 
     let gc0 = Gc::new(MultiRef {
         refs: Mutex::new(Vec::new()),
-        count: DropCount(&drop0),
+        count: DropCount(&DROP_0),
     });
     let gc1 = Gc::new(MultiRef {
         refs: Mutex::new(vec![Gc::clone(&gc0)]),
-        count: DropCount(&drop1),
+        count: DropCount(&DROP_1),
     });
     gc0.refs.lock().unwrap().extend([gc0.clone(), gc1.clone()]);
     gc1.refs.lock().unwrap().push(gc1.clone());
 
     collect_await();
-    assert_eq!(drop0.load(Ordering::Acquire), 0);
-    assert_eq!(drop0.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     drop(gc0);
     collect_await();
-    assert_eq!(drop0.load(Ordering::Acquire), 0);
-    assert_eq!(drop0.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 0);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     drop(gc1);
     collect_await();
-    assert_eq!(drop0.load(Ordering::Acquire), 1);
-    assert_eq!(drop0.load(Ordering::Acquire), 1);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 1);
+    assert_eq!(DROP_0.load(Ordering::Acquire), 1);
 }
 
 #[test]
 fn parallel_loop() {
-    let count1 = AtomicUsize::new(0);
-    let count2 = AtomicUsize::new(0);
-    let count3 = AtomicUsize::new(0);
-    let count4 = AtomicUsize::new(0);
+    static COUNT_1: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_2: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_3: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_4: AtomicUsize = AtomicUsize::new(0);
 
     let gc1 = Gc::new(MultiRef {
-        count: DropCount(&count1),
+        count: DropCount(&COUNT_1),
         refs: Mutex::new(Vec::new()),
     });
     let gc2 = Gc::new(MultiRef {
-        count: DropCount(&count2),
+        count: DropCount(&COUNT_2),
         refs: Mutex::new(vec![Gc::clone(&gc1)]),
     });
     let gc3 = Gc::new(MultiRef {
-        count: DropCount(&count3),
+        count: DropCount(&COUNT_3),
         refs: Mutex::new(vec![Gc::clone(&gc1)]),
     });
     let gc4 = Gc::new(MultiRef {
-        count: DropCount(&count4),
+        count: DropCount(&COUNT_4),
         refs: Mutex::new(vec![Gc::clone(&gc2), Gc::clone(&gc3)]),
     });
     gc1.refs.lock().unwrap().push(Gc::clone(&gc4));
 
-    assert_eq!(count1.load(Ordering::Acquire), 0);
-    assert_eq!(count2.load(Ordering::Acquire), 0);
-    assert_eq!(count3.load(Ordering::Acquire), 0);
-    assert_eq!(count4.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_2.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_3.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_4.load(Ordering::Acquire), 0);
     drop(gc1);
     collect_await();
-    assert_eq!(count1.load(Ordering::Acquire), 0);
-    assert_eq!(count2.load(Ordering::Acquire), 0);
-    assert_eq!(count3.load(Ordering::Acquire), 0);
-    assert_eq!(count4.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_2.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_3.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_4.load(Ordering::Acquire), 0);
     drop(gc2);
     collect_await();
-    assert_eq!(count1.load(Ordering::Acquire), 0);
-    assert_eq!(count2.load(Ordering::Acquire), 0);
-    assert_eq!(count3.load(Ordering::Acquire), 0);
-    assert_eq!(count4.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_2.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_3.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_4.load(Ordering::Acquire), 0);
     drop(gc3);
     collect_await();
-    assert_eq!(count1.load(Ordering::Acquire), 0);
-    assert_eq!(count2.load(Ordering::Acquire), 0);
-    assert_eq!(count3.load(Ordering::Acquire), 0);
-    assert_eq!(count4.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_2.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_3.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_4.load(Ordering::Acquire), 0);
     drop(gc4);
     collect_await();
-    assert_eq!(count1.load(Ordering::Acquire), 1);
-    assert_eq!(count2.load(Ordering::Acquire), 1);
-    assert_eq!(count3.load(Ordering::Acquire), 1);
-    assert_eq!(count4.load(Ordering::Acquire), 1);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 1);
+    assert_eq!(COUNT_2.load(Ordering::Acquire), 1);
+    assert_eq!(COUNT_3.load(Ordering::Acquire), 1);
+    assert_eq!(COUNT_4.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -236,40 +236,40 @@ fn deadlock() {
 
 #[test]
 fn open_drop() {
-    let count1 = AtomicUsize::new(0);
+    static COUNT_1: AtomicUsize = AtomicUsize::new(0);
     let gc1 = Gc::new(MultiRef {
         refs: Mutex::new(Vec::new()),
-        count: DropCount(&count1),
+        count: DropCount(&COUNT_1),
     });
 
     gc1.refs.lock().unwrap().push(gc1.clone());
     let guard = gc1.refs.lock();
     collect_await();
-    assert_eq!(count1.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
     drop(guard);
     drop(gc1);
     collect_await();
 
-    assert_eq!(count1.load(Ordering::Acquire), 1);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 1);
 }
 
 #[test]
 fn eventually_collect_await() {
-    let count1 = AtomicUsize::new(0);
-    let count2 = AtomicUsize::new(0);
+    static COUNT_1: AtomicUsize = AtomicUsize::new(0);
+    static COUNT_2: AtomicUsize = AtomicUsize::new(0);
 
     let gc1 = Gc::new(MultiRef {
         refs: Mutex::new(Vec::new()),
-        count: DropCount(&count1),
+        count: DropCount(&COUNT_1),
     });
     let gc2 = Gc::new(MultiRef {
         refs: Mutex::new(vec![gc1.clone()]),
-        count: DropCount(&count2),
+        count: DropCount(&COUNT_2),
     });
     gc1.refs.lock().unwrap().push(gc2.clone());
 
-    assert_eq!(count1.load(Ordering::Acquire), 0);
-    assert_eq!(count2.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
+    assert_eq!(COUNT_2.load(Ordering::Acquire), 0);
 
     drop(gc1);
     drop(gc2);
@@ -280,6 +280,6 @@ fn eventually_collect_await() {
     }
 
     // after enough time, gc1 and gc2 should have been collected
-    assert_eq!(count1.load(Ordering::Acquire), 1);
-    assert_eq!(count2.load(Ordering::Acquire), 1);
+    assert_eq!(COUNT_1.load(Ordering::Acquire), 1);
+    assert_eq!(COUNT_2.load(Ordering::Acquire), 1);
 }

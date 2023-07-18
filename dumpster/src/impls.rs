@@ -32,7 +32,7 @@ use std::{
 
 use crate::{Collectable, Destroyer, Visitor};
 
-unsafe impl<'a, T> Collectable for &'a T {
+unsafe impl<T> Collectable for &'static T {
     #[inline]
     fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
         Ok(())

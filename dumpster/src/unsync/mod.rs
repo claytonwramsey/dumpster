@@ -22,7 +22,6 @@ use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
     cell::Cell,
-    marker::PhantomData,
     ops::Deref,
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
 };
@@ -52,12 +51,10 @@ mod tests;
 /// println!("{}", *x); // prints '3'
 ///                     // x is then freed automatically!
 /// ```
-pub struct Gc<T: Collectable + ?Sized> {
+pub struct Gc<T: Collectable + ?Sized + 'static> {
     /// A pointer to the heap allocation containing the data under concern.
     /// The pointee box should never be mutated.
     ptr: Option<NonNull<GcBox<T>>>,
-    /// Phantom data to ensure correct lifetime analysis.
-    _phantom: PhantomData<T>,
 }
 
 /// Collect all existing unreachable allocations.
@@ -90,7 +87,6 @@ impl<T: Collectable + ?Sized> Gc<T> {
                 ref_count: Cell::new(1),
                 value,
             })))),
-            _phantom: PhantomData,
         }
     }
 }
@@ -124,7 +120,6 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
         });
         Self {
             ptr: self.ptr.clone(),
-            _phantom: PhantomData,
         }
     }
 }
