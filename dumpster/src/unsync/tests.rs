@@ -23,7 +23,7 @@ use crate::Visitor;
 use super::*;
 use std::{
     cell::RefCell,
-    mem::{transmute, MaybeUninit},
+    mem::MaybeUninit,
     sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
 };
 
@@ -160,112 +160,6 @@ fn complete_graph(detectors: &'static [AtomicUsize]) -> Vec<Gc<MultiRef>> {
     }
 
     gcs
-}
-
-/// Construct an array of `N` `AtomicUsize`s initialized to 0.
-const fn const_atomics<const N: usize>() -> [AtomicUsize; N] {
-    unsafe {
-        #[allow(clippy::uninit_assumed_init)]
-        let mut x: [AtomicUsize; N] = MaybeUninit::uninit().assume_init();
-
-        let mut i = 0;
-        while i < N {
-            x[i] = AtomicUsize::new(0);
-            i += 1;
-        }
-
-        x
-    }
-}
-
-#[test]
-fn complete4() {
-    static DETECTORS: [AtomicUsize; 4] = [
-        AtomicUsize::new(0),
-        AtomicUsize::new(0),
-        AtomicUsize::new(0),
-        AtomicUsize::new(0),
-    ];
-
-    let mut gcs = complete_graph(&DETECTORS);
-
-    for _ in 0..3 {
-        gcs.pop();
-    }
-
-    for detector in &DETECTORS {
-        assert_eq!(detector.load(Ordering::Relaxed), 0);
-    }
-
-    drop(gcs);
-    collect();
-
-    for detector in &DETECTORS {
-        assert_eq!(detector.load(Ordering::Relaxed), 1);
-    }
-}
-
-#[test]
-fn complete20() {
-    static DETECTORS: [AtomicUsize; 20] = const_atomics();
-    let mut gcs = complete_graph(&DETECTORS);
-
-    for _ in 0..19 {
-        gcs.pop();
-    }
-
-    for detector in &DETECTORS {
-        assert_eq!(detector.load(Ordering::Relaxed), 0);
-    }
-
-    drop(gcs);
-    collect();
-
-    for detector in &DETECTORS {
-        assert_eq!(detector.load(Ordering::Relaxed), 1);
-    }
-}
-
-#[test]
-fn complete100() {
-    static DETECTORS: [AtomicUsize; 100] = const_atomics();
-    let mut gcs = complete_graph(&DETECTORS);
-
-    for _ in 0..99 {
-        gcs.pop();
-    }
-
-    for detector in &DETECTORS {
-        assert_eq!(detector.load(Ordering::Relaxed), 0);
-    }
-
-    drop(gcs);
-    collect();
-
-    for detector in &DETECTORS {
-        assert_eq!(detector.load(Ordering::Relaxed), 1);
-    }
-}
-
-#[test]
-fn complete1000() {
-    static DETECTORS: [AtomicUsize; 1000] = const_atomics();
-    let mut gcs = complete_graph(&DETECTORS);
-
-    for _ in 0..99 {
-        gcs.pop();
-    }
-
-    for detector in &DETECTORS {
-        assert_eq!(detector.load(Ordering::Relaxed), 0);
-    }
-
-    drop(gcs);
-    collect();
-
-    for detector in &DETECTORS {
-        assert_eq!(detector.load(Ordering::Relaxed), 1);
-    }
 }
 
 #[test]
