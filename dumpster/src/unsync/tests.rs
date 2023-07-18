@@ -23,7 +23,6 @@ use crate::Visitor;
 use super::*;
 use std::{
     cell::RefCell,
-    mem::MaybeUninit,
     sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
 };
 
@@ -160,6 +159,33 @@ fn complete_graph(detectors: &'static [AtomicUsize]) -> Vec<Gc<MultiRef>> {
     }
 
     gcs
+}
+
+#[test]
+fn complete4() {
+    static DETECTORS: [AtomicUsize; 4] = [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ];
+
+    let mut gcs = complete_graph(&DETECTORS);
+
+    for _ in 0..3 {
+        gcs.pop();
+    }
+
+    for detector in &DETECTORS {
+        assert_eq!(detector.load(Ordering::Relaxed), 0);
+    }
+
+    drop(gcs);
+    collect();
+
+    for detector in &DETECTORS {
+        assert_eq!(detector.load(Ordering::Relaxed), 1);
+    }
 }
 
 #[test]
