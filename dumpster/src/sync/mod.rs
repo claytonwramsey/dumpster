@@ -73,7 +73,6 @@ unsafe impl<T> Sync for Gc<T> where T: Collectable + Sync + ?Sized {}
 /// still not been collected, due to concurrency.
 /// For a blocking version, refer to [`collect_await`].
 pub fn collect() {
-    println!("manual collection called");
     DUMPSTER.collect_all();
 }
 
