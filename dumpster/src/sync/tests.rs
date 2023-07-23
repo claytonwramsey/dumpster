@@ -18,7 +18,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{Destroyer, Visitor};
+use crate::Visitor;
 
 use super::*;
 
@@ -34,8 +34,6 @@ unsafe impl Collectable for DropCount<'_> {
     fn accept<V: crate::Visitor>(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
     }
-
-    unsafe fn destroy_gcs<D: crate::Destroyer>(&mut self, _: &mut D) {}
 }
 
 struct MultiRef {
@@ -47,10 +45,6 @@ struct MultiRef {
 unsafe impl Collectable for MultiRef {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
-    }
-
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
-        self.refs.destroy_gcs(destroyer);
     }
 }
 
@@ -85,11 +79,6 @@ fn self_referential() {
     unsafe impl Collectable for Foo {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
-        }
-
-        unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
-            println!("calling destroy_gcs in self_referential");
-            self.0.destroy_gcs(destroyer);
         }
     }
 

@@ -24,14 +24,15 @@ mod tests;
 
 use std::{
     alloc::{dealloc, Layout},
-    marker::PhantomData,
+    borrow::Borrow,
+    marker::{PhantomData, Unsize},
     num::NonZeroUsize,
-    ops::Deref,
-    ptr::{addr_of_mut, drop_in_place, NonNull},
+    ops::{CoerceUnsized, Deref},
+    ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
     sync::Mutex,
 };
 
-use crate::{Collectable, Destroyer, Visitor};
+use crate::{Collectable, Visitor};
 
 use self::collect::DUMPSTER;
 
@@ -42,7 +43,10 @@ where
 {
     /// A pointer to the heap allocation containing the data under concern.
     /// The pointee box should never be mutated.
-    ptr: Option<NonNull<GcBox<T>>>,
+    ///
+    /// This pointer will only be null if it has been 'destroyed' and is about to be cleaned up.
+    /// I do not use `Option<NonNull<T>` because it doesn't implement `CoerceUnsized`.
+    ptr: NonNull<GcBox<T>>,
     /// Phantom data to ensure correct lifetime analysis.
     _phantom: PhantomData<T>,
 }
@@ -57,8 +61,8 @@ where
     ///
     /// We use a mutex instead of an atomic here for algorithmic reasons - it allows us to achieve
     /// mutual exclusion when searching for cycles, preventing a malicious thread from fooling us
-    /// into believing that an allocation is unreachable (therefore, preventing us from accidentally
-    /// UAFing)
+    /// into believing that an allocation is unreachable (therefore, preventing us from
+    /// accidentally UAFing)
     ref_count: Mutex<NonZeroUsize>,
     /// The actual data stored in the allocation.
     value: T,
@@ -94,10 +98,11 @@ where
     {
         DUMPSTER.notify_created_gc();
         Gc {
-            ptr: Some(NonNull::from(Box::leak(Box::new(GcBox {
+            ptr: Box::leak(Box::new(GcBox {
                 ref_count: Mutex::new(NonZeroUsize::MIN),
                 value,
-            })))),
+            }))
+            .into(),
             _phantom: PhantomData,
         }
     }
@@ -113,8 +118,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// use std::sync::atomic::{AtomicU8, Ordering};
     /// use dumpster::sync::Gc;
+    /// use std::sync::atomic::{AtomicU8, Ordering};
     ///
     /// let gc1 = Gc::new(AtomicU8::new(0));
     /// let gc2 = gc1.clone();
@@ -124,14 +129,14 @@ where
     /// ```
     fn clone(&self) -> Gc<T> {
         unsafe {
-            let mut ref_count_guard = self.ptr.unwrap().as_ref().ref_count.lock().unwrap();
+            let mut ref_count_guard = self.ptr.as_ref().ref_count.lock().unwrap();
             *ref_count_guard = ref_count_guard
                 .checked_add(1)
                 .expect("integer overflow when incrementing reference count");
         }
         DUMPSTER.notify_created_gc();
         // If we can clone a Gc pointing to this allocation, it must be accessible
-        DUMPSTER.mark_clean(self.ptr.unwrap());
+        DUMPSTER.mark_clean(self.ptr);
         Gc {
             ptr: self.ptr,
             _phantom: PhantomData,
@@ -145,29 +150,29 @@ where
 {
     fn drop(&mut self) {
         unsafe {
-            if let Some(mut ptr) = self.ptr {
-                {
-                    // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
-                    let mut count_handle = ptr.as_ref().ref_count.lock().unwrap();
-                    match count_handle.get() {
-                        0 => unreachable!(),
-                        1 => {
-                            drop(count_handle); // must drop handle before dropping the mutex
+            {
+                // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
+                let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
+                match count_handle.get() {
+                    0 => (),
+                    1 => {
+                        drop(count_handle); // must drop handle before dropping the mutex
 
-                            DUMPSTER.mark_clean(ptr);
+                        DUMPSTER.mark_clean(self.ptr);
 
-                            ptr.as_mut().value.destroy_gcs(&mut DestroyGcs);
-                            drop_in_place(addr_of_mut!(ptr.as_mut().value));
-                            dealloc(ptr.as_ptr().cast(), Layout::for_value(ptr.as_ref()));
-                        }
-                        n => {
-                            *count_handle = NonZeroUsize::new(n - 1).unwrap();
-                            drop(count_handle);
-                            DUMPSTER.mark_dirty(ptr);
-                        }
+                        drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                        dealloc(
+                            self.ptr.as_ptr().cast(),
+                            Layout::for_value(self.ptr.as_ref()),
+                        );
+                    }
+                    n => {
+                        *count_handle = NonZeroUsize::new(n - 1).unwrap();
+                        drop(count_handle);
+                        DUMPSTER.mark_dirty(self.ptr);
+                        DUMPSTER.notify_dropped_gc();
                     }
                 }
-                DUMPSTER.notify_dropped_gc();
             }
         }
     }
@@ -178,36 +183,37 @@ unsafe impl<T: Collectable + Sync + ?Sized> Collectable for Gc<T> {
         visitor.visit_sync(self);
         Ok(())
     }
-
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
-        destroyer.visit_sync(self);
-    }
 }
 
 impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &self.ptr.unwrap().as_ref().value }
+        unsafe { &self.ptr.as_ref().value }
     }
 }
 
-/// The visitor structure used for overwriting [`Gc`]s to be destroyed.
-struct DestroyGcs;
-
-impl Destroyer for DestroyGcs {
-    fn visit_sync<T>(&mut self, gc: &mut Gc<T>)
-    where
-        T: Collectable + Sync + ?Sized,
-    {
-        DUMPSTER.notify_destroyed_gc();
-        gc.ptr = None;
+impl<T: Collectable + ?Sized + Sync> AsRef<T> for Gc<T> {
+    fn as_ref(&self) -> &T {
+        unsafe { addr_of!(self.ptr.as_ref().value).as_ref().unwrap() }
     }
+}
 
-    fn visit_unsync<T>(&mut self, _: &mut crate::unsync::Gc<T>)
-    where
-        T: Collectable + ?Sized,
-    {
-        panic!("A `dumpster::sync::Gc` may not own a `dumpster::unsync::Gc` because `dumpster::unsync::Gc` is `Sync`");
+impl<T: Collectable + ?Sized + Sync> Borrow<T> for Gc<T> {
+    fn borrow(&self) -> &T {
+        self.as_ref()
     }
+}
+
+impl<T: Collectable + ?Sized + Sync> std::fmt::Pointer for Gc<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Pointer::fmt(&addr_of!(**self), f)
+    }
+}
+
+impl<T, U> CoerceUnsized<Gc<U>> for Gc<T>
+where
+    T: Unsize<U> + Collectable + Sync + ?Sized,
+    U: Collectable + Sync + ?Sized,
+{
 }

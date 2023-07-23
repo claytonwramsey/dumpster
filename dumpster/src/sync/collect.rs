@@ -36,7 +36,7 @@ use once_cell::sync::Lazy;
 
 use crate::{Collectable, OpaquePtr, Visitor};
 
-use super::{DestroyGcs, Gc, GcBox};
+use super::{Gc, GcBox};
 
 /// The global collection of allocations to clean up.
 // wishing dreams: chashmap gets a const new function so that we can remove the once cell
@@ -182,12 +182,6 @@ impl Dumpster {
         self.n_gcs_existing.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Notify that a GC was destroyed as part of the behavior of `DestryGcs`.
-    pub fn notify_destroyed_gc(&self) {
-        let prev_gcs_existing = self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
-        assert_ne!(prev_gcs_existing, 0, "underflow on number of existing GCs");
-    }
-
     /// Mark an allocation as "dirty," implying that it may or may not be inaccessible and need to
     /// be cleaned up.
     pub fn mark_dirty<T>(&self, allocation: NonNull<GcBox<T>>)
@@ -234,8 +228,8 @@ impl Cleanup {
 /// - `ptr`: A pointer to the allocation that we should start constructing from.
 /// - `starting_id`: The ID of the allocation pointed to by `ptr`.
 /// - `ref_graph`: A lookup from allocation IDs to node information about that allocation.
-/// - `guards`: A lookup from allocation IDs to the mutex guards they control.
-///   This prevents data races during reference graph construction.
+/// - `guards`: A lookup from allocation IDs to the mutex guards they control. This prevents data
+///   races during reference graph construction.
 ///
 /// # Effects
 ///
@@ -315,7 +309,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
     where
         T: Collectable + Sync + ?Sized,
     {
-        let mut new_id = AllocationId::from(gc.ptr.unwrap());
+        let mut new_id = AllocationId::from(gc.ptr);
         let Node::Unknown {
             ref mut children, ..
         } = self.ref_graph.get_mut(&self.current_id).unwrap()
@@ -348,7 +342,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                             children: Vec::new(),
                             n_unaccounted: guard.get() - 1,
                             destroy_fn: destroy_opaque::<T>,
-                            ptr: OpaquePtr::new(gc.ptr.unwrap()),
+                            ptr: OpaquePtr::new(gc.ptr),
                         });
                         self.guards.insert(new_id, guard);
 
@@ -421,7 +415,6 @@ fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, Node>) {
 /// `ptr` must have been created from a pointer to a `GcBox<T>`.
 unsafe fn destroy_opaque<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
     let specified = ptr.specify::<GcBox<T>>().as_mut();
-    specified.value.destroy_gcs(&mut DestroyGcs);
     let layout = Layout::for_value(specified);
     drop_in_place(specified);
     dealloc((specified as *mut GcBox<T>).cast(), layout);

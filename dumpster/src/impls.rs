@@ -20,7 +20,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{BinaryHeap, HashSet, LinkedList, VecDeque},
+    collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque},
     sync::{
         atomic::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
@@ -30,26 +30,19 @@ use std::{
     },
 };
 
-use crate::{Collectable, Destroyer, Visitor};
+use crate::{Collectable, Visitor};
 
 unsafe impl<T> Collectable for &'static T {
     #[inline]
     fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
     }
-    #[inline]
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
 }
 
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_borrow().map_err(|_| ())?.accept(visitor)
-    }
-
-    #[inline]
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
-        self.borrow_mut().destroy_gcs(visitor);
     }
 }
 
@@ -63,11 +56,6 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
             })?
             .accept(visitor)
     }
-
-    #[inline]
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
-        self.get_mut().unwrap().destroy_gcs(destroyer);
-    }
 }
 
 unsafe impl<T: Collectable> Collectable for Option<T> {
@@ -76,13 +64,6 @@ unsafe impl<T: Collectable> Collectable for Option<T> {
         match self {
             Some(x) => x.accept(visitor),
             None => Ok(()),
-        }
-    }
-
-    #[inline]
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
-        if let Some(ref mut x) = self {
-            x.destroy_gcs(visitor);
         }
     }
 }
@@ -99,14 +80,6 @@ where
             Err(e) => e.accept(visitor),
         }
     }
-
-    #[inline]
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
-        match self {
-            Ok(t) => t.destroy_gcs(destroyer),
-            Err(e) => e.destroy_gcs(destroyer),
-        }
-    }
 }
 
 /// Implement [`Collectable`] for a collection data structure which has some method `iter()` that
@@ -117,15 +90,10 @@ macro_rules! collectable_collection_impl {
         unsafe impl<T: Collectable> Collectable for $x {
             #[inline]
             fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
-                for elem in self.iter() {
+                for elem in self {
                     elem.accept(visitor)?;
                 }
                 Ok(())
-            }
-
-            #[inline]
-            unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
-                self.iter_mut().for_each(|x| x.destroy_gcs(visitor));
             }
         }
     };
@@ -135,45 +103,19 @@ collectable_collection_impl!(Vec<T>);
 collectable_collection_impl!(VecDeque<T>);
 collectable_collection_impl!(LinkedList<T>);
 collectable_collection_impl!([T]);
+collectable_collection_impl!(HashSet<T>);
+collectable_collection_impl!(BinaryHeap<T>);
+collectable_collection_impl!(BTreeSet<T>); // awaiting stabilization of `drain` on `BTreeSet`
 
 unsafe impl<T: Collectable, const N: usize> Collectable for [T; N] {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
-        for elem in self.iter() {
+        for elem in self {
             elem.accept(visitor)?;
         }
         Ok(())
     }
-
-    #[inline]
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
-        self.iter_mut().for_each(|elem| elem.destroy_gcs(destroyer));
-    }
 }
-
-/// Implement [`Collectable`] for a set-like data structure which freezes its elements.
-macro_rules! collectable_set_impl {
-    ($x: ty) => {
-        unsafe impl<T: Collectable> Collectable for $x {
-            #[inline]
-            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
-                for elem in self.iter() {
-                    elem.accept(visitor)?;
-                }
-                Ok(())
-            }
-
-            #[inline]
-            unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
-                self.drain().for_each(|mut x| x.destroy_gcs(visitor));
-            }
-        }
-    };
-}
-
-collectable_set_impl!(HashSet<T>);
-collectable_set_impl!(BinaryHeap<T>);
-// collectable_set_impl!(BTreeSet<T>); // awaiting stabilization of `drain` on `BTreeSet`
 
 /// Implement [`Collectable`] for a trivially-collected type which contains no  [`Gc`]s in its
 /// fields.
@@ -184,8 +126,6 @@ macro_rules! collectable_trivial_impl {
             fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
                 Ok(())
             }
-            #[inline]
-            unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
         }
     };
 }

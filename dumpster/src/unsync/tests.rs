@@ -42,7 +42,6 @@ fn simple() {
         fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
             Ok(())
         }
-        unsafe fn destroy_gcs<D: Destroyer>(&mut self, _: &mut D) {}
     }
 
     let gc1 = Gc::new(Foo(1));
@@ -69,9 +68,6 @@ unsafe impl Collectable for MultiRef {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
     }
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
-        self.refs.destroy_gcs(visitor);
-    }
 }
 
 impl Drop for MultiRef {
@@ -89,10 +85,6 @@ fn self_referential() {
         #[inline]
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
-        }
-        #[inline]
-        unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
-            self.0.destroy_gcs(visitor);
         }
     }
 
@@ -119,10 +111,6 @@ fn cyclic() {
         #[inline]
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
-        }
-        #[inline]
-        unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
-            self.0.destroy_gcs(visitor);
         }
     }
 

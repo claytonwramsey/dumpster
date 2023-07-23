@@ -26,7 +26,7 @@ use std::{
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
 };
 
-use crate::{Collectable, Destroyer, Visitor};
+use crate::{Collectable, Visitor};
 
 use self::collect::{Dumpster, DUMPSTER};
 
@@ -54,7 +54,7 @@ mod tests;
 pub struct Gc<T: Collectable + ?Sized + 'static> {
     /// A pointer to the heap allocation containing the data under concern.
     /// The pointee box should never be mutated.
-    ptr: Option<NonNull<GcBox<T>>>,
+    ptr: NonNull<GcBox<T>>,
 }
 
 /// Collect all existing unreachable allocations.
@@ -83,10 +83,11 @@ impl<T: Collectable + ?Sized> Gc<T> {
     {
         DUMPSTER.with(Dumpster::notify_created_gc);
         Gc {
-            ptr: Some(NonNull::from(Box::leak(Box::new(GcBox {
+            ptr: Box::leak(Box::new(GcBox {
                 ref_count: Cell::new(1),
                 value,
-            })))),
+            }))
+            .into(),
         }
     }
 }
@@ -95,13 +96,7 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            &self
-                .ptr
-                .expect("Dereferenced Gc during Drop")
-                .as_ref()
-                .value
-        }
+        unsafe { &self.ptr.as_ref().value }
     }
 }
 
@@ -111,12 +106,12 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
     /// This does not duplicate the data.
     fn clone(&self) -> Self {
         unsafe {
-            let box_ref = self.ptr.unwrap().as_ref();
+            let box_ref = self.ptr.as_ref();
             box_ref.ref_count.set(box_ref.ref_count.get() + 1);
         }
         DUMPSTER.with(|d| {
             d.notify_created_gc();
-            d.mark_cleaned(self.ptr.unwrap());
+            d.mark_cleaned(self.ptr);
         });
         Self {
             ptr: self.ptr.clone(),
@@ -130,33 +125,34 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// If this is the last reference which can reach the pointed-to data, the allocation that it
     /// points to will be destroyed.
     fn drop(&mut self) {
-        if let Some(mut ptr) = self.ptr {
-            DUMPSTER.with(|d| {
-                unsafe {
-                    let box_ref = ptr.as_ref();
-                    match box_ref.ref_count.get() {
-                        0 => (), // allocation is already being destroyed
-                        1 => {
-                            d.mark_cleaned(ptr);
-                            // this was the last reference, drop unconditionally
-                            drop_in_place(addr_of_mut!(ptr.as_mut().value));
-                            // note: `box_ref` is no longer usable
-                            dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
-                        }
-                        n => {
-                            // decrement the ref count - but another reference to this data still
-                            // lives
-                            box_ref.ref_count.set(n - 1);
-                            // remaining references could be a cycle - therefore, mark it as dirty
-                            // so we can check later
-                            d.mark_dirty(ptr);
-                        }
+        DUMPSTER.with(|d| {
+            unsafe {
+                let box_ref = self.ptr.as_ref();
+                match box_ref.ref_count.get() {
+                    0 => (), // allocation is already being destroyed
+                    1 => {
+                        d.mark_cleaned(self.ptr);
+                        // this was the last reference, drop unconditionally
+                        drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                        // note: `box_ref` is no longer usable
+                        dealloc(
+                            self.ptr.as_ptr().cast::<u8>(),
+                            Layout::for_value(self.ptr.as_ref()),
+                        );
                     }
-                    // Notify that a GC has been dropped, potentially triggering a sweep
-                    d.notify_dropped_gc();
+                    n => {
+                        // decrement the ref count - but another reference to this data still
+                        // lives
+                        box_ref.ref_count.set(n - 1);
+                        // remaining references could be a cycle - therefore, mark it as dirty
+                        // so we can check later
+                        d.mark_dirty(self.ptr);
+                    }
                 }
-            });
-        }
+                // Notify that a GC has been dropped, potentially triggering a sweep
+                d.notify_dropped_gc();
+            }
+        });
     }
 }
 
@@ -165,15 +161,11 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
         visitor.visit_unsync(self);
         Ok(())
     }
-
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, visitor: &mut D) {
-        visitor.visit_unsync(self);
-    }
 }
 
 impl<T: Collectable + ?Sized> AsRef<T> for Gc<T> {
     fn as_ref(&self) -> &T {
-        unsafe { addr_of!(self.ptr.unwrap().as_ref().value).as_ref().unwrap() }
+        unsafe { addr_of!(self.ptr.as_ref().value).as_ref().unwrap() }
     }
 }
 
@@ -186,5 +178,11 @@ impl<T: Collectable + ?Sized> Borrow<T> for Gc<T> {
 impl<T: Collectable + Default> Default for Gc<T> {
     fn default() -> Self {
         Gc::new(T::default())
+    }
+}
+
+impl<T: Collectable + ?Sized> std::fmt::Pointer for Gc<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Pointer::fmt(&addr_of!(**self), f)
     }
 }

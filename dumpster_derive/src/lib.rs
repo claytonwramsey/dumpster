@@ -41,18 +41,13 @@ pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let generics = add_trait_bounds(input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let (do_visitor, destroy_gcs) = delegate_methods(name, &input.data);
+    let do_visitor = delegate_methods(name, &input.data);
 
     let generated = quote! {
         unsafe impl #impl_generics dumpster::Collectable for #name #ty_generics #where_clause {
             #[inline]
             fn accept<V: dumpster::Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
                 #do_visitor
-            }
-
-            #[inline]
-            unsafe fn destroy_gcs<D: dumpster::Destroyer>(&mut self, destroyer: &mut D) {
-                #destroy_gcs
             }
         }
     };
@@ -72,7 +67,7 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
 
 #[allow(clippy::too_many_lines)]
 /// Generate method implementations for [`Collectable`] for some data type.
-fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
+fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
     match data {
         Data::Struct(data) => match data.fields {
             Fields::Named(ref f) => {
@@ -86,19 +81,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                     }
                 });
 
-                let delegate_destroy = f.named.iter().map(|f| {
-                    let name = &f.ident;
-                    quote_spanned! {f.span() =>
-                        dumpster::Collectable::destroy_gcs(
-                            &mut self.#name,
-                            destroyer
-                        );
-                    }
-                });
-                (
-                    quote! { #(#delegate_visit)* Ok(()) },
-                    quote! { #(#delegate_destroy)* },
-                )
+                quote! { #(#delegate_visit)* Ok(()) }
             }
             Fields::Unnamed(ref f) => {
                 let delegate_visit = f.unnamed.iter().enumerate().map(|(i, f)| {
@@ -111,23 +94,13 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                     }
                 });
 
-                let delegate_destroy = f.unnamed.iter().enumerate().map(|(i, f)| {
-                    let index = Index::from(i);
-                    quote_spanned! {f.span() =>
-                        dumpster::Collectable::destroy_gcs(&mut self.#index, destroyer);
-                    }
-                });
-                (
-                    quote! { #(#delegate_visit)* Ok(()) },
-                    quote! { #(#delegate_destroy)* },
-                )
+                quote! { #(#delegate_visit)* Ok(()) }
             }
-            Fields::Unit => (quote! { Ok(()) }, TokenStream::new()),
+            Fields::Unit => quote! { Ok(()) },
         },
         Data::Enum(e) => {
             let mut delegate_visit = TokenStream::new();
-            let mut delegate_destroy = TokenStream::new();
-            for var in e.variants.iter() {
+            for var in &e.variants {
                 let var_name = &var.ident;
 
                 match &var.fields {
@@ -165,8 +138,6 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                         delegate_visit.extend(
                             quote! {#name::#var_name{#binding} => {#execution_visit Ok(())},},
                         );
-                        delegate_destroy
-                            .extend(quote! {#name::#var_name{#binding} => {#execution_destroy},});
                     }
                     Fields::Unnamed(u) => {
                         let mut binding = TokenStream::new();
@@ -199,26 +170,19 @@ fn delegate_methods(name: &Ident, data: &Data) -> (TokenStream, TokenStream) {
                         delegate_visit.extend(
                             quote! {#name::#var_name(#binding) => {#execution_visit Ok(())},},
                         );
-                        delegate_destroy
-                            .extend(quote! {#name::#var_name(#binding) => {#execution_destroy},});
                     }
                     Fields::Unit => {
                         delegate_visit.extend(quote! {#name::#var_name => Ok(()),});
-                        delegate_destroy.extend(quote! {#name::#var_name => (),});
                     }
                 }
             }
 
-            (
-                quote! {match self {#delegate_visit}},
-                quote! {match self {#delegate_destroy}},
-            )
+            quote! {match self {#delegate_visit}}
         }
         Data::Union(u) => {
-            let stream = quote_spanned! {
+            quote_spanned! {
                 u.union_token.span => compile_error!("`Collectable` must be manually implemented for unions");
-            };
-            (stream.clone(), stream)
+            }
         }
     }
 }

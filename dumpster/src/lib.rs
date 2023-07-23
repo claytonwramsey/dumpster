@@ -53,6 +53,8 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 #![allow(clippy::multiple_crate_versions, clippy::result_unit_err)]
+#![feature(coerce_unsized)]
+#![feature(unsize)]
 
 use std::{
     fmt,
@@ -82,7 +84,7 @@ pub mod unsync;
 ///
 /// Implementing `Collectable` for a scalar type which contains no garbage-collected references
 /// is very easy.
-/// Accepting a visitor and destroying all garbage-collected fields is simply a no-op.
+/// Accepting a visitor is simply a no-op.
 ///
 /// ```
 /// use dumpster::{Collectable, Destroyer, Visitor};
@@ -93,12 +95,11 @@ pub mod unsync;
 ///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
 ///         Ok(())
 ///     }
-///     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {}
 /// }
 /// ```
 ///
 /// However, if a data structure contains a garbage collected pointer, it must delegate to its
-/// fields in `accept` and `destroy_gcs`.
+/// fields in `accept`.
 ///
 /// ```
 /// use dumpster::{unsync::Gc, Collectable, Destroyer, Visitor};
@@ -108,10 +109,6 @@ pub mod unsync;
 /// unsafe impl Collectable for Bar {
 ///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
 ///         self.0.accept(visitor)
-///     }
-///
-///     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
-///         self.0.destroy_gcs(destroyer);
 ///     }
 /// }
 /// ```
@@ -133,11 +130,6 @@ pub mod unsync;
 ///         self.b.accept(visitor)?;
 ///         Ok(())
 ///     }
-///
-///     unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D) {
-///         self.a.destroy_gcs(destroyer);
-///         self.b.destroy_gcs(destroyer);
-///     }
 /// }
 /// ```
 pub unsafe trait Collectable {
@@ -155,19 +147,9 @@ pub unsafe trait Collectable {
     ///
     /// Errors are returned from this function whenever a field of this object returns an error
     /// after delegating acceptance to it, or if this value's data is inaccessible (such as
-    /// attempting) to borrow from a [`RefCell`](std::cell::RefCell) which has already been
-    /// mutably borrowed.
+    /// attempting to borrow from a [`RefCell`](std::cell::RefCell) which has already been
+    /// mutably borrowed).
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()>;
-
-    /// Destroy all garbage-collected fields of this structure, immediately prior to dropping it.
-    ///
-    /// Implementors of this function need only delegate to all of their fields which may contain
-    /// a garbage-collected pointer, even if transitively.
-    ///
-    /// # Safety
-    ///
-    /// This function may not dereference any garbage-collected pointers during its execution.
-    unsafe fn destroy_gcs<D: Destroyer>(&mut self, destroyer: &mut D);
 }
 
 /// A visitor for a garbage collected value.
@@ -187,23 +169,6 @@ pub trait Visitor {
 
     /// Visit a thread-local garbage-collected pointer.
     fn visit_unsync<T>(&mut self, gc: &unsync::Gc<T>)
-    where
-        T: Collectable + ?Sized;
-}
-
-/// A destroyer for a garbage-collected pointer.
-///
-/// Unlike [`Visitor`], a `Destroyer` can mutate the garbage-collected pointers that it visits.
-/// This enables it to mark garbage-collected pointers for deletion during a bulk cleanp of the
-/// garbage collected value.
-pub trait Destroyer {
-    /// Visit a synchronized garbage-collected pointer.
-    fn visit_sync<T>(&mut self, gc: &mut sync::Gc<T>)
-    where
-        T: Collectable + Sync + ?Sized;
-
-    /// Visit a thread-local garbage-collected pointer.
-    fn visit_unsync<T>(&mut self, gc: &mut unsync::Gc<T>)
     where
         T: Collectable + ?Sized;
 }

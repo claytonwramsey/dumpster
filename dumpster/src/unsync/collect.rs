@@ -19,15 +19,14 @@
 //! Implementations of the single-threaded garbage-collection logic.
 
 use std::{
-    alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
     collections::{hash_map::Entry, HashMap, HashSet},
     num::NonZeroUsize,
     ops::Deref,
-    ptr::{addr_of_mut, drop_in_place, NonNull},
+    ptr::NonNull,
 };
 
-use crate::{unsync::Gc, Collectable, Destroyer, OpaquePtr, Visitor};
+use crate::{unsync::Gc, Collectable, OpaquePtr, Visitor};
 
 use super::GcBox;
 
@@ -85,9 +84,6 @@ struct Cleanup {
     /// The function which is called to sweep out and mark allocations reachable from this
     /// allocation as reachable.
     sweep_fn: unsafe fn(OpaquePtr, &mut Sweep),
-    /// The function which is called to destroy all [`Gc`]s owned by this allocation prior to
-    /// dropping it.
-    destroy_gcs_fn: unsafe fn(OpaquePtr, &mut DestroyGcs),
     /// An opaque pointer to the allocation.
     ptr: OpaquePtr,
 }
@@ -98,7 +94,6 @@ impl Cleanup {
         Cleanup {
             build_graph_fn: apply_visitor::<T, BuildRefGraph>,
             sweep_fn: apply_visitor::<T, Sweep>,
-            destroy_gcs_fn: destroy_gcs::<T>,
             ptr: OpaquePtr::new(box_ptr),
         }
     }
@@ -114,23 +109,6 @@ unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: OpaquePtr, vis
     let _ = specified.as_ref().value.accept(visitor);
 }
 
-/// Destroy the garbage-collected values of some opaquely-defined type.
-///
-/// # Safety
-///
-/// `T` must be the same type that `ptr` was created with via [`OpaquePtr::new`].
-unsafe fn destroy_gcs<T: Collectable + ?Sized>(ptr: OpaquePtr, destroyer: &mut DestroyGcs) {
-    let mut specific_ptr = ptr.specify::<GcBox<T>>();
-    specific_ptr.as_mut().ref_count.set(0);
-    specific_ptr.as_mut().value.destroy_gcs(destroyer);
-
-    destroyer.collection_queue.push((
-        specific_ptr.as_ptr().cast(),
-        Layout::for_value(specific_ptr.as_ref()),
-    ));
-    drop_in_place(addr_of_mut!(specific_ptr.as_mut().value));
-}
-
 impl Dumpster {
     /// Collect all unreachable allocations that this dumpster is responsible for.
     pub fn collect_all(&self) {
@@ -142,7 +120,7 @@ impl Dumpster {
                 ref_state: HashMap::new(),
             };
 
-            for (k, v) in self.to_collect.borrow().iter() {
+            for (k, v) in &*self.to_collect.borrow() {
                 if !ref_graph_build.visited.contains(k) {
                     ref_graph_build.visited.insert(*k);
                     (v.build_graph_fn)(v.ptr, &mut ref_graph_build);
@@ -171,22 +149,7 @@ impl Dumpster {
                 sweep.visited.insert(*id);
                 (cleanup.sweep_fn)(cleanup.ptr, &mut sweep);
             }
-
-            let mut destroy = DestroyGcs {
-                visited: HashSet::new(),
-                collection_queue: Vec::new(),
-                reachable: sweep.visited,
-            };
-            // any allocation not found in the sweep must be freed
-            for (id, cleanup) in self.to_collect.borrow_mut().drain() {
-                if !destroy.reachable.contains(&id) && destroy.visited.insert(id) {
-                    (cleanup.destroy_gcs_fn)(cleanup.ptr, &mut destroy);
-                }
-            }
-
-            for (ptr, layout) in destroy.collection_queue {
-                dealloc(ptr, layout);
-            }
+            // TODO finish cleaning up here
         }
     }
 
@@ -273,7 +236,7 @@ impl Visitor for BuildRefGraph {
     where
         T: Collectable + ?Sized,
     {
-        let next_id = AllocationId::from(gc.ptr.unwrap());
+        let next_id = AllocationId::from(gc.ptr);
         match self.ref_state.entry(next_id) {
             Entry::Occupied(ref mut o) => {
                 o.get_mut().cyclic_ref_count = o.get().cyclic_ref_count.saturating_add(1);
@@ -281,7 +244,7 @@ impl Visitor for BuildRefGraph {
             Entry::Vacant(v) => {
                 v.insert(Reachability {
                     cyclic_ref_count: NonZeroUsize::MIN,
-                    ptr: OpaquePtr::new(gc.ptr.unwrap()),
+                    ptr: OpaquePtr::new(gc.ptr),
                     sweep_fn: apply_visitor::<T, Sweep>,
                 });
             }
@@ -311,49 +274,8 @@ impl Visitor for Sweep {
     where
         T: Collectable + ?Sized,
     {
-        if self.visited.insert(AllocationId::from(gc.ptr.unwrap())) {
+        if self.visited.insert(AllocationId::from(gc.ptr)) {
             gc.deref().accept(self).unwrap();
-        }
-    }
-}
-
-/// The data used to destroy all garbage collected pointers in unreachable allocations.
-struct DestroyGcs {
-    /// The set of allocations which have been visited already.
-    visited: HashSet<AllocationId>,
-    /// The data used to call [`dealloc`] on an allocation, deferred until after the destruction of
-    /// all garbage-collected pointers is complete.
-    collection_queue: Vec<(*mut u8, Layout)>,
-    /// The set of allocations which are still reachable by the program.
-    /// These should not be destroyed!
-    reachable: HashSet<AllocationId>,
-}
-
-impl Destroyer for DestroyGcs {
-    fn visit_sync<T>(&mut self, _: &mut crate::sync::Gc<T>)
-    where
-        T: Collectable + Sync + ?Sized,
-    {
-        // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
-        // immediately.
-    }
-
-    fn visit_unsync<T>(&mut self, gc: &mut Gc<T>)
-    where
-        T: Collectable + ?Sized,
-    {
-        unsafe {
-            if let Some(mut p) = gc.ptr {
-                let id = AllocationId::from(p);
-                gc.ptr = None;
-                if !self.reachable.contains(&id) && self.visited.insert(id) {
-                    p.as_mut().ref_count.set(0);
-                    p.as_mut().value.destroy_gcs(self);
-                    self.collection_queue
-                        .push((p.as_ptr().cast(), Layout::for_value(p.as_ref())));
-                    drop_in_place(addr_of_mut!(p.as_mut().value));
-                }
-            }
         }
     }
 }
