@@ -26,7 +26,6 @@ use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
     marker::{PhantomData, Unsize},
-    num::NonZeroUsize,
     ops::{CoerceUnsized, Deref},
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
     sync::Mutex,
@@ -63,7 +62,7 @@ where
     /// mutual exclusion when searching for cycles, preventing a malicious thread from fooling us
     /// into believing that an allocation is unreachable (therefore, preventing us from
     /// accidentally UAFing)
-    ref_count: Mutex<NonZeroUsize>,
+    ref_count: Mutex<usize>,
     /// The actual data stored in the allocation.
     value: T,
 }
@@ -99,7 +98,7 @@ where
         DUMPSTER.notify_created_gc();
         Gc {
             ptr: Box::leak(Box::new(GcBox {
-                ref_count: Mutex::new(NonZeroUsize::MIN),
+                ref_count: Mutex::new(1),
                 value,
             }))
             .into(),
@@ -153,9 +152,10 @@ where
             {
                 // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
                 let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
-                match count_handle.get() {
+                match *count_handle {
                     0 => (),
                     1 => {
+                        *count_handle = 0;
                         drop(count_handle); // must drop handle before dropping the mutex
 
                         DUMPSTER.mark_clean(self.ptr);
@@ -167,7 +167,7 @@ where
                         );
                     }
                     n => {
-                        *count_handle = NonZeroUsize::new(n - 1).unwrap();
+                        *count_handle = n - 1;
                         drop(count_handle);
                         DUMPSTER.mark_dirty(self.ptr);
                         DUMPSTER.notify_dropped_gc();

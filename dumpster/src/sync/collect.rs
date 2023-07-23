@@ -22,7 +22,6 @@ use std::{
     alloc::{dealloc, Layout},
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take},
-    num::NonZeroUsize,
     ptr::{drop_in_place, NonNull},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -64,7 +63,7 @@ pub(super) struct Dumpster {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 /// A unique identifier for an allocation.
-struct AllocationId(NonNull<Mutex<NonZeroUsize>>);
+struct AllocationId(NonNull<Mutex<usize>>);
 
 unsafe impl Send for AllocationId {}
 unsafe impl Sync for AllocationId {}
@@ -83,7 +82,7 @@ type BuildFn = unsafe fn(
     OpaquePtr,
     AllocationId,
     &mut HashMap<AllocationId, Node>,
-    &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
+    &mut HashMap<AllocationId, MutexGuard<'static, usize>>,
 );
 
 #[derive(Debug)]
@@ -244,14 +243,14 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     ptr: OpaquePtr,
     starting_id: AllocationId,
     ref_graph: &mut HashMap<AllocationId, Node>,
-    guards: &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
+    guards: &mut HashMap<AllocationId, MutexGuard<'static, usize>>,
 ) {
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
         match unsafe { starting_id.0.as_ref().try_lock() } {
             Ok(guard) => {
                 v.insert(Node::Unknown {
                     children: Vec::new(),
-                    n_unaccounted: guard.get(),
+                    n_unaccounted: *guard,
                     destroy_fn: destroy_opaque::<T>,
                     ptr,
                 });
@@ -301,7 +300,7 @@ struct BuildRefGraph<'a> {
     /// The currently-held mutex guards as we construct the graph.
     /// If an allocation has an entry in the reference graph, it should also be covered by a
     /// guard.
-    guards: &'a mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
+    guards: &'a mut HashMap<AllocationId, MutexGuard<'static, usize>>,
 }
 
 impl<'a> Visitor for BuildRefGraph<'a> {
@@ -340,7 +339,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 
                         let _ = v.insert(Node::Unknown {
                             children: Vec::new(),
-                            n_unaccounted: guard.get() - 1,
+                            n_unaccounted: *guard - 1,
                             destroy_fn: destroy_opaque::<T>,
                             ptr: OpaquePtr::new(gc.ptr),
                         });
@@ -386,7 +385,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 fn sweep_delete_guards(
     root: AllocationId,
     graph: &mut HashMap<AllocationId, Node>,
-    guards: &mut HashMap<AllocationId, MutexGuard<'static, NonZeroUsize>>,
+    guards: &mut HashMap<AllocationId, MutexGuard<'static, usize>>,
 ) {
     let node = graph.get_mut(&root).unwrap();
     if let Node::Unknown { children, .. } = replace(node, Node::Reachable) {
