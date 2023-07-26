@@ -25,7 +25,8 @@ mod tests;
 use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
-    marker::{PhantomData, Unsize},
+    cell::Cell,
+    marker::Unsize,
     ops::{CoerceUnsized, Deref},
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
     sync::Mutex,
@@ -33,7 +34,7 @@ use std::{
 
 use crate::{Collectable, Visitor};
 
-use self::collect::DUMPSTER;
+use self::collect::{CLEANING, DUMPSTER};
 
 /// A thread-safe garbage-collected pointer.
 pub struct Gc<T>
@@ -46,8 +47,6 @@ where
     /// This pointer will only be null if it has been 'destroyed' and is about to be cleaned up.
     /// I do not use `Option<NonNull<T>` because it doesn't implement `CoerceUnsized`.
     ptr: NonNull<GcBox<T>>,
-    /// Phantom data to ensure correct lifetime analysis.
-    _phantom: PhantomData<T>,
 }
 
 #[repr(C)]
@@ -102,7 +101,6 @@ where
                 value,
             }))
             .into(),
-            _phantom: PhantomData,
         }
     }
 }
@@ -136,10 +134,7 @@ where
         DUMPSTER.notify_created_gc();
         // If we can clone a Gc pointing to this allocation, it must be accessible
         DUMPSTER.mark_clean(self.ptr);
-        Gc {
-            ptr: self.ptr,
-            _phantom: PhantomData,
-        }
+        Gc { ptr: self.ptr }
     }
 }
 
@@ -148,8 +143,8 @@ where
     T: Collectable + Sync + ?Sized,
 {
     fn drop(&mut self) {
-        unsafe {
-            {
+        if !CLEANING.with(Cell::get) {
+            unsafe {
                 // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
                 let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
                 match *count_handle {

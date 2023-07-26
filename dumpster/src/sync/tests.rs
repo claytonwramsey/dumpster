@@ -53,8 +53,10 @@ fn single_alloc() {
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&DROP_COUNT));
 
+    collect_await();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
+    collect_await();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 

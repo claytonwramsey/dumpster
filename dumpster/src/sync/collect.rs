@@ -20,6 +20,7 @@
 
 use std::{
     alloc::{dealloc, Layout},
+    cell::Cell,
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take},
     ptr::{drop_in_place, NonNull},
@@ -45,6 +46,11 @@ pub(super) static DUMPSTER: Dumpster = Dumpster {
     n_gcs_dropped: AtomicUsize::new(0),
     n_gcs_existing: AtomicUsize::new(0),
 };
+
+thread_local! {
+    /// Whether the currently-running thread is doing a cleanup.
+    pub(super) static CLEANING: Cell<bool> = Cell::new(false);
+}
 
 /// A structure containing the global information for the garbage collector.
 pub(super) struct Dumpster {
@@ -109,6 +115,8 @@ enum Node {
         n_unaccounted: usize,
         /// A function used to destroy the allocation.
         destroy_fn: unsafe fn(OpaquePtr),
+        /// A function used to decrement outbound reference counts to reachable nodes.
+        decrement_fn: unsafe fn(OpaquePtr, &HashMap<AllocationId, Node>),
         /// A pointer to the allocation.
         ptr: OpaquePtr,
     },
@@ -144,6 +152,18 @@ impl Dumpster {
             sweep(root_id, &mut ref_graph);
         }
 
+        println!("swept ref graph: {ref_graph:?}");
+
+        for (decrement_fn, &ptr) in ref_graph.iter().filter_map(|(_, v)| match v {
+            Node::Reachable => None,
+            Node::Unknown {
+                decrement_fn, ptr, ..
+            } => Some((decrement_fn, ptr)),
+        }) {
+            unsafe { decrement_fn(ptr, &ref_graph) };
+        }
+
+        CLEANING.with(|c| c.set(true));
         for (destroy_fn, ptr) in ref_graph.into_iter().filter_map(|(_, v)| match v {
             Node::Reachable => None,
             Node::Unknown {
@@ -152,6 +172,7 @@ impl Dumpster {
         }) {
             unsafe { destroy_fn(ptr) };
         }
+        CLEANING.with(|c| c.set(false));
         drop(collecting_guard);
     }
 
@@ -252,6 +273,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                     children: Vec::new(),
                     n_unaccounted: *guard,
                     destroy_fn: destroy_opaque::<T>,
+                    decrement_fn: decrement_reachable_count::<T>,
                     ptr,
                 });
                 guards.insert(starting_id, guard);
@@ -341,6 +363,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                             children: Vec::new(),
                             n_unaccounted: *guard - 1,
                             destroy_fn: destroy_opaque::<T>,
+                            decrement_fn: decrement_reachable_count::<T>,
                             ptr: OpaquePtr::new(gc.ptr),
                         });
                         self.guards.insert(new_id, guard);
@@ -423,4 +446,44 @@ impl Drop for Dumpster {
     fn drop(&mut self) {
         self.collect_all();
     }
+}
+
+/// Decrement the reference count all reachable allocations pointed to by the value stored in `ptr`.
+unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
+    ptr: OpaquePtr,
+    ref_graph: &HashMap<AllocationId, Node>,
+) {
+    /// A visitor for decrementing the reference count of pointees.
+    struct DecrementOutboundReferenceCounts<'a> {
+        /// The reference graph.
+        /// Must have been populated with reachabiltiy already.
+        ref_graph: &'a HashMap<AllocationId, Node>,
+    }
+
+    impl Visitor for DecrementOutboundReferenceCounts<'_> {
+        fn visit_sync<T>(&mut self, gc: &crate::sync::Gc<T>)
+        where
+            T: Collectable + Sync + ?Sized,
+        {
+            unsafe {
+                let id = AllocationId::from(gc.ptr);
+                if let Node::Reachable = self.ref_graph[&id] {
+                    *id.0.as_ref().lock().unwrap() -= 1;
+                }
+            }
+        }
+
+        fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
+        where
+            T: Collectable + ?Sized,
+        {
+            unreachable!("no unsync members of sync Gc possible!");
+        }
+    }
+
+    ptr.specify::<GcBox<T>>()
+        .as_ref()
+        .value
+        .accept(&mut DecrementOutboundReferenceCounts { ref_graph })
+        .expect("allocation assumed to be unreachable but somehow was accessed");
 }
