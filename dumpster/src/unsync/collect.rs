@@ -115,8 +115,8 @@ impl Dumpster {
 
         unsafe {
             let mut ref_graph_build = BuildRefGraph {
-                visited: HashSet::new(),
-                ref_state: HashMap::new(),
+                visited: HashSet::with_capacity(self.to_collect.borrow().len()),
+                ref_state: HashMap::with_capacity(self.to_collect.borrow().len()),
             };
 
             for (k, v) in &*self.to_collect.borrow() {
@@ -127,7 +127,7 @@ impl Dumpster {
             }
 
             let mut sweep = Sweep {
-                visited: HashSet::new(),
+                visited: HashSet::with_capacity(ref_graph_build.visited.len()),
             };
             for (id, reachability) in ref_graph_build
                 .ref_state
