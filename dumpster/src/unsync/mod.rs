@@ -22,7 +22,8 @@ use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
     cell::Cell,
-    ops::Deref,
+    marker::Unsize,
+    ops::{CoerceUnsized, Deref},
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
 };
 
@@ -126,31 +127,33 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// points to will be destroyed.
     fn drop(&mut self) {
         DUMPSTER.with(|d| {
-            unsafe {
-                let box_ref = self.ptr.as_ref();
-                match box_ref.ref_count.get() {
-                    0 => (), // allocation is already being destroyed
-                    1 => {
-                        d.mark_cleaned(self.ptr);
-                        // this was the last reference, drop unconditionally
-                        drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
-                        // note: `box_ref` is no longer usable
-                        dealloc(
-                            self.ptr.as_ptr().cast::<u8>(),
-                            Layout::for_value(self.ptr.as_ref()),
-                        );
+            if !d.collecting() {
+                unsafe {
+                    let box_ref = self.ptr.as_ref();
+                    match box_ref.ref_count.get() {
+                        0 => (), // allocation is already being destroyed
+                        1 => {
+                            d.mark_cleaned(self.ptr);
+                            // this was the last reference, drop unconditionally
+                            drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                            // note: `box_ref` is no longer usable
+                            dealloc(
+                                self.ptr.as_ptr().cast::<u8>(),
+                                Layout::for_value(self.ptr.as_ref()),
+                            );
+                        }
+                        n => {
+                            // decrement the ref count - but another reference to this data still
+                            // lives
+                            box_ref.ref_count.set(n - 1);
+                            // remaining references could be a cycle - therefore, mark it as dirty
+                            // so we can check later
+                            d.mark_dirty(self.ptr);
+                        }
                     }
-                    n => {
-                        // decrement the ref count - but another reference to this data still
-                        // lives
-                        box_ref.ref_count.set(n - 1);
-                        // remaining references could be a cycle - therefore, mark it as dirty
-                        // so we can check later
-                        d.mark_dirty(self.ptr);
-                    }
+                    // Notify that a GC has been dropped, potentially triggering a sweep
+                    d.notify_dropped_gc();
                 }
-                // Notify that a GC has been dropped, potentially triggering a sweep
-                d.notify_dropped_gc();
             }
         });
     }
@@ -185,4 +188,11 @@ impl<T: Collectable + ?Sized> std::fmt::Pointer for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Pointer::fmt(&addr_of!(**self), f)
     }
+}
+
+impl<T, U> CoerceUnsized<Gc<U>> for Gc<T>
+where
+    T: Unsize<U> + Collectable + Sync + ?Sized,
+    U: Collectable + Sync + ?Sized,
+{
 }

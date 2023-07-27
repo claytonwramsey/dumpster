@@ -19,11 +19,11 @@
 //! Implementations of the single-threaded garbage-collection logic.
 
 use std::{
+    alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
     collections::{hash_map::Entry, HashMap, HashSet},
-    num::NonZeroUsize,
     ops::Deref,
-    ptr::NonNull,
+    ptr::{drop_in_place, NonNull},
 };
 
 use crate::{unsync::Gc, Collectable, OpaquePtr, Visitor};
@@ -36,6 +36,7 @@ thread_local! {
         to_collect: RefCell::new(HashMap::new()),
         n_ref_drops: Cell::new(0),
         n_refs_living: Cell::new(0),
+        collecting: Cell::new(false),
     };
 }
 
@@ -49,6 +50,8 @@ pub(super) struct Dumpster {
     n_ref_drops: Cell<usize>,
     /// The number of references that currently exist in the entire heap and stack.
     n_refs_living: Cell<usize>,
+    /// Whether the current thread is running a cleanup process.
+    collecting: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -56,13 +59,6 @@ pub(super) struct Dumpster {
 ///
 /// It contains a pointer to the reference count of the allocation.
 struct AllocationId(pub NonNull<Cell<usize>>);
-
-impl AllocationId {
-    /// Get the reference count of the allocation that this allocation ID points to.
-    unsafe fn count(self) -> usize {
-        self.0.as_ref().get()
-    }
-}
 
 impl<T> From<NonNull<GcBox<T>>> for AllocationId
 where
@@ -84,6 +80,8 @@ struct Cleanup {
     /// The function which is called to sweep out and mark allocations reachable from this
     /// allocation as reachable.
     sweep_fn: unsafe fn(OpaquePtr, &mut Sweep),
+    /// A function used for dropping the allocation.
+    drop_fn: unsafe fn(OpaquePtr, &mut DropAlloc<'_>),
     /// An opaque pointer to the allocation.
     ptr: OpaquePtr,
 }
@@ -94,6 +92,7 @@ impl Cleanup {
         Cleanup {
             build_graph_fn: apply_visitor::<T, BuildRefGraph>,
             sweep_fn: apply_visitor::<T, Sweep>,
+            drop_fn: drop_assist::<T>,
             ptr: OpaquePtr::new(box_ptr),
         }
     }
@@ -133,7 +132,7 @@ impl Dumpster {
             for (id, reachability) in ref_graph_build
                 .ref_state
                 .iter()
-                .filter(|(id, reachability)| id.count() != reachability.cyclic_ref_count.into())
+                .filter(|(_, reachability)| reachability.n_unaccounted != 0)
             {
                 sweep.visited.insert(*id);
                 (reachability.sweep_fn)(reachability.ptr, &mut sweep);
@@ -149,7 +148,22 @@ impl Dumpster {
                 sweep.visited.insert(*id);
                 (cleanup.sweep_fn)(cleanup.ptr, &mut sweep);
             }
-            // TODO finish cleaning up here
+
+            let mut decrementer = DropAlloc {
+                visited: HashSet::new(),
+                reachable: &sweep.visited,
+            };
+
+            self.collecting.set(true);
+            for cleanup in self
+                .to_collect
+                .borrow_mut()
+                .drain()
+                .filter_map(|(id, cleanup)| (!sweep.visited.contains(&id)).then_some(cleanup))
+            {
+                (cleanup.drop_fn)(cleanup.ptr, &mut decrementer);
+            }
+            self.collecting.set(false);
         }
     }
 
@@ -194,6 +208,11 @@ impl Dumpster {
     pub fn notify_created_gc(&self) {
         self.n_refs_living.set(self.n_refs_living.get() + 1);
     }
+
+    /// Determine whether this dumpster is currently running a collection process.
+    pub fn collecting(&self) -> bool {
+        self.collecting.get()
+    }
 }
 
 impl Drop for Dumpster {
@@ -214,9 +233,9 @@ struct BuildRefGraph {
 #[derive(Debug)]
 /// Information about the reachability of a structure.
 struct Reachability {
-    /// The number of references found to this structure which are contained within the heap.
-    /// If this number is equal to the allocations reference count, it is unreachable.
-    cyclic_ref_count: NonZeroUsize,
+    /// The number of unaccounted-for references to this allocation.
+    /// If this number is 0, the reference is not a root.
+    n_unaccounted: usize,
     /// An opaque pointer to the allocation under concern.
     ptr: OpaquePtr,
     /// A function used to sweep from `ptr` if this allocation is proven reachable.
@@ -239,11 +258,11 @@ impl Visitor for BuildRefGraph {
         let next_id = AllocationId::from(gc.ptr);
         match self.ref_state.entry(next_id) {
             Entry::Occupied(ref mut o) => {
-                o.get_mut().cyclic_ref_count = o.get().cyclic_ref_count.saturating_add(1);
+                o.get_mut().n_unaccounted -= 1;
             }
             Entry::Vacant(v) => {
                 v.insert(Reachability {
-                    cyclic_ref_count: NonZeroUsize::MIN,
+                    n_unaccounted: unsafe { next_id.0.as_ref().get() - 1 },
                     ptr: OpaquePtr::new(gc.ptr),
                     sweep_fn: apply_visitor::<T, Sweep>,
                 });
@@ -277,5 +296,63 @@ impl Visitor for Sweep {
         if self.visited.insert(AllocationId::from(gc.ptr)) {
             gc.deref().accept(self).unwrap();
         }
+    }
+}
+
+/// A visitor for dropping allocations.
+struct DropAlloc<'a> {
+    /// The set of unreachable allocations we've already visited.
+    visited: HashSet<AllocationId>,
+    /// The set of unreachable allocations.
+    reachable: &'a HashSet<AllocationId>,
+}
+
+impl Visitor for DropAlloc<'_> {
+    fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
+    where
+        T: Collectable + Sync + ?Sized,
+    {
+        // do nothing
+    }
+
+    fn visit_unsync<T>(&mut self, gc: &Gc<T>)
+    where
+        T: Collectable + ?Sized,
+    {
+        let id = AllocationId::from(gc.ptr);
+        if self.reachable.contains(&id) {
+            unsafe {
+                let cell_ref = id.0.as_ref();
+                cell_ref.set(cell_ref.get() - 1);
+            }
+        } else if self.visited.insert(id) {
+            (**gc).accept(self).unwrap();
+            unsafe {
+                let layout = Layout::for_value(gc.ptr.as_ref());
+                drop_in_place(gc.ptr.as_ptr());
+                dealloc(gc.ptr.as_ptr().cast(), layout);
+            }
+        }
+    }
+}
+
+/// Decrement the outbound reference counts for any reachable allocations which this allocation can
+/// find.
+/// Also, drop the allocation when done.
+unsafe fn drop_assist<T: Collectable + ?Sized>(ptr: OpaquePtr, visitor: &mut DropAlloc<'_>) {
+    if visitor
+        .visited
+        .insert(AllocationId::from(ptr.specify::<GcBox<T>>()))
+    {
+        ptr.specify::<GcBox<T>>()
+            .as_ref()
+            .value
+            .accept(visitor)
+            .unwrap();
+
+        let mut_spec = ptr.specify::<GcBox<T>>().as_mut();
+        let layout = Layout::for_value(mut_spec);
+        drop_in_place(mut_spec);
+        dealloc((mut_spec as *mut GcBox<T>).cast(), layout);
     }
 }

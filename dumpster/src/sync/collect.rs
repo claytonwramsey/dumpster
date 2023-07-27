@@ -152,8 +152,6 @@ impl Dumpster {
             sweep(root_id, &mut ref_graph);
         }
 
-        println!("swept ref graph: {ref_graph:?}");
-
         for (decrement_fn, &ptr) in ref_graph.iter().filter_map(|(_, v)| match v {
             Node::Reachable => None,
             Node::Unknown {
@@ -468,6 +466,10 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
             unsafe {
                 let id = AllocationId::from(gc.ptr);
                 if let Node::Reachable = self.ref_graph[&id] {
+                    // We know that this node is a root or reachable from a root, so we need not
+                    // bother adding it to a collection queue.
+                    // We also know this won't zero out the reference count or underflow for the
+                    // same reason.
                     *id.0.as_ref().lock().unwrap() -= 1;
                 }
             }

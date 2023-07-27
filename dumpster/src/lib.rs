@@ -87,7 +87,7 @@ pub mod unsync;
 /// Accepting a visitor is simply a no-op.
 ///
 /// ```
-/// use dumpster::{Collectable, Destroyer, Visitor};
+/// use dumpster::{Collectable, Visitor};
 ///
 /// struct Foo(u8);
 ///
@@ -102,7 +102,7 @@ pub mod unsync;
 /// fields in `accept`.
 ///
 /// ```
-/// use dumpster::{unsync::Gc, Collectable, Destroyer, Visitor};
+/// use dumpster::{unsync::Gc, Collectable, Visitor};
 ///
 /// struct Bar(Gc<Bar>);
 ///
@@ -117,7 +117,7 @@ pub mod unsync;
 /// delegate to both fields in a consistent order:
 ///
 /// ```
-/// use dumpster::{unsync::Gc, Collectable, Destroyer, Visitor};
+/// use dumpster::{unsync::Gc, Collectable, Visitor};
 ///
 /// struct Baz {
 ///     a: Gc<Baz>,

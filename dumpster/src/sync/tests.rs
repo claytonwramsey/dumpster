@@ -265,7 +265,7 @@ fn eventually_collect_await() {
     drop(gc1);
     drop(gc2);
 
-    for _ in 0..100 {
+    for _ in 0..1000 {
         let gc = Gc::new(());
         drop(gc);
     }
