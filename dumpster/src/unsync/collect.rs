@@ -149,8 +149,9 @@ impl Dumpster {
                 (cleanup.sweep_fn)(cleanup.ptr, &mut sweep);
             }
 
+            ref_graph_build.visited.clear();
             let mut decrementer = DropAlloc {
-                visited: HashSet::new(),
+                visited: ref_graph_build.visited,
                 reachable: &sweep.visited,
             };
 
