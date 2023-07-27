@@ -133,8 +133,8 @@ impl Dumpster {
         let collecting_guard = self.collecting_lock.read().unwrap();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.to_clean.write().unwrap());
-        let mut ref_graph = HashMap::new();
-        let mut guards = HashMap::new();
+        let mut ref_graph = HashMap::with_capacity(to_collect.len());
+        let mut guards = HashMap::with_capacity(to_collect.len());
 
         for (id, cleanup) in to_collect {
             unsafe { (cleanup.build_fn)(cleanup.ptr, id, &mut ref_graph, &mut guards) };
