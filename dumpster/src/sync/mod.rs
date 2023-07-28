@@ -23,12 +23,11 @@ mod collect;
 mod tests;
 
 use std::{
-    alloc::{dealloc, Layout},
     borrow::Borrow,
     cell::Cell,
     marker::Unsize,
     ops::{CoerceUnsized, Deref},
-    ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
+    ptr::{addr_of, NonNull},
     sync::Mutex,
 };
 
@@ -149,18 +148,23 @@ where
                 let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
                 match *count_handle {
                     0 => (),
-                    1 => {
-                        *count_handle = 0;
-                        drop(count_handle); // must drop handle before dropping the mutex
+                    /*
+                      We would like to be able to drop this allocation if n = 1 but it may be that
+                      another thread is cleaning it up, so we can't do anything about it
+                      without causing a data race.
+                    */
+                    // 1 => {
+                    //     *count_handle = 0;
+                    //     drop(count_handle); // must drop handle before dropping the mutex
 
-                        DUMPSTER.mark_clean(self.ptr);
+                    //     DUMPSTER.mark_clean(self.ptr);
 
-                        drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
-                        dealloc(
-                            self.ptr.as_ptr().cast(),
-                            Layout::for_value(self.ptr.as_ref()),
-                        );
-                    }
+                    //     drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                    //     dealloc(
+                    //         self.ptr.as_ptr().cast(),
+                    //         Layout::for_value(self.ptr.as_ref()),
+                    //     );
+                    // }
                     n => {
                         *count_handle = n - 1;
                         drop(count_handle);
