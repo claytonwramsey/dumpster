@@ -36,7 +36,7 @@ fn single_threaded<M: Multiref>(name: &str) {
                     // add a reference
                     if gcs.len() > 1 {
                         let from = fastrand::usize(0..gcs.len());
-                        let to = (from + fastrand::usize(1..gcs.len())) % gcs.len();
+                        let to = fastrand::usize(0..gcs.len());
                         let new_gc = gcs[to].clone();
                         gcs[from].apply(|v| v.push(new_gc));
                     }
