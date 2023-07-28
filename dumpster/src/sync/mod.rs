@@ -165,9 +165,9 @@ where
                         *count_handle = n - 1;
                         drop(count_handle);
                         DUMPSTER.mark_dirty(self.ptr);
-                        DUMPSTER.notify_dropped_gc();
                     }
                 }
+                DUMPSTER.notify_dropped_gc();
             }
         }
     }
