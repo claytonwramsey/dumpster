@@ -130,7 +130,6 @@ impl Dumpster {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     pub fn collect_all(&self) {
-        println!("collecting all");
         let collecting_guard = self.collecting_lock.read().unwrap();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.to_clean.write().unwrap());
@@ -190,7 +189,6 @@ impl Dumpster {
         let prev_gcs_existing = self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
         assert_ne!(prev_gcs_existing, 0, "underflow on number of existing GCs");
 
-        println!("prev: {prev_gcs_dropped}; existing: {prev_gcs_existing}");
         if prev_gcs_dropped >= prev_gcs_existing >> 1 && prev_gcs_dropped > 0 {
             self.collect_all();
         }
