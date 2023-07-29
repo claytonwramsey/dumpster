@@ -37,6 +37,29 @@ use crate::{Collectable, Visitor};
 use self::collect::{CLEANING, DUMPSTER};
 
 /// A thread-safe garbage-collected pointer.
+///
+/// This pointer can be duplicated and then shared across threads.
+/// Garbage collection is performed concurrently.
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::sync::Gc;
+/// use std::sync::atomic::{AtomicUsize, Ordering};
+///
+/// let shared = Gc::new(AtomicUsize::new(0));
+///
+/// std::thread::scope(|s| {
+///     s.spawn(|| {
+///         let other_gc = shared.clone();
+///         other_gc.store(1, Ordering::Relaxed);
+///     });
+///
+///     shared.store(2, Ordering::Relaxed);
+/// });
+///
+/// println!("{}", shared.load(Ordering::Relaxed));
+/// ```
 pub struct Gc<T>
 where
     T: Collectable + Sync + ?Sized + 'static,

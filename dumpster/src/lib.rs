@@ -163,11 +163,17 @@ pub unsafe trait Collectable {
 /// on which type of pointer it is.
 pub trait Visitor {
     /// Visit a synchronized garbage-collected pointer.
+    ///
+    /// This function is called for every [`sync::Gc`] owned by the value that accepted this
+    /// visitor.
     fn visit_sync<T>(&mut self, gc: &sync::Gc<T>)
     where
         T: Collectable + Sync + ?Sized;
 
     /// Visit a thread-local garbage-collected pointer.
+    ///
+    /// This function is called for every [`unsync::Gc`] owned by the value that accepted this
+    /// visitor.
     fn visit_unsync<T>(&mut self, gc: &unsync::Gc<T>)
     where
         T: Collectable + ?Sized;
