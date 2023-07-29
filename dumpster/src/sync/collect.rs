@@ -36,7 +36,7 @@ use once_cell::sync::Lazy;
 
 use crate::{Collectable, OpaquePtr, Visitor};
 
-use super::{Gc, GcBox};
+use super::{Gc, GcBox, RefCounts};
 
 /// The global collection of allocations to clean up.
 // wishing dreams: chashmap gets a const new function so that we can remove the once cell
@@ -69,7 +69,7 @@ pub(super) struct Dumpster {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 /// A unique identifier for an allocation.
-struct AllocationId(NonNull<Mutex<usize>>);
+struct AllocationId(NonNull<Mutex<RefCounts>>);
 
 unsafe impl Send for AllocationId {}
 unsafe impl Sync for AllocationId {}
@@ -88,7 +88,7 @@ type BuildFn = unsafe fn(
     OpaquePtr,
     AllocationId,
     &mut HashMap<AllocationId, Node>,
-    &mut HashMap<AllocationId, MutexGuard<'static, usize>>,
+    &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 );
 
 #[derive(Debug)]
@@ -130,13 +130,15 @@ impl Dumpster {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     pub fn collect_all(&self) {
-        let collecting_guard = self.collecting_lock.read().unwrap();
+        let collecting_guard = self.collecting_lock.write().unwrap();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.to_clean.write().unwrap());
+        let mut weaks = Vec::with_capacity(to_collect.len());
         let mut ref_graph = HashMap::with_capacity(to_collect.len());
         let mut guards = HashMap::with_capacity(to_collect.len());
 
         for (id, cleanup) in to_collect {
+            weaks.push(id);
             unsafe { (cleanup.build_fn)(cleanup.ptr, id, &mut ref_graph, &mut guards) };
         }
 
@@ -161,6 +163,11 @@ impl Dumpster {
             unsafe { decrement_fn(ptr, &ref_graph) };
         }
 
+        for weak in weaks {
+            unsafe {
+                weak.0.as_ref().lock().unwrap().weak -= 1;
+            }
+        }
         CLEANING.with(|c| c.set(true));
         for (destroy_fn, ptr) in ref_graph.into_iter().filter_map(|(_, v)| match v {
             Node::Reachable => None,
@@ -176,7 +183,7 @@ impl Dumpster {
 
     /// Block this thread until all threads which are currently running a collection have finished.
     pub fn await_collection_end(&self) {
-        drop(self.collecting_lock.write().unwrap());
+        drop(self.collecting_lock.read().unwrap());
     }
 
     /// Notify this dumpster that a `Gc` was destroyed, and update the tracking count for the number
@@ -202,26 +209,36 @@ impl Dumpster {
 
     /// Mark an allocation as "dirty," implying that it may or may not be inaccessible and need to
     /// be cleaned up.
-    pub fn mark_dirty<T>(&self, allocation: NonNull<GcBox<T>>)
+    pub fn mark_dirty<T>(&self, allocation: NonNull<GcBox<T>>, guard: &mut MutexGuard<RefCounts>)
     where
         T: Collectable + Sync + ?Sized,
     {
-        self.to_clean
+        if self
+            .to_clean
             .read()
             .unwrap()
-            .insert(AllocationId::from(allocation), Cleanup::new(allocation));
+            .insert(AllocationId::from(allocation), Cleanup::new(allocation))
+            .is_none()
+        {
+            guard.weak += 1;
+        }
     }
 
     /// Mark an allocation as "clean," implying that it has already been cleaned up and does not
     /// need to be cleaned again.
-    pub fn mark_clean<T>(&self, allocation: NonNull<GcBox<T>>)
+    pub fn mark_clean<T>(&self, allocation: NonNull<GcBox<T>>, guard: &mut MutexGuard<RefCounts>)
     where
         T: Collectable + Sync + ?Sized,
     {
-        self.to_clean
+        if self
+            .to_clean
             .read()
             .unwrap()
-            .remove(&AllocationId::from(allocation));
+            .remove(&AllocationId::from(allocation))
+            .is_some()
+        {
+            guard.weak -= 1;
+        }
     }
 }
 
@@ -253,7 +270,7 @@ impl Cleanup {
 ///
 /// `ref_graph` will be expanded to include all allocations reachable from `ptr`.
 /// Any allocation which is of "unknown" status will also receive a mutex guard in `guards`.
-///
+///d
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
@@ -262,14 +279,14 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
     ptr: OpaquePtr,
     starting_id: AllocationId,
     ref_graph: &mut HashMap<AllocationId, Node>,
-    guards: &mut HashMap<AllocationId, MutexGuard<'static, usize>>,
+    guards: &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 ) {
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
         match unsafe { starting_id.0.as_ref().try_lock() } {
             Ok(guard) => {
                 v.insert(Node::Unknown {
                     children: Vec::new(),
-                    n_unaccounted: *guard,
+                    n_unaccounted: guard.strong,
                     destroy_fn: destroy_opaque::<T>,
                     decrement_fn: decrement_reachable_count::<T>,
                     ptr,
@@ -320,7 +337,7 @@ struct BuildRefGraph<'a> {
     /// The currently-held mutex guards as we construct the graph.
     /// If an allocation has an entry in the reference graph, it should also be covered by a
     /// guard.
-    guards: &'a mut HashMap<AllocationId, MutexGuard<'static, usize>>,
+    guards: &'a mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 }
 
 impl<'a> Visitor for BuildRefGraph<'a> {
@@ -359,7 +376,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 
                         let _ = v.insert(Node::Unknown {
                             children: Vec::new(),
-                            n_unaccounted: *guard - 1,
+                            n_unaccounted: guard.strong - 1,
                             destroy_fn: destroy_opaque::<T>,
                             decrement_fn: decrement_reachable_count::<T>,
                             ptr: OpaquePtr::new(gc.ptr),
@@ -406,13 +423,18 @@ impl<'a> Visitor for BuildRefGraph<'a> {
 fn sweep_delete_guards(
     root: AllocationId,
     graph: &mut HashMap<AllocationId, Node>,
-    guards: &mut HashMap<AllocationId, MutexGuard<'static, usize>>,
+    guards: &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 ) {
     let node = graph.get_mut(&root).unwrap();
     if let Node::Unknown { children, .. } = replace(node, Node::Reachable) {
         guards.remove(&root);
         for child in children {
             sweep_delete_guards(child, graph, guards);
+        }
+        unsafe {
+            // decrement weak count because we will not dereference it any more after proving it
+            // accesible
+            root.0.as_ref().lock().unwrap().weak -= 1;
         }
     }
 }
@@ -470,7 +492,7 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
                     // bother adding it to a collection queue.
                     // We also know this won't zero out the reference count or underflow for the
                     // same reason.
-                    *id.0.as_ref().lock().unwrap() -= 1;
+                    id.0.as_ref().lock().unwrap().strong -= 1;
                 }
             }
         }

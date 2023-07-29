@@ -23,11 +23,12 @@ mod collect;
 mod tests;
 
 use std::{
+    alloc::{dealloc, Layout},
     borrow::Borrow,
     cell::Cell,
     marker::Unsize,
     ops::{CoerceUnsized, Deref},
-    ptr::{addr_of, NonNull},
+    ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
     sync::Mutex,
 };
 
@@ -48,6 +49,19 @@ where
     ptr: NonNull<GcBox<T>>,
 }
 
+#[derive(Debug)]
+/// The reference counts for an allocation.
+struct RefCounts {
+    /// The "strong" count, which is the number of extant `Gc`s to this allocation.
+    /// If the strong count is zero, a value contained in the allocation may be dropped, but the
+    /// allocation itself must still be valid.
+    strong: usize,
+    /// The "weak" count, which is the number of references to this allocation stored in to-collect
+    /// buffers by the collection algorithm.
+    /// If the weak count is zero, the allocation may be destroyed.
+    weak: usize,
+}
+
 #[repr(C)]
 /// The backing allocation for a [`Gc`].
 struct GcBox<T>
@@ -60,7 +74,7 @@ where
     /// mutual exclusion when searching for cycles, preventing a malicious thread from fooling us
     /// into believing that an allocation is unreachable (therefore, preventing us from
     /// accidentally UAFing)
-    ref_count: Mutex<usize>,
+    ref_count: Mutex<RefCounts>,
     /// The actual data stored in the allocation.
     value: T,
 }
@@ -96,7 +110,7 @@ where
         DUMPSTER.notify_created_gc();
         Gc {
             ptr: Box::leak(Box::new(GcBox {
-                ref_count: Mutex::new(1),
+                ref_count: Mutex::new(RefCounts { strong: 1, weak: 0 }),
                 value,
             }))
             .into(),
@@ -126,13 +140,11 @@ where
     fn clone(&self) -> Gc<T> {
         unsafe {
             let mut ref_count_guard = self.ptr.as_ref().ref_count.lock().unwrap();
-            *ref_count_guard = ref_count_guard
-                .checked_add(1)
-                .expect("integer overflow when incrementing reference count");
+            ref_count_guard.strong += 1;
+            DUMPSTER.notify_created_gc();
+            // If we can clone a Gc pointing to this allocation, it must be accessible
+            DUMPSTER.mark_clean(self.ptr, &mut ref_count_guard);
         }
-        DUMPSTER.notify_created_gc();
-        // If we can clone a Gc pointing to this allocation, it must be accessible
-        DUMPSTER.mark_clean(self.ptr);
         Gc { ptr: self.ptr }
     }
 }
@@ -146,29 +158,24 @@ where
             unsafe {
                 // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
                 let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
-                match *count_handle {
+                match count_handle.strong {
                     0 => (),
-                    /*
-                      We would like to be able to drop this allocation if n = 1 but it may be that
-                      another thread is cleaning it up, so we can't do anything about it
-                      without causing a data race.
-                    */
-                    // 1 => {
-                    //     *count_handle = 0;
-                    //     drop(count_handle); // must drop handle before dropping the mutex
+                    1 => {
+                        count_handle.strong = 0;
 
-                    //     DUMPSTER.mark_clean(self.ptr);
+                        DUMPSTER.mark_clean(self.ptr, &mut count_handle);
+                        if count_handle.weak == 0 {
+                            drop(count_handle); // must drop handle before dropping the mutex
 
-                    //     drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
-                    //     dealloc(
-                    //         self.ptr.as_ptr().cast(),
-                    //         Layout::for_value(self.ptr.as_ref()),
-                    //     );
-                    // }
+                            let layout = Layout::for_value(self.ptr.as_ref());
+                            drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                            dealloc(self.ptr.as_ptr().cast(), layout);
+                        }
+                    }
                     n => {
-                        *count_handle = n - 1;
+                        count_handle.strong = n - 1;
+                        DUMPSTER.mark_dirty(self.ptr, &mut count_handle);
                         drop(count_handle);
-                        DUMPSTER.mark_dirty(self.ptr);
                     }
                 }
                 DUMPSTER.notify_dropped_gc();

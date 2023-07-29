@@ -69,13 +69,10 @@ fn ref_count() {
     let gc1 = Gc::new(DropCount(&DROP_COUNT));
     let gc2 = Gc::clone(&gc1);
 
-    collect_await();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
-    collect_await();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc2);
-    collect_await();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 
