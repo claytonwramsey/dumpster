@@ -160,3 +160,6 @@ collectable_trivial_impl!(AtomicI16);
 collectable_trivial_impl!(AtomicI32);
 collectable_trivial_impl!(AtomicI64);
 collectable_trivial_impl!(AtomicIsize);
+
+collectable_trivial_impl!(String);
+collectable_trivial_impl!(str);

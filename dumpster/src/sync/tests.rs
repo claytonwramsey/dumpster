@@ -16,7 +16,10 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    mem::size_of,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::Visitor;
 
@@ -276,4 +279,12 @@ fn eventually_collect_await() {
     // after enough time, gc1 and gc2 should have been collected
     assert_eq!(COUNT_1.load(Ordering::Acquire), 1);
     assert_eq!(COUNT_2.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn coerce_array() {
+    let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
+    let gc2: Gc<[u8]> = gc1;
+    assert_eq!(gc2.len(), 3);
+    assert_eq!(size_of::<Gc<[u8]>>(), 2 * size_of::<usize>());
 }

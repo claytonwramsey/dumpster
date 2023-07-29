@@ -23,6 +23,7 @@ use crate::Visitor;
 use super::*;
 use std::{
     cell::RefCell,
+    mem::size_of,
     sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
 };
 
@@ -247,4 +248,12 @@ fn double_borrow() {
     drop(gc);
     collect();
     assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn coerce_array() {
+    let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
+    let gc2: Gc<[u8]> = gc1;
+    assert_eq!(gc2.len(), 3);
+    assert_eq!(size_of::<Gc<[u8]>>(), 2 * size_of::<usize>());
 }
