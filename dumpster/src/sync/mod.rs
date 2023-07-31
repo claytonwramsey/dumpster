@@ -182,7 +182,6 @@ where
         }
         unsafe {
             // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
-            println!("lock count_handle");
             let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
             match count_handle.strong {
                 0 => (),
