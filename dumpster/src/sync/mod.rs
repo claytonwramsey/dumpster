@@ -28,7 +28,7 @@ use std::{
     cell::Cell,
     marker::Unsize,
     ops::{CoerceUnsized, Deref},
-    ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
+    ptr::{addr_of, drop_in_place, NonNull},
     sync::Mutex,
 };
 
@@ -193,7 +193,7 @@ where
                         drop(count_handle); // must drop handle before dropping the mutex
 
                         let layout = Layout::for_value(self.ptr.as_ref());
-                        drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                        drop_in_place(self.ptr.as_mut());
                         dealloc(self.ptr.as_ptr().cast(), layout);
                     }
                 }
