@@ -177,33 +177,34 @@ where
     T: Collectable + Sync + ?Sized,
 {
     fn drop(&mut self) {
-        if !CLEANING.with(Cell::get) {
-            unsafe {
-                // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
-                let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
-                match count_handle.strong {
-                    0 => (),
-                    1 => {
-                        count_handle.strong = 0;
+        if CLEANING.with(Cell::get) {
+            return;
+        }
+        unsafe {
+            // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
+            let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
+            match count_handle.strong {
+                0 => (),
+                1 => {
+                    count_handle.strong = 0;
 
-                        DUMPSTER.mark_clean(self.ptr, &mut count_handle);
-                        if count_handle.weak == 0 {
-                            drop(count_handle); // must drop handle before dropping the mutex
+                    DUMPSTER.mark_clean(self.ptr, &mut count_handle);
+                    if count_handle.weak == 0 {
+                        drop(count_handle); // must drop handle before dropping the mutex
 
-                            let layout = Layout::for_value(self.ptr.as_ref());
-                            drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
-                            dealloc(self.ptr.as_ptr().cast(), layout);
-                        }
-                    }
-                    n => {
-                        count_handle.strong = n - 1;
-                        DUMPSTER.mark_dirty(self.ptr, &mut count_handle);
-                        drop(count_handle);
+                        let layout = Layout::for_value(self.ptr.as_ref());
+                        drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                        dealloc(self.ptr.as_ptr().cast(), layout);
                     }
                 }
-                DUMPSTER.notify_dropped_gc();
+                n => {
+                    count_handle.strong = n - 1;
+                    DUMPSTER.mark_dirty(self.ptr, &mut count_handle);
+                    drop(count_handle);
+                }
             }
         }
+        DUMPSTER.notify_dropped_gc();
     }
 }
 
