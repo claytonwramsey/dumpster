@@ -115,6 +115,9 @@ enum Node {
         n_unaccounted: usize,
         /// A function used to destroy the allocation.
         destroy_fn: unsafe fn(OpaquePtr),
+        /// Function for dropping the allocation when its weak and strong count hits zero.
+        /// Should have the same behavior as dropping a Gc normally to a reference count of zero.
+        weak_drop_fn: unsafe fn(OpaquePtr),
         /// A function used to decrement outbound reference counts to reachable nodes.
         decrement_fn: unsafe fn(OpaquePtr, &HashMap<AllocationId, Node>),
         /// A pointer to the allocation.
@@ -122,7 +125,13 @@ enum Node {
     },
     /// The allocation here is reachable.
     /// No further information is needed.
-    Reachable,
+    Reachable {
+        /// Function for dropping the allocation when its weak and strong count hits zero.
+        /// Should have the same behavior as dropping a Gc normally to a reference count of zero.
+        weak_drop_fn: unsafe fn(OpaquePtr),
+        /// An erased pointer to the allocation.
+        ptr: OpaquePtr,
+    },
 }
 
 impl Dumpster {
@@ -138,17 +147,15 @@ impl Dumpster {
 
         for (id, cleanup) in to_collect {
             unsafe { (cleanup.build_fn)(cleanup.ptr, id, &mut ref_graph, &mut guards) };
-            guards
-                .get_mut(&id)
-                .expect("already created entry for id")
-                .weak -= 1;
+            // because we removed `id` from `to_collect`, reduce the weak count
+            guards.get_mut(&id).expect("should have created guard").weak -= 1;
         }
 
         drop(guards);
         let root_ids = ref_graph
             .iter()
             .filter_map(|(&k, v)| match v {
-                Node::Reachable => Some(k),
+                Node::Reachable { .. } => Some(k),
                 Node::Unknown { n_unaccounted, .. } => (*n_unaccounted > 0).then_some(k),
             })
             .collect::<Vec<_>>();
@@ -157,7 +164,7 @@ impl Dumpster {
         }
 
         for (decrement_fn, &ptr) in ref_graph.iter().filter_map(|(_, v)| match v {
-            Node::Reachable => None,
+            Node::Reachable { .. } => None,
             Node::Unknown {
                 decrement_fn, ptr, ..
             } => Some((decrement_fn, ptr)),
@@ -165,16 +172,35 @@ impl Dumpster {
             unsafe { decrement_fn(ptr, &ref_graph) };
         }
         CLEANING.with(|c| c.set(true));
-        for (destroy_fn, ptr) in ref_graph.into_iter().filter_map(|(_, v)| match v {
-            Node::Reachable => None,
-            Node::Unknown {
-                destroy_fn, ptr, ..
-            } => Some((destroy_fn, ptr)),
-        }) {
-            unsafe { destroy_fn(ptr) };
+        // set of allocations which must be destroyed because we were the last weak pointer to it
+        let mut weak_destroys = Vec::new();
+        for (id, node) in ref_graph {
+            match node {
+                Node::Unknown {
+                    destroy_fn, ptr, ..
+                } => unsafe { destroy_fn(ptr) },
+                Node::Reachable { weak_drop_fn, ptr } => unsafe {
+                    let mut guard = id.0.as_ref().lock().unwrap();
+                    assert!(guard.weak > 0);
+                    if guard.weak == 1 && guard.strong == 0 {
+                        // we are the last reference to the allocation.
+                        // mark to be cleaned up later
+                        // no real synchronization loss to storing the guard because we had the last
+                        // reference anyway
+                        weak_destroys.push((weak_drop_fn, ptr));
+                    } else {
+                        guard.weak -= 1;
+                    }
+                },
+            };
         }
         CLEANING.with(|c| c.set(false));
         drop(collecting_guard);
+        for (drop_fn, ptr) in weak_destroys {
+            unsafe {
+                drop_fn(ptr);
+            }
+        }
     }
 
     /// Block this thread until all threads which are currently running a collection have finished.
@@ -279,14 +305,16 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
 ) {
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
         match unsafe { starting_id.0.as_ref().try_lock() } {
-            Ok(guard) => {
+            Ok(mut guard) => {
                 v.insert(Node::Unknown {
                     children: Vec::new(),
                     n_unaccounted: guard.strong,
                     destroy_fn: destroy_opaque::<T>,
                     decrement_fn: decrement_reachable_count::<T>,
+                    weak_drop_fn: drop_weak_zero::<T>,
                     ptr,
                 });
+                guard.weak += 1;
                 guards.insert(starting_id, guard);
 
                 if ptr
@@ -300,9 +328,13 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                     })
                     .is_err()
                 {
-                    let Node::Unknown { children, .. } =
-                        replace(ref_graph.get_mut(&starting_id).unwrap(), Node::Reachable)
-                    else {
+                    let Node::Unknown { children, .. } = replace(
+                        ref_graph.get_mut(&starting_id).unwrap(),
+                        Node::Reachable {
+                            weak_drop_fn: drop_weak_zero::<T>,
+                            ptr,
+                        },
+                    ) else {
                         panic!("initial allocaiton magically marked as reachable by other thread?");
                     };
 
@@ -312,7 +344,10 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                 }
             }
             Err(TryLockError::WouldBlock) => {
-                v.insert(Node::Reachable);
+                v.insert(Node::Reachable {
+                    weak_drop_fn: drop_weak_zero::<T>,
+                    ptr,
+                });
             }
             _ => {
                 panic!("poisoned lock in Gc!");
@@ -360,13 +395,13 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                 } => {
                     *n_unaccounted -= 1;
                 }
-                Node::Reachable => (),
+                Node::Reachable { .. } => (),
             },
             Entry::Vacant(v) => {
                 // This allocation has never been visited by the reference graph builder.
                 // Attempt to acquire its lock.
                 match unsafe { new_id.0.as_ref().try_lock() } {
-                    Ok(guard) => {
+                    Ok(mut guard) => {
                         // This allocation is not currently being inspected by anything else and
                         // is therefore of unknown reachability.
 
@@ -375,8 +410,10 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                             n_unaccounted: guard.strong - 1,
                             destroy_fn: destroy_opaque::<T>,
                             decrement_fn: decrement_reachable_count::<T>,
+                            weak_drop_fn: drop_weak_zero::<T>,
                             ptr: OpaquePtr::new(gc.ptr),
                         });
+                        guard.weak += 1;
                         self.guards.insert(new_id, guard);
 
                         // Save the previously visited ID, then carry on to the next one
@@ -394,7 +431,10 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                     Err(TryLockError::WouldBlock) => {
                         // This allocation is currently being inspected by another thread and is
                         // therefore reachable.
-                        v.insert(Node::Reachable);
+                        v.insert(Node::Reachable {
+                            weak_drop_fn: drop_weak_zero::<T>,
+                            ptr: OpaquePtr::new(gc.ptr),
+                        });
                     }
                     _ => {
                         panic!("poisoned lock in Gc!");
@@ -422,10 +462,20 @@ fn sweep_delete_guards(
     guards: &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 ) {
     let node = graph.get_mut(&root).unwrap();
-    if let Node::Unknown { children, .. } = replace(node, Node::Reachable) {
+    if let Node::Unknown {
+        children,
+        weak_drop_fn,
+        ptr,
+        ..
+    } = node
+    {
+        let children = take(children);
+        let weak_drop_fn = *weak_drop_fn;
+        let ptr = *ptr;
+        *node = Node::Reachable { weak_drop_fn, ptr };
         guards.remove(&root);
         for child in children {
-            sweep_delete_guards(child, graph, guards);
+            sweep(child, graph);
         }
     }
 }
@@ -434,7 +484,17 @@ fn sweep_delete_guards(
 /// reachable.
 fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, Node>) {
     let node = graph.get_mut(&root).unwrap();
-    if let Node::Unknown { children, .. } = replace(node, Node::Reachable) {
+    if let Node::Unknown {
+        children,
+        weak_drop_fn,
+        ptr,
+        ..
+    } = node
+    {
+        let children = take(children);
+        let weak_drop_fn = *weak_drop_fn;
+        let ptr = *ptr;
+        *node = Node::Reachable { weak_drop_fn, ptr };
         for child in children {
             sweep(child, graph);
         }
@@ -478,7 +538,7 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
         {
             unsafe {
                 let id = AllocationId::from(gc.ptr);
-                if let Node::Reachable = self.ref_graph[&id] {
+                if let Node::Reachable { .. } = self.ref_graph[&id] {
                     // We know that this node is a root or reachable from a root, so we need not
                     // bother adding it to a collection queue.
                     // We also know this won't zero out the reference count or underflow for the
@@ -501,4 +561,18 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
         .value
         .accept(&mut DecrementOutboundReferenceCounts { ref_graph })
         .expect("allocation assumed to be unreachable but somehow was accessed");
+}
+
+/// Function for handling dropping an allocation when its weak and strong reference count reach
+/// zero.
+///
+/// # Safety
+///
+/// `ptr` must have been created as a pointer to a `GcBox<T>`.
+unsafe fn drop_weak_zero<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
+    let mut specified = ptr.specify::<GcBox<T>>();
+
+    let layout = Layout::for_value(specified.as_ref());
+    drop_in_place(specified.as_mut());
+    dealloc(specified.as_ptr().cast(), layout);
 }
