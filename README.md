@@ -44,9 +44,9 @@ struct Foo {
 }
 
 // Create a new garbage-collected Foo.
-let foo = Foo {
-   ptr: RefCell::new(None),
-}
+let foo = Gc::new(Foo {
+    ptr: RefCell::new(None),
+});
 
 // Insert a circular reference inside of the foo.
 *foo.ptr.borrow_mut() = Some(foo.clone());
@@ -64,8 +64,20 @@ dumpster::unsync::collect();
 
 ## Installation
 
-`dumpster` has not been published to [crates.io](https://crates.io) yet. 
+`dumpster` has not been published to [crates.io](https://crates.io) yet.
 Check back later for installation instructions.
+
+## Optional features
+
+`dumpster` provides one optional feature, `coerce-unsized`.
+This unsized types to be stored in a `Gc`.
+For example, the following code works (when compiling on nightly and the feature is enabled):
+
+```rust
+use dumpster::unsync::Gc;
+
+let gc: Gc<[u8]> = Gc::new([1, 2, 3]);
+```
 
 ## License
 
