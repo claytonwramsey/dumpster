@@ -22,6 +22,7 @@ use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
     cell::Cell,
+    num::NonZeroUsize,
     ops::Deref,
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
 };
@@ -70,7 +71,7 @@ struct GcBox<T: Collectable + ?Sized> {
     /// The number of extant references to this garbage-collected data.
     /// If the stored reference count is zero, then this value is a "zombie" - in the process of
     /// being dropped - and should not be dropped again.
-    ref_count: Cell<usize>,
+    ref_count: Cell<NonZeroUsize>,
     /// The stored value inside this garbage-collected box.
     value: T,
 }
@@ -84,7 +85,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
         DUMPSTER.with(Dumpster::notify_created_gc);
         Gc {
             ptr: Box::leak(Box::new(GcBox {
-                ref_count: Cell::new(1),
+                ref_count: Cell::new(NonZeroUsize::MIN),
                 value,
             }))
             .into(),
@@ -107,7 +108,9 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
     fn clone(&self) -> Self {
         unsafe {
             let box_ref = self.ptr.as_ref();
-            box_ref.ref_count.set(box_ref.ref_count.get() + 1);
+            box_ref
+                .ref_count
+                .set(box_ref.ref_count.get().saturating_add(1));
         }
         DUMPSTER.with(|d| {
             d.notify_created_gc();
@@ -131,8 +134,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
             }
             let box_ref = unsafe { self.ptr.as_ref() };
             match box_ref.ref_count.get() {
-                0 => (), // allocation is already being destroyed
-                1 => {
+                NonZeroUsize::MIN => {
                     d.mark_cleaned(self.ptr);
                     unsafe {
                         // this was the last reference, drop unconditionally
@@ -147,7 +149,9 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                 n => {
                     // decrement the ref count - but another reference to this data still
                     // lives
-                    box_ref.ref_count.set(n - 1);
+                    box_ref
+                        .ref_count
+                        .set(NonZeroUsize::new(n.get() - 1).unwrap());
                     // remaining references could be a cycle - therefore, mark it as dirty
                     // so we can check later
                     d.mark_dirty(self.ptr);

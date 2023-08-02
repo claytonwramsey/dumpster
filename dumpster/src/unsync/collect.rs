@@ -22,6 +22,7 @@ use std::{
     alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
     collections::{hash_map::Entry, HashMap, HashSet},
+    num::NonZeroUsize,
     ops::Deref,
     ptr::{drop_in_place, NonNull},
 };
@@ -58,7 +59,7 @@ pub(super) struct Dumpster {
 /// A unique identifier for an allocated garbage-collected block.
 ///
 /// It contains a pointer to the reference count of the allocation.
-struct AllocationId(pub NonNull<Cell<usize>>);
+struct AllocationId(pub NonNull<Cell<NonZeroUsize>>);
 
 impl<T> From<NonNull<GcBox<T>>> for AllocationId
 where
@@ -263,7 +264,7 @@ impl Visitor for BuildRefGraph {
             }
             Entry::Vacant(v) => {
                 v.insert(Reachability {
-                    n_unaccounted: unsafe { next_id.0.as_ref().get() - 1 },
+                    n_unaccounted: unsafe { next_id.0.as_ref().get().get() - 1 },
                     ptr: ErasedPtr::new(gc.ptr),
                     sweep_fn: apply_visitor::<T, Sweep>,
                 });
@@ -324,7 +325,7 @@ impl Visitor for DropAlloc<'_> {
         if self.reachable.contains(&id) {
             unsafe {
                 let cell_ref = id.0.as_ref();
-                cell_ref.set(cell_ref.get() - 1);
+                cell_ref.set(NonZeroUsize::new(cell_ref.get().get() - 1).unwrap());
             }
         } else if self.visited.insert(id) {
             (**gc).accept(self).unwrap();
