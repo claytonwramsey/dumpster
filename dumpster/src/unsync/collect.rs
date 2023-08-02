@@ -77,7 +77,7 @@ where
 struct Cleanup {
     /// The function which is called to build the reference graph and find all allocations
     /// reachable from this allocation.
-    build_graph_fn: unsafe fn(ErasedPtr, &mut BuildRefGraph),
+    build_graph_fn: unsafe fn(ErasedPtr, &mut Dfs),
     /// The function which is called to sweep out and mark allocations reachable from this
     /// allocation as reachable.
     sweep_fn: unsafe fn(ErasedPtr, &mut Sweep),
@@ -91,7 +91,7 @@ impl Cleanup {
     /// Construct a new cleanup for an allocation.
     fn new<T: Collectable + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
         Cleanup {
-            build_graph_fn: apply_visitor::<T, BuildRefGraph>,
+            build_graph_fn: apply_visitor::<T, Dfs>,
             sweep_fn: apply_visitor::<T, Sweep>,
             drop_fn: drop_assist::<T>,
             ptr: ErasedPtr::new(box_ptr),
@@ -115,7 +115,7 @@ impl Dumpster {
         self.n_ref_drops.set(0);
 
         unsafe {
-            let mut ref_graph_build = BuildRefGraph {
+            let mut ref_graph_build = Dfs {
                 visited: HashSet::with_capacity(self.to_collect.borrow().len()),
                 ref_state: HashMap::with_capacity(self.to_collect.borrow().len()),
             };
@@ -225,7 +225,7 @@ impl Drop for Dumpster {
 }
 
 /// The data required to construct the graph of reachable allocations.
-struct BuildRefGraph {
+struct Dfs {
     /// The set of allocations which have already been visited.
     visited: HashSet<AllocationId>,
     /// A map from allocation identifiers to information about their reachability.
@@ -244,7 +244,7 @@ struct Reachability {
     sweep_fn: unsafe fn(ErasedPtr, &mut Sweep),
 }
 
-impl Visitor for BuildRefGraph {
+impl Visitor for Dfs {
     fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
         T: Collectable + Sync + ?Sized,

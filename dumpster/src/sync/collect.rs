@@ -181,15 +181,13 @@ impl Dumpster {
                 } => unsafe { destroy_fn(ptr) },
                 Node::Reachable { weak_drop_fn, ptr } => unsafe {
                     let mut guard = id.0.as_ref().lock().unwrap();
-                    assert!(guard.weak > 0);
-                    if guard.weak == 1 && guard.strong == 0 {
+                    guard.weak -= 1;
+                    if guard.weak == 0 && guard.strong == 0 {
                         // we are the last reference to the allocation.
                         // mark to be cleaned up later
                         // no real synchronization loss to storing the guard because we had the last
                         // reference anyway
                         weak_destroys.push((weak_drop_fn, ptr));
-                    } else {
-                        guard.weak -= 1;
                     }
                 },
             };
@@ -272,7 +270,7 @@ impl Cleanup {
     {
         Cleanup {
             ptr: ErasedPtr::new(ptr),
-            build_fn: build_ref_graph::<T>,
+            build_fn: dfs::<T>,
         }
     }
 }
@@ -297,7 +295,7 @@ impl Cleanup {
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
 /// `starting_id` must refer to the reference count for the allocation pointed to by `ptr`.
-unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
+unsafe fn dfs<T: Collectable + Sync + ?Sized>(
     ptr: ErasedPtr,
     starting_id: AllocationId,
     ref_graph: &mut HashMap<AllocationId, Node>,
@@ -321,7 +319,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                     .specify::<GcBox<T>>()
                     .as_ref()
                     .value
-                    .accept(&mut BuildRefGraph {
+                    .accept(&mut Dfs {
                         ref_graph,
                         current_id: starting_id,
                         guards,
@@ -358,7 +356,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
 
 #[derive(Debug)]
 /// The visitor structure used for building the found-reference-graph of allocations.
-struct BuildRefGraph<'a> {
+struct Dfs<'a> {
     /// The reference graph.
     /// Each allocation is assigned a node.
     ref_graph: &'a mut HashMap<AllocationId, Node>,
@@ -371,7 +369,7 @@ struct BuildRefGraph<'a> {
     guards: &'a mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 }
 
-impl<'a> Visitor for BuildRefGraph<'a> {
+impl<'a> Visitor for Dfs<'a> {
     fn visit_sync<T>(&mut self, gc: &Gc<T>)
     where
         T: Collectable + Sync + ?Sized,
