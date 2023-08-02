@@ -34,7 +34,7 @@ use chashmap::CHashMap;
 
 use once_cell::sync::Lazy;
 
-use crate::{Collectable, OpaquePtr, Visitor};
+use crate::{Collectable, ErasedPtr, Visitor};
 
 use super::{Gc, GcBox, RefCounts};
 
@@ -85,7 +85,7 @@ where
 
 /// A function which can be used to create a reference graph.
 type BuildFn = unsafe fn(
-    OpaquePtr,
+    ErasedPtr,
     AllocationId,
     &mut HashMap<AllocationId, Node>,
     &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
@@ -95,7 +95,7 @@ type BuildFn = unsafe fn(
 /// The information which describes an allocation that may need to be cleaned up later.
 struct Cleanup {
     /// A pointer to the allocation to be cleaned up.
-    ptr: OpaquePtr,
+    ptr: ErasedPtr,
     /// The function which can be used to build a reference graph.
     /// This function is safe to call on `ptr`.
     build_fn: BuildFn,
@@ -114,23 +114,23 @@ enum Node {
         /// the one we are currently building.
         n_unaccounted: usize,
         /// A function used to destroy the allocation.
-        destroy_fn: unsafe fn(OpaquePtr),
+        destroy_fn: unsafe fn(ErasedPtr),
         /// Function for dropping the allocation when its weak and strong count hits zero.
         /// Should have the same behavior as dropping a Gc normally to a reference count of zero.
-        weak_drop_fn: unsafe fn(OpaquePtr),
+        weak_drop_fn: unsafe fn(ErasedPtr),
         /// A function used to decrement outbound reference counts to reachable nodes.
-        decrement_fn: unsafe fn(OpaquePtr, &HashMap<AllocationId, Node>),
+        decrement_fn: unsafe fn(ErasedPtr, &HashMap<AllocationId, Node>),
         /// A pointer to the allocation.
-        ptr: OpaquePtr,
+        ptr: ErasedPtr,
     },
     /// The allocation here is reachable.
     /// No further information is needed.
     Reachable {
         /// Function for dropping the allocation when its weak and strong count hits zero.
         /// Should have the same behavior as dropping a Gc normally to a reference count of zero.
-        weak_drop_fn: unsafe fn(OpaquePtr),
+        weak_drop_fn: unsafe fn(ErasedPtr),
         /// An erased pointer to the allocation.
-        ptr: OpaquePtr,
+        ptr: ErasedPtr,
     },
 }
 
@@ -271,7 +271,7 @@ impl Cleanup {
         T: Collectable + Sync + ?Sized,
     {
         Cleanup {
-            ptr: OpaquePtr::new(ptr),
+            ptr: ErasedPtr::new(ptr),
             build_fn: build_ref_graph::<T>,
         }
     }
@@ -298,7 +298,7 @@ impl Cleanup {
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
 /// `starting_id` must refer to the reference count for the allocation pointed to by `ptr`.
 unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
-    ptr: OpaquePtr,
+    ptr: ErasedPtr,
     starting_id: AllocationId,
     ref_graph: &mut HashMap<AllocationId, Node>,
     guards: &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
@@ -309,7 +309,7 @@ unsafe fn build_ref_graph<T: Collectable + Sync + ?Sized>(
                 v.insert(Node::Unknown {
                     children: Vec::new(),
                     n_unaccounted: guard.strong,
-                    destroy_fn: destroy_opaque::<T>,
+                    destroy_fn: destroy_erased::<T>,
                     decrement_fn: decrement_reachable_count::<T>,
                     weak_drop_fn: drop_weak_zero::<T>,
                     ptr,
@@ -408,10 +408,10 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                         let _ = v.insert(Node::Unknown {
                             children: Vec::new(),
                             n_unaccounted: guard.strong - 1,
-                            destroy_fn: destroy_opaque::<T>,
+                            destroy_fn: destroy_erased::<T>,
                             decrement_fn: decrement_reachable_count::<T>,
                             weak_drop_fn: drop_weak_zero::<T>,
-                            ptr: OpaquePtr::new(gc.ptr),
+                            ptr: ErasedPtr::new(gc.ptr),
                         });
                         guard.weak += 1;
                         self.guards.insert(new_id, guard);
@@ -433,7 +433,7 @@ impl<'a> Visitor for BuildRefGraph<'a> {
                         // therefore reachable.
                         v.insert(Node::Reachable {
                             weak_drop_fn: drop_weak_zero::<T>,
-                            ptr: OpaquePtr::new(gc.ptr),
+                            ptr: ErasedPtr::new(gc.ptr),
                         });
                     }
                     _ => {
@@ -506,7 +506,7 @@ fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, Node>) {
 /// # Safety
 ///
 /// `ptr` must have been created from a pointer to a `GcBox<T>`.
-unsafe fn destroy_opaque<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
+unsafe fn destroy_erased<T: Collectable + Sync + ?Sized>(ptr: ErasedPtr) {
     let specified = ptr.specify::<GcBox<T>>().as_mut();
     let layout = Layout::for_value(specified);
     drop_in_place(specified);
@@ -521,7 +521,7 @@ impl Drop for Dumpster {
 
 /// Decrement the reference count all reachable allocations pointed to by the value stored in `ptr`.
 unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
-    ptr: OpaquePtr,
+    ptr: ErasedPtr,
     ref_graph: &HashMap<AllocationId, Node>,
 ) {
     /// A visitor for decrementing the reference count of pointees.
@@ -569,7 +569,7 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-unsafe fn drop_weak_zero<T: Collectable + Sync + ?Sized>(ptr: OpaquePtr) {
+unsafe fn drop_weak_zero<T: Collectable + Sync + ?Sized>(ptr: ErasedPtr) {
     let mut specified = ptr.specify::<GcBox<T>>();
 
     let layout = Layout::for_value(specified.as_ref());

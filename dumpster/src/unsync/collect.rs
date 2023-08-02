@@ -26,7 +26,7 @@ use std::{
     ptr::{drop_in_place, NonNull},
 };
 
-use crate::{unsync::Gc, Collectable, OpaquePtr, Visitor};
+use crate::{unsync::Gc, Collectable, ErasedPtr, Visitor};
 
 use super::GcBox;
 
@@ -76,14 +76,14 @@ where
 struct Cleanup {
     /// The function which is called to build the reference graph and find all allocations
     /// reachable from this allocation.
-    build_graph_fn: unsafe fn(OpaquePtr, &mut BuildRefGraph),
+    build_graph_fn: unsafe fn(ErasedPtr, &mut BuildRefGraph),
     /// The function which is called to sweep out and mark allocations reachable from this
     /// allocation as reachable.
-    sweep_fn: unsafe fn(OpaquePtr, &mut Sweep),
+    sweep_fn: unsafe fn(ErasedPtr, &mut Sweep),
     /// A function used for dropping the allocation.
-    drop_fn: unsafe fn(OpaquePtr, &mut DropAlloc<'_>),
-    /// An opaque pointer to the allocation.
-    ptr: OpaquePtr,
+    drop_fn: unsafe fn(ErasedPtr, &mut DropAlloc<'_>),
+    /// An erased pointer to the allocation.
+    ptr: ErasedPtr,
 }
 
 impl Cleanup {
@@ -93,17 +93,17 @@ impl Cleanup {
             build_graph_fn: apply_visitor::<T, BuildRefGraph>,
             sweep_fn: apply_visitor::<T, Sweep>,
             drop_fn: drop_assist::<T>,
-            ptr: OpaquePtr::new(box_ptr),
+            ptr: ErasedPtr::new(box_ptr),
         }
     }
 }
 
-/// Apply a visitor to some opaque pointer.
+/// Apply a visitor to some erased pointer.
 ///
 /// # Safety
 ///
-/// `T` must be the same type that `ptr` was created with via [`OpaquePtr::new`].
-unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: OpaquePtr, visitor: &mut V) {
+/// `T` must be the same type that `ptr` was created with via [`ErasedPtr::new`].
+unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: ErasedPtr, visitor: &mut V) {
     let specified: NonNull<GcBox<T>> = ptr.specify();
     let _ = specified.as_ref().value.accept(visitor);
 }
@@ -237,10 +237,10 @@ struct Reachability {
     /// The number of unaccounted-for references to this allocation.
     /// If this number is 0, the reference is not a root.
     n_unaccounted: usize,
-    /// An opaque pointer to the allocation under concern.
-    ptr: OpaquePtr,
+    /// An erased pointer to the allocation under concern.
+    ptr: ErasedPtr,
     /// A function used to sweep from `ptr` if this allocation is proven reachable.
-    sweep_fn: unsafe fn(OpaquePtr, &mut Sweep),
+    sweep_fn: unsafe fn(ErasedPtr, &mut Sweep),
 }
 
 impl Visitor for BuildRefGraph {
@@ -264,7 +264,7 @@ impl Visitor for BuildRefGraph {
             Entry::Vacant(v) => {
                 v.insert(Reachability {
                     n_unaccounted: unsafe { next_id.0.as_ref().get() - 1 },
-                    ptr: OpaquePtr::new(gc.ptr),
+                    ptr: ErasedPtr::new(gc.ptr),
                     sweep_fn: apply_visitor::<T, Sweep>,
                 });
             }
@@ -340,7 +340,7 @@ impl Visitor for DropAlloc<'_> {
 /// Decrement the outbound reference counts for any reachable allocations which this allocation can
 /// find.
 /// Also, drop the allocation when done.
-unsafe fn drop_assist<T: Collectable + ?Sized>(ptr: OpaquePtr, visitor: &mut DropAlloc<'_>) {
+unsafe fn drop_assist<T: Collectable + ?Sized>(ptr: ErasedPtr, visitor: &mut DropAlloc<'_>) {
     if visitor
         .visited
         .insert(AllocationId::from(ptr.specify::<GcBox<T>>()))

@@ -187,22 +187,22 @@ pub trait Visitor {
 /// interpretation.
 /// We trust that all pointers (even to `?Sized` or `dyn` types) are 2 words or fewer in size.
 /// This is a hack! Like, a big hack!
-struct OpaquePtr([usize; 2]);
+struct ErasedPtr([usize; 2]);
 
-impl OpaquePtr {
-    /// Construct a new opaque pointer to some data from a reference
+impl ErasedPtr {
+    /// Construct a new erased pointer to some data from a reference
     ///
     /// # Panics
     ///
     /// This function will panic if the size of a reference is larger than the size of an
-    /// `OpaquePtr`.
+    /// `ErasedPtr`.
     /// To my knowledge, there are no pointer types with this property.
-    fn new<T: ?Sized>(reference: NonNull<T>) -> OpaquePtr {
-        let mut ptr = OpaquePtr([0; 2]);
+    fn new<T: ?Sized>(reference: NonNull<T>) -> ErasedPtr {
+        let mut ptr = ErasedPtr([0; 2]);
         let ptr_size = size_of::<NonNull<T>>();
         // Extract out the pointer as raw memory
         assert!(
-            ptr_size <= size_of::<OpaquePtr>(),
+            ptr_size <= size_of::<ErasedPtr>(),
             "pointers to T are too big for storage"
         );
         unsafe {
@@ -223,7 +223,7 @@ impl OpaquePtr {
     /// # Safety
     ///
     /// This function must only be specified to the type that the pointer was constructed with
-    /// via [`OpaquePtr::new`].
+    /// via [`ErasedPtr::new`].
     unsafe fn specify<T: ?Sized>(self) -> NonNull<T> {
         let mut box_ref: MaybeUninit<NonNull<T>> = MaybeUninit::zeroed();
 
@@ -240,9 +240,9 @@ impl OpaquePtr {
     }
 }
 
-impl fmt::Debug for OpaquePtr {
+impl fmt::Debug for ErasedPtr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "OpaquePtr({:x?})", self.0)
+        write!(f, "ErasedPtr({:x?})", self.0)
     }
 }
 
@@ -256,17 +256,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opaque_align() {
-        assert_eq!(align_of::<OpaquePtr>(), 16);
+    fn erased_align() {
+        assert_eq!(align_of::<ErasedPtr>(), 16);
     }
 
     #[test]
-    fn opaque_alloc() {
+    fn erased_alloc() {
         let orig_ptr = Box::leak(Box::new(7u8));
-        let opaque_ptr = OpaquePtr::new(NonNull::from(orig_ptr));
+        let erased_ptr = ErasedPtr::new(NonNull::from(orig_ptr));
 
         unsafe {
-            let remade_ptr = opaque_ptr.specify::<u8>();
+            let remade_ptr = erased_ptr.specify::<u8>();
             dealloc(remade_ptr.as_ptr(), Layout::for_value(remade_ptr.as_ref()));
         }
     }
