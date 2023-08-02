@@ -26,8 +26,7 @@ use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
     cell::Cell,
-    marker::Unsize,
-    ops::{CoerceUnsized, Deref},
+    ops::Deref,
     ptr::{addr_of, drop_in_place, NonNull},
     sync::Mutex,
 };
@@ -241,9 +240,10 @@ impl<T: Collectable + ?Sized + Sync> std::fmt::Pointer for Gc<T> {
     }
 }
 
-impl<T, U> CoerceUnsized<Gc<U>> for Gc<T>
+#[cfg(feature = "coerce-unsized")]
+impl<T, U> std::ops::CoerceUnsized<Gc<U>> for Gc<T>
 where
-    T: Unsize<U> + Collectable + Sync + ?Sized,
+    T: std::marker::Unsize<U> + Collectable + Sync + ?Sized,
     U: Collectable + Sync + ?Sized,
 {
 }

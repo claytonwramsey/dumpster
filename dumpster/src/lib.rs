@@ -53,8 +53,8 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 #![allow(clippy::multiple_crate_versions, clippy::result_unit_err)]
-#![feature(coerce_unsized)]
-#![feature(unsize)]
+#![cfg_attr(feature = "coerce-unsized", feature(coerce_unsized))]
+#![cfg_attr(feature = "coerce-unsized", feature(unsize))]
 
 use std::{
     fmt,

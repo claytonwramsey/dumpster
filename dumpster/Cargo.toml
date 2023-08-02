@@ -10,6 +10,9 @@ readme = "../README.md"
 keywords = ["dumpster", "garbage collector"]
 categories = ["data-structures", "memory-management"]
 
+[features]
+coerce-unsized = []
+
 [dependencies]
 chashmap = "2"
 once_cell = "1.18.0"
