@@ -126,34 +126,35 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// points to will be destroyed.
     fn drop(&mut self) {
         DUMPSTER.with(|d| {
-            if !d.collecting() {
-                unsafe {
-                    let box_ref = self.ptr.as_ref();
-                    match box_ref.ref_count.get() {
-                        0 => (), // allocation is already being destroyed
-                        1 => {
-                            d.mark_cleaned(self.ptr);
-                            // this was the last reference, drop unconditionally
-                            drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
-                            // note: `box_ref` is no longer usable
-                            dealloc(
-                                self.ptr.as_ptr().cast::<u8>(),
-                                Layout::for_value(self.ptr.as_ref()),
-                            );
-                        }
-                        n => {
-                            // decrement the ref count - but another reference to this data still
-                            // lives
-                            box_ref.ref_count.set(n - 1);
-                            // remaining references could be a cycle - therefore, mark it as dirty
-                            // so we can check later
-                            d.mark_dirty(self.ptr);
-                        }
+            if d.collecting() {
+                return;
+            }
+            let box_ref = unsafe { self.ptr.as_ref() };
+            match box_ref.ref_count.get() {
+                0 => (), // allocation is already being destroyed
+                1 => {
+                    d.mark_cleaned(self.ptr);
+                    unsafe {
+                        // this was the last reference, drop unconditionally
+                        drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                        // note: `box_ref` is no longer usable
+                        dealloc(
+                            self.ptr.as_ptr().cast::<u8>(),
+                            Layout::for_value(self.ptr.as_ref()),
+                        );
                     }
-                    // Notify that a GC has been dropped, potentially triggering a sweep
-                    d.notify_dropped_gc();
+                }
+                n => {
+                    // decrement the ref count - but another reference to this data still
+                    // lives
+                    box_ref.ref_count.set(n - 1);
+                    // remaining references could be a cycle - therefore, mark it as dirty
+                    // so we can check later
+                    d.mark_dirty(self.ptr);
                 }
             }
+            // Notify that a GC has been dropped, potentially triggering a sweep
+            d.notify_dropped_gc();
         });
     }
 }

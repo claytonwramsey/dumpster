@@ -170,7 +170,7 @@ impl Dumpster {
 
     /// Mark an allocation as "dirty," implying that it may need to be swept through later to find
     /// out if it has any references pointing to it.
-    pub unsafe fn mark_dirty<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
+    pub fn mark_dirty<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
         self.to_collect
             .borrow_mut()
             .entry(AllocationId::from(box_ptr))
