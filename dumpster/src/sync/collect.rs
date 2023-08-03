@@ -329,7 +329,7 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
                         &mut ref_graph.get_mut(&starting_id).unwrap().reachability,
                         Reachability::Reachable
                     ) else {
-                        panic!("initial allocaiton magically marked as reachable by other thread?");
+                        unreachable!("initial allocaiton magically marked as reachable by other thread?");
                     };
 
                     for child in children {
@@ -447,7 +447,7 @@ impl<'a> Visitor for Dfs<'a> {
     where
         T: Collectable + ?Sized,
     {
-        panic!("A `dumpster::sync::Gc` may not own a `dumpster::unsync::Gc` because `dumpster::unsync::Gc` is `Sync`");
+        unreachable!("sync Gc cannot own an unsync Gc");
     }
 }
 
