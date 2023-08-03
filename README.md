@@ -7,7 +7,7 @@ It detects unreachable allocations and automatically frees them.
 
 You should use this library if:
 
-- You want to be able to trivially use your pre-existing data structures without manually 
+- You want to be able to trivially use your pre-existing data structures without manually
   implementing traits.
 - You cannot remove cyclic references from your data structures.
 - You're only moderately picky about performance.
@@ -24,12 +24,12 @@ cycle-detection algorithm, enabling it to effectively clean up self-referential 
 
 ## What this library contains
 
-`dumpster` actually contains two garbage collector implementations: one thread-local, non-`Send` 
+`dumpster` actually contains two garbage collector implementations: one thread-local, non-`Send`
 garbarge collector in the module `unsync`, and one thread-safe garbage collector in the module
 `sync`.
 These garbage collectors can be safely mixed and matched.
 
-Additionally, we provide a second crate, `dumpster_derive`, which implements derive macros for 
+Additionally, we provide a second crate, `dumpster_derive`, which implements derive macros for
 the `Collectable` trait mandated for all data that is used in a garbage-collected allocation.
 
 ## Examples
