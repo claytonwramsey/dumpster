@@ -128,6 +128,7 @@ fn cyclic() {
     drop(foo1);
     assert_eq!(DROPPED.load(Ordering::Relaxed), 0);
     drop(foo2);
+    collect();
     assert_eq!(DROPPED.load(Ordering::Relaxed), 2);
 }
 

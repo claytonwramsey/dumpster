@@ -97,6 +97,7 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
+        DUMPSTER.with(|d| d.mark_cleaned(self.ptr));
         unsafe { &self.ptr.as_ref().value }
     }
 }
@@ -172,6 +173,7 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
 
 impl<T: Collectable + ?Sized> AsRef<T> for Gc<T> {
     fn as_ref(&self) -> &T {
+        DUMPSTER.with(|d| d.mark_cleaned(self.ptr));
         unsafe { addr_of!(self.ptr.as_ref().value).as_ref().unwrap() }
     }
 }

@@ -23,7 +23,6 @@ use std::{
     cell::{Cell, RefCell},
     collections::{hash_map::Entry, HashMap, HashSet},
     num::NonZeroUsize,
-    ops::Deref,
     ptr::{drop_in_place, NonNull},
 };
 
@@ -77,7 +76,7 @@ where
 struct Cleanup {
     /// The function which is called to build the reference graph and find all allocations
     /// reachable from this allocation.
-    build_graph_fn: unsafe fn(ErasedPtr, &mut Dfs),
+    dfs_fn: unsafe fn(ErasedPtr, &mut Dfs),
     /// The function which is called to sweep out and mark allocations reachable from this
     /// allocation as reachable.
     sweep_fn: unsafe fn(ErasedPtr, &mut Sweep),
@@ -91,7 +90,7 @@ impl Cleanup {
     /// Construct a new cleanup for an allocation.
     fn new<T: Collectable + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
         Cleanup {
-            build_graph_fn: apply_visitor::<T, Dfs>,
+            dfs_fn: apply_visitor::<T, Dfs>,
             sweep_fn: apply_visitor::<T, Sweep>,
             drop_fn: drop_assist::<T>,
             ptr: ErasedPtr::new(box_ptr),
@@ -115,23 +114,22 @@ impl Dumpster {
         self.n_ref_drops.set(0);
 
         unsafe {
-            let mut ref_graph_build = Dfs {
+            let mut dfs = Dfs {
                 visited: HashSet::with_capacity(self.to_collect.borrow().len()),
-                ref_state: HashMap::with_capacity(self.to_collect.borrow().len()),
+                ref_graph: HashMap::with_capacity(self.to_collect.borrow().len()),
             };
 
             for (k, v) in &*self.to_collect.borrow() {
-                if !ref_graph_build.visited.contains(k) {
-                    ref_graph_build.visited.insert(*k);
-                    (v.build_graph_fn)(v.ptr, &mut ref_graph_build);
+                if dfs.visited.insert(*k) {
+                    (v.dfs_fn)(v.ptr, &mut dfs);
                 }
             }
 
             let mut sweep = Sweep {
-                visited: HashSet::with_capacity(ref_graph_build.visited.len()),
+                visited: HashSet::with_capacity(dfs.visited.len()),
             };
-            for (id, reachability) in ref_graph_build
-                .ref_state
+            for (id, reachability) in dfs
+                .ref_graph
                 .iter()
                 .filter(|(_, reachability)| reachability.n_unaccounted != 0)
             {
@@ -144,15 +142,15 @@ impl Dumpster {
                 .to_collect
                 .borrow()
                 .iter()
-                .filter(|(id, _)| !ref_graph_build.ref_state.contains_key(id))
+                .filter(|(id, _)| !dfs.ref_graph.contains_key(id))
             {
                 sweep.visited.insert(*id);
                 (cleanup.sweep_fn)(cleanup.ptr, &mut sweep);
             }
 
-            ref_graph_build.visited.clear();
+            dfs.visited.clear();
             let mut decrementer = DropAlloc {
-                visited: ref_graph_build.visited,
+                visited: dfs.visited,
                 reachable: &sweep.visited,
             };
 
@@ -229,7 +227,7 @@ struct Dfs {
     /// The set of allocations which have already been visited.
     visited: HashSet<AllocationId>,
     /// A map from allocation identifiers to information about their reachability.
-    ref_state: HashMap<AllocationId, Reachability>,
+    ref_graph: HashMap<AllocationId, Reachability>,
 }
 
 #[derive(Debug)]
@@ -258,7 +256,7 @@ impl Visitor for Dfs {
         T: Collectable + ?Sized,
     {
         let next_id = AllocationId::from(gc.ptr);
-        match self.ref_state.entry(next_id) {
+        match self.ref_graph.entry(next_id) {
             Entry::Occupied(ref mut o) => {
                 o.get_mut().n_unaccounted -= 1;
             }
@@ -271,7 +269,9 @@ impl Visitor for Dfs {
             }
         }
         if self.visited.insert(next_id) {
-            gc.deref().accept(self).unwrap();
+            unsafe {
+                gc.ptr.as_ref().value.accept(self).unwrap();
+            }
         }
     }
 }
@@ -296,7 +296,9 @@ impl Visitor for Sweep {
         T: Collectable + ?Sized,
     {
         if self.visited.insert(AllocationId::from(gc.ptr)) {
-            gc.deref().accept(self).unwrap();
+            unsafe {
+                gc.ptr.as_ref().value.accept(self).unwrap();
+            }
         }
     }
 }
@@ -328,8 +330,8 @@ impl Visitor for DropAlloc<'_> {
                 cell_ref.set(NonZeroUsize::new(cell_ref.get().get() - 1).unwrap());
             }
         } else if self.visited.insert(id) {
-            (**gc).accept(self).unwrap();
             unsafe {
+                gc.ptr.as_ref().value.accept(self).unwrap();
                 let layout = Layout::for_value(gc.ptr.as_ref());
                 drop_in_place(gc.ptr.as_ptr());
                 dealloc(gc.ptr.as_ptr().cast(), layout);
