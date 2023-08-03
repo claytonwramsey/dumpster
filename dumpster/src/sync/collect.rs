@@ -87,7 +87,7 @@ where
 type BuildFn = unsafe fn(
     ErasedPtr,
     AllocationId,
-    &mut HashMap<AllocationId, Node>,
+    &mut HashMap<AllocationId, AllocationInfo>,
     &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 );
 
@@ -103,19 +103,19 @@ struct Cleanup {
 
 #[derive(Debug)]
 /// A node in the reference graph, which is constructed while searching for unreachable allocations.
-struct Node {
+struct AllocationInfo {
     /// An erased pointer to the allocation.
     ptr: ErasedPtr,
     /// Function for dropping the allocation when its weak and strong count hits zero.
     /// Should have the same behavior as dropping a Gc normally to a reference count of zero.
     weak_drop_fn: unsafe fn(ErasedPtr),
     /// Information about this allocation's reachability.
-    kind: NodeKind,
+    reachability: Reachability,
 }
 
 #[derive(Debug)]
 /// The state of whether an allocation is reachable or of unknown reachability.
-enum NodeKind {
+enum Reachability {
     /// The information describing an allocation whose accessibility is unknown.
     Unknown {
         /// The IDs for the allocations directly accessible from this allocation.
@@ -128,7 +128,7 @@ enum NodeKind {
         /// A function used to destroy the allocation.
         destroy_fn: unsafe fn(ErasedPtr),
         /// A function used to decrement outbound reference counts to reachable nodes.
-        decrement_fn: unsafe fn(ErasedPtr, &HashMap<AllocationId, Node>),
+        decrement_fn: unsafe fn(ErasedPtr, &HashMap<AllocationId, AllocationInfo>),
     },
     /// The allocation here is reachable.
     /// No further information is needed.
@@ -155,18 +155,18 @@ impl Dumpster {
         drop(guards);
         let root_ids = ref_graph
             .iter()
-            .filter_map(|(&k, v)| match v.kind {
-                NodeKind::Reachable => Some(k),
-                NodeKind::Unknown { n_unaccounted, .. } => (n_unaccounted > 0).then_some(k),
+            .filter_map(|(&k, v)| match v.reachability {
+                Reachability::Reachable => Some(k),
+                Reachability::Unknown { n_unaccounted, .. } => (n_unaccounted > 0).then_some(k),
             })
             .collect::<Vec<_>>();
         for root_id in root_ids {
             sweep(root_id, &mut ref_graph);
         }
 
-        for (decrement_fn, ptr) in ref_graph.iter().filter_map(|(_, v)| match v.kind {
-            NodeKind::Reachable => None,
-            NodeKind::Unknown { decrement_fn, .. } => Some((decrement_fn, v.ptr)),
+        for (decrement_fn, ptr) in ref_graph.iter().filter_map(|(_, v)| match v.reachability {
+            Reachability::Reachable => None,
+            Reachability::Unknown { decrement_fn, .. } => Some((decrement_fn, v.ptr)),
         }) {
             unsafe { decrement_fn(ptr, &ref_graph) };
         }
@@ -174,9 +174,9 @@ impl Dumpster {
         // set of allocations which must be destroyed because we were the last weak pointer to it
         let mut weak_destroys = Vec::new();
         for (id, node) in ref_graph {
-            match node.kind {
-                NodeKind::Unknown { destroy_fn, .. } => unsafe { destroy_fn(node.ptr) },
-                NodeKind::Reachable => unsafe {
+            match node.reachability {
+                Reachability::Unknown { destroy_fn, .. } => unsafe { destroy_fn(node.ptr) },
+                Reachability::Reachable => unsafe {
                     let mut guard = id.0.as_ref().lock().unwrap();
                     guard.weak -= 1;
                     if guard.weak == 0 && guard.strong == 0 {
@@ -295,16 +295,16 @@ impl Cleanup {
 unsafe fn dfs<T: Collectable + Sync + ?Sized>(
     ptr: ErasedPtr,
     starting_id: AllocationId,
-    ref_graph: &mut HashMap<AllocationId, Node>,
+    ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
     guards: &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 ) {
     if let Entry::Vacant(v) = ref_graph.entry(starting_id) {
         match unsafe { starting_id.0.as_ref().try_lock() } {
             Ok(mut guard) => {
-                v.insert(Node {
+                v.insert(AllocationInfo {
                     ptr,
                     weak_drop_fn: drop_weak_zero::<T>,
-                    kind: NodeKind::Unknown {
+                    reachability: Reachability::Unknown {
                         children: Vec::new(),
                         n_unaccounted: guard.strong,
                         destroy_fn: destroy_erased::<T>,
@@ -325,9 +325,9 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
                     })
                     .is_err()
                 {
-                    let NodeKind::Unknown { children, .. } = replace(
-                        &mut ref_graph.get_mut(&starting_id).unwrap().kind,
-                        NodeKind::Reachable
+                    let Reachability::Unknown { children, .. } = replace(
+                        &mut ref_graph.get_mut(&starting_id).unwrap().reachability,
+                        Reachability::Reachable
                     ) else {
                         panic!("initial allocaiton magically marked as reachable by other thread?");
                     };
@@ -338,10 +338,10 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
                 }
             }
             Err(TryLockError::WouldBlock) => {
-                v.insert(Node {
+                v.insert(AllocationInfo {
                     weak_drop_fn: drop_weak_zero::<T>,
                     ptr,
-                    kind: NodeKind::Reachable,
+                    reachability: Reachability::Reachable,
                 });
             }
             _ => {
@@ -356,7 +356,7 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
 struct Dfs<'a> {
     /// The reference graph.
     /// Each allocation is assigned a node.
-    ref_graph: &'a mut HashMap<AllocationId, Node>,
+    ref_graph: &'a mut HashMap<AllocationId, AllocationInfo>,
     /// The allocation ID currently being visited.
     /// Used for knowing which node is the parent of another.
     current_id: AllocationId,
@@ -372,9 +372,9 @@ impl<'a> Visitor for Dfs<'a> {
         T: Collectable + Sync + ?Sized,
     {
         let mut new_id = AllocationId::from(gc.ptr);
-        let NodeKind::Unknown {
+        let Reachability::Unknown {
             ref mut children, ..
-        } = self.ref_graph.get_mut(&self.current_id).unwrap().kind
+        } = self.ref_graph.get_mut(&self.current_id).unwrap().reachability
         else {
             // this node has been proven reachable by something higher up. No need to keep building
             // its ref graph
@@ -383,14 +383,14 @@ impl<'a> Visitor for Dfs<'a> {
         children.push(new_id);
 
         match self.ref_graph.entry(new_id) {
-            Entry::Occupied(mut o) => match o.get_mut().kind {
-                NodeKind::Unknown {
+            Entry::Occupied(mut o) => match o.get_mut().reachability {
+                Reachability::Unknown {
                     ref mut n_unaccounted,
                     ..
                 } => {
                     *n_unaccounted -= 1;
                 }
-                NodeKind::Reachable => (),
+                Reachability::Reachable => (),
             },
             Entry::Vacant(v) => {
                 // This allocation has never been visited by the reference graph builder.
@@ -400,10 +400,10 @@ impl<'a> Visitor for Dfs<'a> {
                         // This allocation is not currently being inspected by anything else and
                         // is therefore of unknown reachability.
 
-                        v.insert(Node {
+                        v.insert(AllocationInfo {
                             ptr: ErasedPtr::new(gc.ptr),
                             weak_drop_fn: drop_weak_zero::<T>,
-                            kind: NodeKind::Unknown {
+                            reachability: Reachability::Unknown {
                                 children: Vec::new(),
                                 n_unaccounted: guard.strong - 1,
                                 destroy_fn: destroy_erased::<T>,
@@ -429,10 +429,10 @@ impl<'a> Visitor for Dfs<'a> {
                     Err(TryLockError::WouldBlock) => {
                         // This allocation is currently being inspected by another thread and is
                         // therefore reachable.
-                        v.insert(Node {
+                        v.insert(AllocationInfo {
                             ptr: ErasedPtr::new(gc.ptr),
                             weak_drop_fn: drop_weak_zero::<T>,
-                            kind: NodeKind::Reachable,
+                            reachability: Reachability::Reachable,
                         });
                     }
                     _ => {
@@ -457,11 +457,13 @@ impl<'a> Visitor for Dfs<'a> {
 /// Removes the mutex guard associated with each of those allocations as well.
 fn sweep_delete_guards(
     root: AllocationId,
-    graph: &mut HashMap<AllocationId, Node>,
+    graph: &mut HashMap<AllocationId, AllocationInfo>,
     guards: &mut HashMap<AllocationId, MutexGuard<'static, RefCounts>>,
 ) {
     let node = graph.get_mut(&root).unwrap();
-    if let NodeKind::Unknown { children, .. } = replace(&mut node.kind, NodeKind::Reachable) {
+    if let Reachability::Unknown { children, .. } =
+        replace(&mut node.reachability, Reachability::Reachable)
+    {
         guards.remove(&root);
         for child in children {
             sweep(child, graph);
@@ -471,9 +473,11 @@ fn sweep_delete_guards(
 
 /// Sweep through the reference graph, marking `root` and any allocations reachable from `root` as
 /// reachable.
-fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, Node>) {
+fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) {
     let node = graph.get_mut(&root).unwrap();
-    if let NodeKind::Unknown { children, .. } = replace(&mut node.kind, NodeKind::Reachable) {
+    if let Reachability::Unknown { children, .. } =
+        replace(&mut node.reachability, Reachability::Reachable)
+    {
         for child in children {
             sweep(child, graph);
         }
@@ -501,13 +505,13 @@ impl Drop for Dumpster {
 /// Decrement the reference count all reachable allocations pointed to by the value stored in `ptr`.
 unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
     ptr: ErasedPtr,
-    ref_graph: &HashMap<AllocationId, Node>,
+    ref_graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
     /// A visitor for decrementing the reference count of pointees.
     struct DecrementOutboundReferenceCounts<'a> {
         /// The reference graph.
         /// Must have been populated with reachabiltiy already.
-        ref_graph: &'a HashMap<AllocationId, Node>,
+        ref_graph: &'a HashMap<AllocationId, AllocationInfo>,
     }
 
     impl Visitor for DecrementOutboundReferenceCounts<'_> {
@@ -517,7 +521,7 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
         {
             unsafe {
                 let id = AllocationId::from(gc.ptr);
-                if matches!(self.ref_graph[&id].kind, NodeKind::Reachable) {
+                if matches!(self.ref_graph[&id].reachability, Reachability::Reachable) {
                     // We know that this node is a root or reachable from a root, so we need not
                     // bother adding it to a collection queue.
                     // We also know this won't zero out the reference count or underflow for the
