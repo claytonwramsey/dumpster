@@ -175,13 +175,13 @@ where
         let box_ref = unsafe { self.ptr.as_ref() };
         // decrement strong count after generation to ensure sweeper never underestimates ref count
         box_ref.generation.fetch_sub(1, Ordering::Relaxed);
-        dbg!(box_ref.weak.fetch_add(1, Ordering::Acquire)); // ensures that this allocation wasn't freed
-                                                            // while we weren't looking
+        box_ref.weak.fetch_add(1, Ordering::Acquire); // ensures that this allocation wasn't freed
+                                                      // while we weren't looking
         match box_ref.strong.fetch_sub(1, Ordering::Release) {
             0 => unreachable!("strong cannot reach zero while a Gc to it exists"),
             1 => {
                 DUMPSTER.mark_clean(box_ref);
-                if dbg!(box_ref.weak.fetch_sub(1, Ordering::Relaxed)) == 1 {
+                if box_ref.weak.fetch_sub(1, Ordering::Relaxed) == 1 {
                     // destroyed the last weak reference! we can safely deallocate this
                     let layout = Layout::for_value(box_ref);
                     unsafe {
@@ -191,7 +191,7 @@ where
                 }
             }
             _ => {
-                DUMPSTER.mark_dirty(box_ref);
+                DUMPSTER.mark_dirty(self.ptr);
                 box_ref.weak.fetch_sub(1, Ordering::Relaxed);
             }
         }

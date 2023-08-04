@@ -147,6 +147,8 @@ impl Dumpster {
             unsafe { (cleanup.build_fn)(cleanup.ptr, id, &mut ref_graph) };
         }
 
+        println!("{ref_graph:?}");
+
         let root_ids = ref_graph
             .iter()
             .filter_map(|(&k, v)| match v.reachability {
@@ -157,6 +159,7 @@ impl Dumpster {
         for root_id in root_ids {
             sweep(root_id, &mut ref_graph);
         }
+        println!("{ref_graph:?}");
 
         for (decrement_fn, ptr) in ref_graph.iter().filter_map(|(_, v)| match v.reachability {
             Reachability::Reachable => None,
@@ -172,7 +175,7 @@ impl Dumpster {
                 Reachability::Unknown { destroy_fn, .. } => unsafe { destroy_fn(node.ptr) },
                 Reachability::Reachable => {
                     let header_ref = unsafe { id.0.cast::<GcBox<()>>().as_ref() };
-                    if dbg!(header_ref.weak.fetch_sub(1, Ordering::Acquire)) == 1
+                    if header_ref.weak.fetch_sub(1, Ordering::Acquire) == 1
                         && header_ref.strong.load(Ordering::Acquire) == 0
                     {
                         // we are the last reference to the allocation.
@@ -221,24 +224,25 @@ impl Dumpster {
 
     /// Mark an allocation as "dirty," implying that it may or may not be inaccessible and need to
     /// be cleaned up.
-    pub fn mark_dirty<T>(&self, allocation: &GcBox<T>)
+    pub fn mark_dirty<T>(&self, allocation: NonNull<GcBox<T>>)
     where
         T: Collectable + Sync + ?Sized,
     {
+        let box_ref = unsafe { allocation.as_ref() };
         if self
             .to_clean
             .read()
             .unwrap()
             .insert(
-                AllocationId::from(allocation),
+                AllocationId::from(box_ref),
                 Cleanup {
-                    ptr: ErasedPtr::new(NonNull::from(allocation)),
+                    ptr: ErasedPtr::new(allocation),
                     build_fn: dfs::<T>,
                 },
             )
             .is_none()
         {
-            dbg!(allocation.weak.fetch_add(1, Ordering::Acquire));
+            box_ref.weak.fetch_add(1, Ordering::Acquire);
         }
     }
 
@@ -255,7 +259,7 @@ impl Dumpster {
             .remove(&AllocationId::from(allocation))
             .is_some()
         {
-            dbg!(allocation.weak.fetch_sub(1, Ordering::Release));
+            allocation.weak.fetch_sub(1, Ordering::Release);
         }
     }
 }
@@ -274,8 +278,7 @@ impl Dumpster {
 /// # Effects
 ///
 /// `ref_graph` will be expanded to include all allocations reachable from `ptr`.
-/// Any allocation which is of "unknown" status will also receive a mutex guard in `guards`.
-///d
+///
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
@@ -289,7 +292,7 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
     let Entry::Vacant(v) = ref_graph.entry(starting_id) else {
         // the weak count was incremented by another DFS operation elsewhere.
         // Decrement it to have only one from us.
-        dbg!(box_ref.weak.fetch_sub(1, Ordering::Relaxed));
+        box_ref.weak.fetch_sub(1, Ordering::Relaxed);
         return;
     };
     let strong_count = box_ref.strong.load(Ordering::Acquire);
@@ -380,13 +383,13 @@ impl<'a> Visitor for Dfs<'a> {
                 // This allocation has never been visited by the reference graph builder
                 let strong_count = box_ref.strong.load(Ordering::Acquire);
                 let generation = box_ref.generation.load(Ordering::Acquire);
-                dbg!(box_ref.weak.fetch_add(1, Ordering::Acquire));
+                box_ref.weak.fetch_add(1, Ordering::Acquire);
                 v.insert(AllocationInfo {
                     ptr: ErasedPtr::new(gc.ptr),
                     weak_drop_fn: drop_weak_zero::<T>,
                     reachability: Reachability::Unknown {
                         children: Vec::new(),
-                        n_unaccounted: strong_count,
+                        n_unaccounted: strong_count - 1,
                         generation,
                         destroy_fn: destroy_erased::<T>,
                         decrement_fn: decrement_reachable_count::<T>,
