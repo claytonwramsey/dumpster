@@ -19,21 +19,25 @@
 //! Thread-safe shared garbage collection.
 
 mod collect;
+mod ptr;
 #[cfg(test)]
 mod tests;
 
 use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
-    cell::Cell,
+    cell::{Cell, UnsafeCell},
     ops::Deref,
-    ptr::{addr_of, drop_in_place, NonNull},
+    ptr::{addr_of, drop_in_place},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crate::{Collectable, Visitor};
 
-use self::collect::{CLEANING, DUMPSTER};
+use self::{
+    collect::{CLEANING, DUMPSTER},
+    ptr::Tagged,
+};
 
 /// A thread-safe garbage-collected pointer.
 ///
@@ -59,17 +63,7 @@ use self::collect::{CLEANING, DUMPSTER};
 ///
 /// println!("{}", shared.load(Ordering::Relaxed));
 /// ```
-pub struct Gc<T>
-where
-    T: Collectable + Sync + ?Sized + 'static,
-{
-    /// A pointer to the heap allocation containing the data under concern.
-    /// The pointee box should never be mutated.
-    ///
-    /// This pointer will only be null if it has been 'destroyed' and is about to be cleaned up.
-    /// I do not use `Option<NonNull<T>` because it doesn't implement `CoerceUnsized`.
-    ptr: NonNull<GcBox<T>>,
-}
+pub struct Gc<T: Collectable + Sync + ?Sized + 'static>(UnsafeCell<Tagged<T>>);
 
 #[repr(C)]
 /// The backing allocation for a [`Gc`].
@@ -122,15 +116,16 @@ where
         T: Sized,
     {
         DUMPSTER.notify_created_gc();
-        Gc {
-            ptr: Box::leak(Box::new(GcBox {
+        Gc(UnsafeCell::new(Tagged::new(
+            Box::leak(Box::new(GcBox {
                 strong: AtomicUsize::new(1),
                 weak: AtomicUsize::new(0),
                 generation: AtomicUsize::new(0),
                 value,
             }))
             .into(),
-        }
+            false,
+        )))
     }
 }
 
@@ -154,13 +149,16 @@ where
     /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
     /// ```
     fn clone(&self) -> Gc<T> {
-        let box_ref = unsafe { self.ptr.as_ref() };
+        let box_ref = unsafe { self.0.into_inner().as_ref() };
         // increment strong count before generation to ensure sweeper never underestimates ref count
         box_ref.strong.fetch_add(1, Ordering::Relaxed);
         box_ref.generation.fetch_add(1, Ordering::Relaxed);
         DUMPSTER.notify_created_gc();
         DUMPSTER.mark_clean(box_ref);
-        Gc { ptr: self.ptr }
+        Gc(UnsafeCell::new(Tagged::new(
+            unsafe { (*self.0.get().clone()).as_nonnull() },
+            false,
+        )))
     }
 }
 
@@ -172,7 +170,7 @@ where
         if CLEANING.with(Cell::get) {
             return;
         }
-        let box_ref = unsafe { self.ptr.as_ref() };
+        let box_ref = unsafe { self.0.into_inner().as_ref() };
         // decrement strong count after generation to ensure sweeper never underestimates ref count
         box_ref.generation.fetch_sub(1, Ordering::Relaxed);
         box_ref.weak.fetch_add(1, Ordering::Acquire); // ensures that this allocation wasn't freed
@@ -185,13 +183,14 @@ where
                     // destroyed the last weak reference! we can safely deallocate this
                     let layout = Layout::for_value(box_ref);
                     unsafe {
-                        drop_in_place(self.ptr.as_mut());
-                        dealloc(self.ptr.as_ptr().cast(), layout);
+                        let nn = self.0.into_inner().as_nonnull();
+                        drop_in_place(nn.as_mut());
+                        dealloc(nn.as_ptr().cast(), layout);
                     }
                 }
             }
             _ => {
-                DUMPSTER.mark_dirty(self.ptr);
+                DUMPSTER.mark_dirty(unsafe { self.0.into_inner().as_nonnull() });
                 box_ref.weak.fetch_sub(1, Ordering::Relaxed);
             }
         }
@@ -210,13 +209,16 @@ impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &self.ptr.as_ref().value }
+        unsafe {
+            let x = *UnsafeCell::raw_get(&self.0);
+            &(*self.0.get()).as_ref().value
+        }
     }
 }
 
 impl<T: Collectable + ?Sized + Sync> AsRef<T> for Gc<T> {
     fn as_ref(&self) -> &T {
-        unsafe { addr_of!(self.ptr.as_ref().value).as_ref().unwrap() }
+        self.deref()
     }
 }
 

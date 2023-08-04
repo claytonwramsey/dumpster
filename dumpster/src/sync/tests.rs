@@ -16,9 +16,12 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Mutex,
+use std::{
+    ptr::NonNull,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 use crate::Visitor;
@@ -95,7 +98,7 @@ fn self_referential() {
     }
 
     let gc1 = Gc::new(Foo(Mutex::new(None)));
-    *gc1.0.lock().unwrap() = Some(Gc::clone(&gc1));
+    *(*gc1).0.lock().unwrap() = Some(Gc::clone(&gc1));
 
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
@@ -288,4 +291,64 @@ fn coerce_array() {
         std::mem::size_of::<Gc<[u8]>>(),
         2 * std::mem::size_of::<usize>()
     );
+}
+
+#[test]
+fn malicious() {
+    static EVIL: AtomicBool = AtomicBool::new(false);
+    struct A {
+        x: Gc<X>,
+        y: Gc<Y>,
+    }
+    struct X {
+        a: Mutex<Option<Gc<A>>>,
+        y: NonNull<Y>,
+    }
+    struct Y {
+        a: Mutex<Option<Gc<A>>>,
+    }
+
+    unsafe impl Collectable for A {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.x.accept(visitor)?;
+            self.y.accept(visitor)
+        }
+    }
+
+    unsafe impl Collectable for X {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.a.accept(visitor)?;
+            if EVIL.load(Ordering::Relaxed) {
+                println!("committing evil...");
+                // simulates a malicious thread
+                let y = unsafe { self.y.as_ref() };
+                *y.a.lock().unwrap() = (*self.a.lock().unwrap()).take();
+            }
+
+            Ok(())
+        }
+    }
+
+    unsafe impl Collectable for Y {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.a.accept(visitor)
+        }
+    }
+
+    unsafe impl Sync for X {}
+
+    let y = Gc::new(Y {
+        a: Mutex::new(None),
+    });
+    let x = Gc::new(X {
+        a: Mutex::new(None),
+        y: NonNull::from(y.as_ref()),
+    });
+    let a = Gc::new(A { x, y });
+    *a.x.a.lock().unwrap() = Some(a.clone());
+
+    collect_await();
+    drop(a.clone());
+    EVIL.store(true, Ordering::Relaxed);
+    collect_await();
 }

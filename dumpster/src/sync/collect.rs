@@ -20,7 +20,7 @@
 
 use std::{
     alloc::{dealloc, Layout},
-    cell::Cell,
+    cell::{Cell, UnsafeCell},
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take},
     ptr::{drop_in_place, NonNull},
@@ -339,7 +339,7 @@ impl<'a> Visitor for Dfs<'a> {
     where
         T: Collectable + Sync + ?Sized,
     {
-        let box_ref = unsafe { gc.ptr.as_ref() };
+        let box_ref = unsafe { gc.0.into_inner().as_ref() };
         let mut new_id = AllocationId::from(box_ref);
         let Reachability::Unknown {
             ref mut children, ..
@@ -385,7 +385,7 @@ impl<'a> Visitor for Dfs<'a> {
                 let generation = box_ref.generation.load(Ordering::Acquire);
                 box_ref.weak.fetch_add(1, Ordering::Acquire);
                 v.insert(AllocationInfo {
-                    ptr: ErasedPtr::new(gc.ptr),
+                    ptr: ErasedPtr::new(unsafe { gc.0.into_inner().as_nonnull() }),
                     weak_drop_fn: drop_weak_zero::<T>,
                     reachability: Reachability::Unknown {
                         children: Vec::new(),
@@ -467,7 +467,7 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
         where
             T: Collectable + Sync + ?Sized,
         {
-            let box_ref = unsafe { gc.ptr.as_ref() };
+            let box_ref = unsafe { (*UnsafeCell::raw_get(&gc.0)).as_ref() };
             let id = AllocationId::from(box_ref);
             if matches!(self.ref_graph[&id].reachability, Reachability::Reachable) {
                 box_ref.strong.fetch_sub(1, Ordering::Relaxed);
