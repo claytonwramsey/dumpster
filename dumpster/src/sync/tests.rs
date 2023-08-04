@@ -16,7 +16,10 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Mutex,
+};
 
 use crate::Visitor;
 

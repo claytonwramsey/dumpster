@@ -28,7 +28,7 @@ use std::{
     cell::Cell,
     ops::Deref,
     ptr::{addr_of, drop_in_place, NonNull},
-    sync::Mutex,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crate::{Collectable, Visitor};
@@ -71,32 +71,24 @@ where
     ptr: NonNull<GcBox<T>>,
 }
 
-#[derive(Debug)]
-/// The reference counts for an allocation.
-struct RefCounts {
-    /// The "strong" count, which is the number of extant `Gc`s to this allocation.
-    /// If the strong count is zero, a value contained in the allocation may be dropped, but the
-    /// allocation itself must still be valid.
-    strong: usize,
-    /// The "weak" count, which is the number of references to this allocation stored in to-collect
-    /// buffers by the collection algorithm.
-    /// If the weak count is zero, the allocation may be destroyed.
-    weak: usize,
-}
-
 #[repr(C)]
 /// The backing allocation for a [`Gc`].
 struct GcBox<T>
 where
     T: Collectable + Sync + ?Sized,
 {
-    /// The reference count for this allocation.
-    ///
-    /// We use a mutex instead of an atomic here for algorithmic reasons - it allows us to achieve
-    /// mutual exclusion when searching for cycles, preventing a malicious thread from fooling us
-    /// into believing that an allocation is unreachable (therefore, preventing us from
-    /// accidentally UAFing)
-    ref_count: Mutex<RefCounts>,
+    /// The "strong" count, which is the number of extant `Gc`s to this allocation.
+    /// If the strong count is zero, a value contained in the allocation may be dropped, but the
+    /// allocation itself must still be valid.
+    strong: AtomicUsize,
+    /// The "weak" count, which is the number of references to this allocation stored in to-collect
+    /// buffers by the collection algorithm.
+    /// If the weak count is zero, the allocation may be destroyed.
+    weak: AtomicUsize,
+    /// The current generation number of the allocation.
+    /// The generation number is incremented or decremented every time a strong reference is added
+    /// to or removed from the allocation.
+    generation: AtomicUsize,
     /// The actual data stored in the allocation.
     value: T,
 }
@@ -132,7 +124,9 @@ where
         DUMPSTER.notify_created_gc();
         Gc {
             ptr: Box::leak(Box::new(GcBox {
-                ref_count: Mutex::new(RefCounts { strong: 1, weak: 0 }),
+                strong: AtomicUsize::new(1),
+                weak: AtomicUsize::new(0),
+                generation: AtomicUsize::new(0),
                 value,
             }))
             .into(),
@@ -160,13 +154,12 @@ where
     /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
     /// ```
     fn clone(&self) -> Gc<T> {
-        unsafe {
-            let mut ref_count_guard = self.ptr.as_ref().ref_count.lock().unwrap();
-            ref_count_guard.strong += 1;
-            DUMPSTER.notify_created_gc();
-            // If we can clone a Gc pointing to this allocation, it must be accessible
-            DUMPSTER.mark_clean(self.ptr, &mut ref_count_guard);
-        }
+        let box_ref = unsafe { self.ptr.as_ref() };
+        // increment strong count before generation to ensure sweeper never underestimates ref count
+        box_ref.strong.fetch_add(1, Ordering::Relaxed);
+        box_ref.generation.fetch_add(1, Ordering::Relaxed);
+        DUMPSTER.notify_created_gc();
+        DUMPSTER.mark_clean(box_ref);
         Gc { ptr: self.ptr }
     }
 }
@@ -179,28 +172,27 @@ where
         if CLEANING.with(Cell::get) {
             return;
         }
-        unsafe {
-            // this block ensures that `count_handle` is dropped before `notify_dropped_gc`
-            let mut count_handle = self.ptr.as_ref().ref_count.lock().unwrap();
-            match count_handle.strong {
-                0 => (),
-                1 => {
-                    count_handle.strong = 0;
-
-                    DUMPSTER.mark_clean(self.ptr, &mut count_handle);
-                    if count_handle.weak == 0 {
-                        drop(count_handle); // must drop handle before dropping the mutex
-
-                        let layout = Layout::for_value(self.ptr.as_ref());
+        let box_ref = unsafe { self.ptr.as_ref() };
+        // decrement strong count after generation to ensure sweeper never underestimates ref count
+        box_ref.generation.fetch_sub(1, Ordering::Relaxed);
+        dbg!(box_ref.weak.fetch_add(1, Ordering::Acquire)); // ensures that this allocation wasn't freed
+                                                            // while we weren't looking
+        match box_ref.strong.fetch_sub(1, Ordering::Release) {
+            0 => unreachable!("strong cannot reach zero while a Gc to it exists"),
+            1 => {
+                DUMPSTER.mark_clean(box_ref);
+                if dbg!(box_ref.weak.fetch_sub(1, Ordering::Relaxed)) == 1 {
+                    // destroyed the last weak reference! we can safely deallocate this
+                    let layout = Layout::for_value(box_ref);
+                    unsafe {
                         drop_in_place(self.ptr.as_mut());
                         dealloc(self.ptr.as_ptr().cast(), layout);
                     }
                 }
-                n => {
-                    count_handle.strong = n - 1;
-                    DUMPSTER.mark_dirty(self.ptr, &mut count_handle);
-                    drop(count_handle);
-                }
+            }
+            _ => {
+                DUMPSTER.mark_dirty(box_ref);
+                box_ref.weak.fetch_sub(1, Ordering::Relaxed);
             }
         }
         DUMPSTER.notify_dropped_gc();
