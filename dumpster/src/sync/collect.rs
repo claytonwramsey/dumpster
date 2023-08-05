@@ -30,7 +30,7 @@ use std::{
     },
 };
 
-use chashmap::CHashMap;
+use dashmap::DashMap;
 
 use once_cell::sync::Lazy;
 
@@ -41,7 +41,7 @@ use super::{default_collect_condition, CollectInfo, Gc, GcBox};
 /// A structure containing the global information for the garbage collector.
 pub(super) struct Dumpster {
     /// A lookupt table for the allocations which may need to be cleaned up later.
-    to_clean: Lazy<RwLock<CHashMap<AllocationId, Cleanup>>>,
+    to_clean: Lazy<RwLock<DashMap<AllocationId, Cleanup>>>,
     /// A lock used for synchronizing threads that are awaiting completion of a collection process.
     /// This lock should be acquired for reads by threads running a collection and for writes by
     /// threads awaiting collection completion.
@@ -58,7 +58,7 @@ pub(super) struct Dumpster {
 /// The global collection of allocations to clean up.
 // wishing dreams: chashmap gets a const new function so that we can remove the once cell
 pub(super) static DUMPSTER: Dumpster = Dumpster {
-    to_clean: Lazy::new(|| RwLock::new(CHashMap::new())),
+    to_clean: Lazy::new(|| RwLock::new(DashMap::new())),
     collecting_lock: RwLock::new(()),
     n_gcs_dropped: AtomicUsize::new(0),
     n_gcs_existing: AtomicUsize::new(0),
