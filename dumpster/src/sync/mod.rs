@@ -107,6 +107,67 @@ pub fn collect_await() {
     DUMPSTER.await_collection_end();
 }
 
+/// Information passed to a [`CollectCondition`] used to determine whether the garbage collector
+/// should start collecting.
+pub struct CollectInfo {
+    /// Dummy value so this is a private structure.
+    _private: (),
+}
+
+/// A function which determines whether the garbage collector should start collecting.
+/// This function primarily exists so that it can be used with [`set_collect_condition`].
+///
+/// # Examples
+///
+/// ```rust
+/// use dumpster::sync::{set_collect_condition, CollectInfo};
+///
+/// fn always_collect(_: &CollectInfo) -> bool {
+///     true
+/// }
+/// ```
+pub type CollectCondition = fn(&CollectInfo) -> bool;
+
+#[must_use]
+/// The default collection condition used by the garbage collector.
+///
+/// There are no guarantees about what this function returns, other than that it will return `true`
+/// with sufficient frequency to ensure that all `Gc` operations are amortized _O(1)_ in runtime.
+///
+/// # Examples
+///
+/// ```rust
+/// use dumpster::sync::{default_collect_condition, set_collect_condition};
+///
+/// set_collect_condition(default_collect_condition)
+/// ```
+pub fn default_collect_condition(info: &CollectInfo) -> bool {
+    info.n_gcs_dropped_since_last_collect() > info.n_gcs_existing()
+}
+
+#[allow(clippy::missing_panics_doc)]
+/// Set the function which determines whether the garbage collector should be run.
+///
+/// `f` will be periodically called by the garbage collector to determine whether it should perform
+/// a full sweep of the heap.
+/// When `f` returns true, a sweep will begin.
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::sync::{set_collect_condition, CollectInfo};
+///
+/// /// This function will make sure a GC sweep never happens unless directly activated.
+/// fn never_collect(_: &CollectInfo) -> bool {
+///     false
+/// }
+///
+/// set_collect_condition(never_collect);
+/// ```
+pub fn set_collect_condition(f: CollectCondition) {
+    *DUMPSTER.collect_condition.write().unwrap() = f;
+}
+
 impl<T> Gc<T>
 where
     T: Collectable + Sync + ?Sized,
@@ -196,6 +257,32 @@ where
             }
         }
         DUMPSTER.notify_dropped_gc();
+    }
+}
+
+impl CollectInfo {
+    /// Get the number of times that a [`Gc`] has been dropped since the last time a collection
+    /// operation was performed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::sync::{set_collect_condition, CollectInfo};
+    ///
+    /// // Collection condition for whether many Gc's have been dropped.
+    /// fn have_many_gcs_dropped(info: &CollectInfo) -> bool {
+    ///     info.n_gcs_dropped_since_last_collect() > 100
+    /// }
+    ///
+    /// set_collect_condition(have_many_gcs_dropped);
+    /// ```
+    pub fn n_gcs_dropped_since_last_collect(&self) -> usize {
+        DUMPSTER.n_gcs_dropped.load(Ordering::Relaxed)
+    }
+
+    /// Get the total number of [`Gc`]s which currently exist.
+    pub fn n_gcs_existing(&self) -> usize {
+        DUMPSTER.n_gcs_existing.load(Ordering::Relaxed)
     }
 }
 

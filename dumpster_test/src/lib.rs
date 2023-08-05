@@ -99,6 +99,7 @@ fn self_referential() {
 
     assert_eq!(COUNT.load(Ordering::Relaxed), 0);
     drop(gc1);
+    collect();
     assert_eq!(COUNT.load(Ordering::Relaxed), 1);
 }
 
@@ -116,6 +117,7 @@ fn double_loop() {
 
     assert_eq!(COUNT.load(Ordering::Relaxed), 0);
     drop(gc1);
+    collect();
     assert_eq!(COUNT.load(Ordering::Relaxed), 1);
 }
 

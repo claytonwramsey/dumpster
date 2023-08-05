@@ -31,12 +31,13 @@ use crate::{unsync::Gc, Collectable, ErasedPtr, Visitor};
 use super::GcBox;
 
 thread_local! {
+    /// Whether the current thread is running a cleanup process.
+    pub(super) static COLLECTING: Cell<bool> = const { Cell::new(false) };
     /// The global collection of allocation information for this thread.
     pub(super) static DUMPSTER: Dumpster = Dumpster {
         to_collect: RefCell::new(HashMap::new()),
         n_ref_drops: Cell::new(0),
         n_refs_living: Cell::new(0),
-        collecting: Cell::new(false),
     };
 }
 
@@ -50,8 +51,6 @@ pub(super) struct Dumpster {
     n_ref_drops: Cell<usize>,
     /// The number of references that currently exist in the entire heap and stack.
     n_refs_living: Cell<usize>,
-    /// Whether the current thread is running a cleanup process.
-    collecting: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -154,7 +153,7 @@ impl Dumpster {
                 reachable: &sweep.visited,
             };
 
-            self.collecting.set(true);
+            COLLECTING.with(|c| c.set(true));
             for cleanup in self
                 .to_collect
                 .borrow_mut()
@@ -163,7 +162,7 @@ impl Dumpster {
             {
                 (cleanup.drop_fn)(cleanup.ptr, &mut decrementer);
             }
-            self.collecting.set(false);
+            COLLECTING.with(|c| c.set(false));
         }
     }
 
@@ -207,11 +206,6 @@ impl Dumpster {
     /// Notify the dumpster that a new [`Gc`] has been created.
     pub fn notify_created_gc(&self) {
         self.n_refs_living.set(self.n_refs_living.get() + 1);
-    }
-
-    /// Determine whether this dumpster is currently running a collection process.
-    pub fn collecting(&self) -> bool {
-        self.collecting.get()
     }
 }
 

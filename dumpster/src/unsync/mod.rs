@@ -29,7 +29,7 @@ use std::{
 
 use crate::{Collectable, Visitor};
 
-use self::collect::{Dumpster, DUMPSTER};
+use self::collect::{Dumpster, COLLECTING, DUMPSTER};
 
 mod collect;
 #[cfg(test)]
@@ -129,10 +129,10 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     /// If this is the last reference which can reach the pointed-to data, the allocation that it
     /// points to will be destroyed.
     fn drop(&mut self) {
+        if COLLECTING.with(Cell::get) {
+            return;
+        }
         DUMPSTER.with(|d| {
-            if d.collecting() {
-                return;
-            }
             let box_ref = unsafe { self.ptr.as_ref() };
             match box_ref.ref_count.get() {
                 NonZeroUsize::MIN => {

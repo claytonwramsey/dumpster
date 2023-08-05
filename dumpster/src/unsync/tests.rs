@@ -99,6 +99,7 @@ fn self_referential() {
 
     assert_eq!(DROPPED.load(Ordering::Relaxed), 0);
     drop(gc);
+    collect();
     assert_eq!(DROPPED.load(Ordering::Relaxed), 1);
 }
 

@@ -36,21 +36,7 @@ use once_cell::sync::Lazy;
 
 use crate::{Collectable, ErasedPtr, Visitor};
 
-use super::{Gc, GcBox};
-
-/// The global collection of allocations to clean up.
-// wishing dreams: chashmap gets a const new function so that we can remove the once cell
-pub(super) static DUMPSTER: Dumpster = Dumpster {
-    to_clean: Lazy::new(|| RwLock::new(CHashMap::new())),
-    collecting_lock: RwLock::new(()),
-    n_gcs_dropped: AtomicUsize::new(0),
-    n_gcs_existing: AtomicUsize::new(0),
-};
-
-thread_local! {
-    /// Whether the currently-running thread is doing a cleanup.
-    pub(super) static CLEANING: Cell<bool> = Cell::new(false);
-}
+use super::{default_collect_condition, CollectInfo, Gc, GcBox};
 
 /// A structure containing the global information for the garbage collector.
 pub(super) struct Dumpster {
@@ -61,10 +47,27 @@ pub(super) struct Dumpster {
     /// threads awaiting collection completion.
     collecting_lock: RwLock<()>,
     /// The number of [`Gc`]s dropped since the last time [`Dumpster::collect_all()`] was called.
-    n_gcs_dropped: AtomicUsize,
+    pub n_gcs_dropped: AtomicUsize,
     /// The number of [`Gc`]s currently existing (which have not had their internals replaced with
     /// `None`).
-    n_gcs_existing: AtomicUsize,
+    pub n_gcs_existing: AtomicUsize,
+    /// The function which determines whether a collection should be triggerd.
+    pub collect_condition: RwLock<fn(&CollectInfo) -> bool>,
+}
+
+/// The global collection of allocations to clean up.
+// wishing dreams: chashmap gets a const new function so that we can remove the once cell
+pub(super) static DUMPSTER: Dumpster = Dumpster {
+    to_clean: Lazy::new(|| RwLock::new(CHashMap::new())),
+    collecting_lock: RwLock::new(()),
+    n_gcs_dropped: AtomicUsize::new(0),
+    n_gcs_existing: AtomicUsize::new(0),
+    collect_condition: RwLock::new(default_collect_condition),
+};
+
+thread_local! {
+    /// Whether the currently-running thread is doing a cleanup.
+    pub(super) static CLEANING: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -216,11 +219,10 @@ impl Dumpster {
     /// This may trigger a linear-time cleanup of all allocations, but this will be guaranteed to
     /// occur with less-than-linear frequency, so it's always O(1).
     pub fn notify_dropped_gc(&self) {
-        let prev_gcs_dropped = self.n_gcs_dropped.fetch_add(1, Ordering::Relaxed);
-        let prev_gcs_existing = self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
-        assert_ne!(prev_gcs_existing, 0, "underflow on number of existing GCs");
+        self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
+        self.n_gcs_dropped.fetch_add(1, Ordering::Relaxed);
 
-        if prev_gcs_dropped > prev_gcs_existing {
+        if (self.collect_condition.read().unwrap())(&CollectInfo { _private: () }) {
             self.collect_all();
         }
     }
