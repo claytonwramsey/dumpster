@@ -199,7 +199,7 @@ impl Dumpster {
         // check if it's been a long time since the last time we collected all
         // the garbage.
         // if so, go and collect it all again (amortized O(1))
-        if self.n_ref_drops.get() << 1 >= self.n_refs_living.get() {
+        if self.n_ref_drops.get() > self.n_refs_living.get() {
             self.collect_all();
         }
     }

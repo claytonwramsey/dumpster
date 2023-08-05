@@ -220,7 +220,7 @@ impl Dumpster {
         let prev_gcs_existing = self.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
         assert_ne!(prev_gcs_existing, 0, "underflow on number of existing GCs");
 
-        if prev_gcs_dropped >= prev_gcs_existing >> 1 && prev_gcs_dropped > 0 {
+        if prev_gcs_dropped > prev_gcs_existing {
             self.collect_all();
         }
     }

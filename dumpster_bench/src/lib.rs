@@ -1,4 +1,8 @@
-use std::{cell::RefCell, sync::Mutex};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
 /// A garbage-collected structure which points to an arbitrary number of other garbage-collected
 /// structures.
@@ -18,14 +22,26 @@ pub trait SyncMultiref: Sync + Multiref {}
 
 impl<T> SyncMultiref for T where T: Sync + Multiref {}
 
+/// A samle multi-reference which uses `Rc`, which is technically not a garbage collector, as a
+/// baseline.
+pub struct RcMultiref {
+    refs: RefCell<Vec<Rc<Self>>>,
+}
+
+/// A samle multi-reference which uses `Arc`, which is technically not a garbage collector, as a
+/// baseline.
+pub struct ArcMultiref {
+    refs: Mutex<Vec<Arc<Self>>>,
+}
+
 #[derive(dumpster_derive::Collectable)]
 pub struct DumpsterSyncMultiref {
-    refs: Mutex<Vec<dumpster::sync::Gc<DumpsterSyncMultiref>>>,
+    refs: Mutex<Vec<dumpster::sync::Gc<Self>>>,
 }
 
 #[derive(dumpster_derive::Collectable)]
 pub struct DumpsterUnsyncMultiref {
-    refs: RefCell<Vec<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>>,
+    refs: RefCell<Vec<dumpster::unsync::Gc<Self>>>,
 }
 
 pub struct GcMultiref {
@@ -33,7 +49,17 @@ pub struct GcMultiref {
 }
 
 pub struct BaconRajanMultiref {
-    refs: RefCell<Vec<bacon_rajan_cc::Cc<BaconRajanMultiref>>>,
+    refs: RefCell<Vec<bacon_rajan_cc::Cc<Self>>>,
+}
+
+#[derive(shredder_derive::Scan)]
+pub struct ShredderMultiref {
+    refs: RefCell<Vec<shredder::Gc<Self>>>,
+}
+
+#[derive(shredder_derive::Scan)]
+pub struct ShredderSyncMultiref {
+    refs: Mutex<Vec<shredder::Gc<Self>>>,
 }
 
 impl bacon_rajan_cc::Trace for BaconRajanMultiref {
@@ -94,7 +120,7 @@ impl Multiref for dumpster::unsync::Gc<DumpsterUnsyncMultiref> {
     }
 
     fn collect() {
-        dumpster::sync::collect()
+        dumpster::unsync::collect()
     }
 }
 
@@ -127,5 +153,50 @@ impl Multiref for bacon_rajan_cc::Cc<BaconRajanMultiref> {
 
     fn collect() {
         bacon_rajan_cc::collect_cycles();
+        assert_eq!(bacon_rajan_cc::number_of_roots_buffered(), 0);
     }
+}
+
+impl Multiref for shredder::Gc<ShredderMultiref> {
+    fn new(points_to: Vec<Self>) -> Self {
+        shredder::Gc::new(ShredderMultiref {
+            refs: RefCell::new(points_to),
+        })
+    }
+
+    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
+        f(self.get().refs.borrow_mut().as_mut());
+    }
+
+    fn collect() {
+        shredder::synchronize_destructors();
+    }
+}
+
+impl Multiref for Rc<RcMultiref> {
+    fn new(points_to: Vec<Self>) -> Self {
+        Rc::new(RcMultiref {
+            refs: RefCell::new(points_to),
+        })
+    }
+
+    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
+        f(self.refs.borrow_mut().as_mut());
+    }
+
+    fn collect() {}
+}
+
+impl Multiref for Arc<ArcMultiref> {
+    fn new(points_to: Vec<Self>) -> Self {
+        Arc::new(ArcMultiref {
+            refs: Mutex::new(points_to),
+        })
+    }
+
+    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
+        f(self.refs.lock().unwrap().as_mut());
+    }
+
+    fn collect() {}
 }

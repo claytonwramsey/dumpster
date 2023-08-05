@@ -1,26 +1,46 @@
 //! Benchmarks for the `dumpster` garbage collection library.
 
-use std::{thread::spawn, time::Instant};
-
-use dumpster_bench::{
-    BaconRajanMultiref, DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref, Multiref,
+use std::{
+    rc::Rc,
+    sync::Arc,
+    thread::spawn,
+    time::{Duration, Instant},
 };
 
+use dumpster_bench::{
+    ArcMultiref, BaconRajanMultiref, DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref,
+    Multiref, RcMultiref, ShredderMultiref, SyncMultiref,
+};
+
+struct BenchmarkData {
+    n_threads: usize,
+    n_ops: usize,
+    duration: Duration,
+}
+
 fn main() {
-    single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>("dumpster::unsync");
-    single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>("dumpster::sync");
-    single_threaded::<gc::Gc<GcMultiref>>("gc");
-    single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon-rajan-cc");
+    const N_ITERS: usize = 1_000_000;
+    single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>(
+        "dumpster::unsync::Gc",
+        N_ITERS,
+    );
+    single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>("dumpster::sync::Gc", N_ITERS);
+    single_threaded::<Rc<RcMultiref>>("std::rc::Rc", N_ITERS);
+    single_threaded::<Arc<ArcMultiref>>("std::sync::Arc", N_ITERS);
+    single_threaded::<gc::Gc<GcMultiref>>("gc::Gc", N_ITERS);
+    single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon_rajan_cc::Cc", N_ITERS);
+    single_threaded::<shredder::Gc<ShredderMultiref>>("shredder::Gc", N_ITERS);
+    single_threaded::<shredder::Gc<ShredderMultiref>>("shredder::Gc (wrapping a mutex)", N_ITERS);
 }
 
 /// Run a benchmark of a multi-threaded garbage collector.
-fn single_threaded<M: Multiref>(name: &str) {
+fn single_threaded<M: Multiref>(name: &str, n_iters: usize) -> BenchmarkData {
     fastrand::seed(12345);
     let mut gcs = Vec::new();
 
     // println!("{name}: running...");
     let tic = Instant::now();
-    for _n in 0..1_000_000 {
+    for _n in 0..n_iters {
         // println!("iter {_n}");
         if gcs.is_empty() {
             gcs.push(M::new(Vec::new()));
@@ -65,21 +85,13 @@ fn single_threaded<M: Multiref>(name: &str) {
     M::collect();
     let toc = Instant::now();
     println!("finished {name} in {:?}", (toc - tic));
+    BenchmarkData {
+        n_threads: 1,
+        n_ops: n_iters,
+        duration: toc.duration_since(tic),
+    }
 }
 
-#[allow(dead_code)]
-fn concurrent_scaling() {
-    for nthreads in 1..16 {
-        let handles = (0..nthreads)
-            .map(|_| {
-                spawn(|| {
-                    todo!();
-                })
-            })
-            .collect::<Vec<_>>();
-
-        handles.into_iter().for_each(|x| {
-            x.join().unwrap();
-        });
-    }
+fn multi_threaded<M: SyncMultiref>(name: &str, n_iters: usize, n_threads: usize) -> BenchmarkData {
+    todo!()
 }
