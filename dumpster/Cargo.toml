@@ -14,5 +14,5 @@ categories = ["data-structures", "memory-management"]
 coerce-unsized = []
 
 [dependencies]
-chashmap = "2"
+chashmap = "2.2.2"
 once_cell = "1.18.0"

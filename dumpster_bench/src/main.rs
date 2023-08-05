@@ -30,7 +30,6 @@ fn main() {
     single_threaded::<gc::Gc<GcMultiref>>("gc::Gc", N_ITERS);
     single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon_rajan_cc::Cc", N_ITERS);
     single_threaded::<shredder::Gc<ShredderMultiref>>("shredder::Gc", N_ITERS);
-    single_threaded::<shredder::Gc<ShredderMultiref>>("shredder::Gc (wrapping a mutex)", N_ITERS);
 }
 
 /// Run a benchmark of a multi-threaded garbage collector.
@@ -45,8 +44,8 @@ fn single_threaded<M: Multiref>(name: &str, n_iters: usize) -> BenchmarkData {
         if gcs.is_empty() {
             gcs.push(M::new(Vec::new()));
         } else {
-            match fastrand::u8(0..5) {
-                0 | 2 => {
+            match fastrand::u8(0..4) {
+                0 => {
                     // println!("create allocation");
                     // create new allocation
                     gcs.push(M::new(Vec::new()));
@@ -61,12 +60,12 @@ fn single_threaded<M: Multiref>(name: &str, n_iters: usize) -> BenchmarkData {
                         gcs[from].apply(|v| v.push(new_gc));
                     }
                 }
-                3 => {
+                2 => {
                     // println!("remove gc");
                     // destroy a reference owned by the vector
                     gcs.swap_remove(fastrand::usize(0..gcs.len()));
                 }
-                4 => {
+                3 => {
                     // println!("remove reference");
                     // destroy a reference owned by some gc
                     let from = fastrand::usize(0..gcs.len());

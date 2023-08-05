@@ -263,9 +263,7 @@ impl Visitor for Dfs {
             }
         }
         if self.visited.insert(next_id) {
-            unsafe {
-                gc.ptr.as_ref().value.accept(self).unwrap();
-            }
+            let _ = unsafe { gc.ptr.as_ref() }.value.accept(self);
         }
     }
 }
@@ -290,9 +288,7 @@ impl Visitor for Sweep {
         T: Collectable + ?Sized,
     {
         if self.visited.insert(AllocationId::from(gc.ptr)) {
-            unsafe {
-                gc.ptr.as_ref().value.accept(self).unwrap();
-            }
+            let _ = unsafe { gc.ptr.as_ref().value.accept(self) };
         }
     }
 }
