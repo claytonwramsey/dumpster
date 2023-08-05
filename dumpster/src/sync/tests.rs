@@ -19,7 +19,7 @@
 use std::{
     ptr::NonNull,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Mutex,
     },
 };
@@ -295,7 +295,7 @@ fn coerce_array() {
 
 #[test]
 fn malicious() {
-    static EVIL: AtomicBool = AtomicBool::new(false);
+    static EVIL: AtomicUsize = AtomicUsize::new(0);
     struct A {
         x: Gc<X>,
         y: Gc<Y>,
@@ -318,7 +318,8 @@ fn malicious() {
     unsafe impl Collectable for X {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.a.accept(visitor)?;
-            if EVIL.load(Ordering::Relaxed) {
+
+            if EVIL.fetch_add(1, Ordering::Relaxed) == 2 {
                 println!("committing evil...");
                 // simulates a malicious thread
                 let y = unsafe { self.y.as_ref() };
@@ -349,6 +350,6 @@ fn malicious() {
 
     collect_await();
     drop(a.clone());
-    EVIL.store(true, Ordering::Relaxed);
+    EVIL.store(1, Ordering::Relaxed);
     collect_await();
 }

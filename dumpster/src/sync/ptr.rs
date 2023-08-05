@@ -24,13 +24,14 @@ use crate::Collectable;
 
 use super::GcBox;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+#[derive(Debug, PartialEq, Eq)]
 /// A tagged pointer with an extra bit.
 pub struct Tagged<T: Collectable + Sync + ?Sized>(NonNull<GcBox<T>>);
 
 impl<T: Collectable + Sync + ?Sized> Tagged<T> {
     /// Construct a new tagged pointer with the provided tag.
-    pub fn new(ptr: NonNull<GcBox<T>>, tag: bool) -> Tagged<T> {
+    pub(super) fn new(ptr: NonNull<GcBox<T>>, tag: bool) -> Tagged<T> {
         Tagged(NonNull::new(ptr.as_ptr().map_addr(|a| a | usize::from(tag))).unwrap())
     }
 
@@ -50,26 +51,17 @@ impl<T: Collectable + Sync + ?Sized> Tagged<T> {
     ///
     /// This function is only safe if it is acceptable to create a reference, i.e. the pointee is
     /// not mutated for the lifetime of the box.
-    pub unsafe fn as_ref<'a>(self) -> &'a GcBox<T> {
+    pub(super) unsafe fn as_ref<'a>(self) -> &'a GcBox<T> {
         unsafe { self.as_ptr().as_ref().unwrap() }
     }
 
-    /// Get a new reference out of this pointer.
-    ///
-    /// # Safety
-    ///
-    /// This function is only safe if it is acceptable to create a reference, i.e. that `self` is
-    /// unique.
-    pub unsafe fn as_mut<'a>(self) -> &'a mut GcBox<T> {
-        unsafe { self.as_ptr().as_mut().unwrap() }
-    }
-
     /// Convert this pointer into a raw pointer, removing tag information.
-    pub fn as_ptr(self) -> *mut GcBox<T> {
+    pub(super) fn as_ptr(self) -> *mut GcBox<T> {
         self.0.as_ptr().map_addr(|a| a & !1)
     }
 
-    pub fn as_nonnull(self) -> NonNull<GcBox<T>> {
+    /// Convert this pointer to a `NonNull`, removing tag information.
+    pub(super) fn as_nonnull(self) -> NonNull<GcBox<T>> {
         NonNull::new(self.as_ptr()).unwrap()
     }
 }
@@ -82,21 +74,9 @@ where
 {
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{cell::UnsafeCell, ptr::NonNull};
-
-    use super::Tagged;
-
-    fn copiable() {
-        let x: Tagged<()> = Tagged::new(NonNull::dangling(), false);
-        let _ = x.as_ptr();
-        let _ = x.as_ptr();
-    }
-
-    fn with_unsafe_cell() {
-        let x: UnsafeCell<Tagged<()>> = UnsafeCell::new(Tagged::new(NonNull::dangling(), false));
-        let y = &x;
-        let _ = unsafe { (*y.get()).as_ptr() };
+impl<T: Collectable + Sync + ?Sized> Clone for Tagged<T> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
+impl<T: Collectable + Sync + ?Sized> Copy for Tagged<T> {}

@@ -39,6 +39,7 @@ use self::{
     ptr::Tagged,
 };
 
+#[derive(Debug)]
 /// A thread-safe garbage-collected pointer.
 ///
 /// This pointer can be duplicated and then shared across threads.
@@ -149,14 +150,14 @@ where
     /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
     /// ```
     fn clone(&self) -> Gc<T> {
-        let box_ref = unsafe { self.0.into_inner().as_ref() };
+        let box_ref = unsafe { (*self.0.get()).as_ref() };
         // increment strong count before generation to ensure sweeper never underestimates ref count
         box_ref.strong.fetch_add(1, Ordering::Relaxed);
         box_ref.generation.fetch_add(1, Ordering::Relaxed);
         DUMPSTER.notify_created_gc();
         DUMPSTER.mark_clean(box_ref);
         Gc(UnsafeCell::new(Tagged::new(
-            unsafe { (*self.0.get().clone()).as_nonnull() },
+            unsafe { (*self.0.get()).as_nonnull() },
             false,
         )))
     }
@@ -170,7 +171,7 @@ where
         if CLEANING.with(Cell::get) {
             return;
         }
-        let box_ref = unsafe { self.0.into_inner().as_ref() };
+        let box_ref = unsafe { (*self.0.get()).as_ref() };
         // decrement strong count after generation to ensure sweeper never underestimates ref count
         box_ref.generation.fetch_sub(1, Ordering::Relaxed);
         box_ref.weak.fetch_add(1, Ordering::Acquire); // ensures that this allocation wasn't freed
@@ -183,14 +184,14 @@ where
                     // destroyed the last weak reference! we can safely deallocate this
                     let layout = Layout::for_value(box_ref);
                     unsafe {
-                        let nn = self.0.into_inner().as_nonnull();
+                        let mut nn = (*self.0.get()).as_nonnull();
                         drop_in_place(nn.as_mut());
                         dealloc(nn.as_ptr().cast(), layout);
                     }
                 }
             }
             _ => {
-                DUMPSTER.mark_dirty(unsafe { self.0.into_inner().as_nonnull() });
+                DUMPSTER.mark_dirty(unsafe { (*self.0.get()).as_nonnull() });
                 box_ref.weak.fetch_sub(1, Ordering::Relaxed);
             }
         }
@@ -209,16 +210,13 @@ impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            let x = *UnsafeCell::raw_get(&self.0);
-            &(*self.0.get()).as_ref().value
-        }
+        unsafe { &(*self.0.get()).as_ref().value }
     }
 }
 
 impl<T: Collectable + ?Sized + Sync> AsRef<T> for Gc<T> {
     fn as_ref(&self) -> &T {
-        self.deref()
+        self
     }
 }
 

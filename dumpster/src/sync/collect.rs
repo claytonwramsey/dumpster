@@ -21,7 +21,7 @@
 use std::{
     alloc::{dealloc, Layout},
     cell::{Cell, UnsafeCell},
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     mem::{replace, swap, take},
     ptr::{drop_in_place, NonNull},
     sync::{
@@ -83,17 +83,17 @@ where
     }
 }
 
-/// A function which can be used to create a reference graph.
-type BuildFn = unsafe fn(ErasedPtr, AllocationId, &mut HashMap<AllocationId, AllocationInfo>);
-
 #[derive(Debug)]
 /// The information which describes an allocation that may need to be cleaned up later.
 struct Cleanup {
     /// A pointer to the allocation to be cleaned up.
     ptr: ErasedPtr,
+    /// The function which can be used to tag the allocation and all its descendants prior to a
+    /// DFS. this function is safe to call on `ptr`.
+    tag_fn: unsafe fn(ErasedPtr, &mut HashSet<AllocationId>),
     /// The function which can be used to build a reference graph.
     /// This function is safe to call on `ptr`.
-    build_fn: BuildFn,
+    dfs_fn: unsafe fn(ErasedPtr, &mut HashMap<AllocationId, AllocationInfo>),
 }
 
 #[derive(Debug)]
@@ -141,13 +141,23 @@ impl Dumpster {
         let collecting_guard = self.collecting_lock.write().unwrap();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.to_clean.write().unwrap());
-        let mut ref_graph = HashMap::with_capacity(to_collect.len());
+        let mut visited = HashSet::with_capacity(to_collect.len());
 
-        for (id, cleanup) in to_collect {
-            unsafe { (cleanup.build_fn)(cleanup.ptr, id, &mut ref_graph) };
+        let to_dfs = to_collect
+            .into_iter()
+            .map(|(_, cleanup)| {
+                unsafe {
+                    (cleanup.tag_fn)(cleanup.ptr, &mut visited);
+                }
+                (cleanup.ptr, cleanup.dfs_fn)
+            })
+            .collect::<Vec<_>>();
+
+        let mut ref_graph = HashMap::with_capacity(visited.len());
+
+        for (ptr, dfs_fn) in to_dfs {
+            unsafe { dfs_fn(ptr, &mut ref_graph) };
         }
-
-        println!("{ref_graph:?}");
 
         let root_ids = ref_graph
             .iter()
@@ -159,7 +169,6 @@ impl Dumpster {
         for root_id in root_ids {
             sweep(root_id, &mut ref_graph);
         }
-        println!("{ref_graph:?}");
 
         for (decrement_fn, ptr) in ref_graph.iter().filter_map(|(_, v)| match v.reachability {
             Reachability::Reachable => None,
@@ -237,7 +246,8 @@ impl Dumpster {
                 AllocationId::from(box_ref),
                 Cleanup {
                     ptr: ErasedPtr::new(allocation),
-                    build_fn: dfs::<T>,
+                    tag_fn: tag_all::<T>,
+                    dfs_fn: dfs::<T>,
                 },
             )
             .is_none()
@@ -264,16 +274,53 @@ impl Dumpster {
     }
 }
 
+/// Tag all allocations reachable from `ptr` as being part of a sweep (i.e. setting their tag to
+/// `true`).
+unsafe fn tag_all<T: Collectable + Sync + ?Sized>(
+    ptr: ErasedPtr,
+    visited: &mut HashSet<AllocationId>,
+) {
+    /// A visitor for tagging all `Gc`s reachable from one allocation.
+    struct TagAll<'a> {
+        /// The set of allocations already visited.
+        visited: &'a mut HashSet<AllocationId>,
+    }
+
+    impl Visitor for TagAll<'_> {
+        fn visit_sync<T>(&mut self, gc: &Gc<T>)
+        where
+            T: Collectable + Sync + ?Sized,
+        {
+            let tagged_ptr = UnsafeCell::raw_get(&gc.0);
+            let tagged = unsafe { *tagged_ptr };
+            unsafe { tagged_ptr.write(tagged.with_tag(true)) };
+            let box_ref = unsafe { tagged.as_ref() };
+            if self.visited.insert(AllocationId::from(box_ref)) {
+                let _ = box_ref.value.accept(self);
+            }
+        }
+
+        fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
+        where
+            T: Collectable + ?Sized,
+        {
+            unreachable!()
+        }
+    }
+
+    let box_ref = unsafe { ptr.specify::<GcBox<T>>().as_ref() };
+    if visited.insert(AllocationId::from(box_ref)) {
+        let _ = box_ref.value.accept(&mut TagAll { visited });
+    }
+}
+
 /// Build out a part of the reference graph, making note of all allocations which are reachable from
 /// the one described in `ptr`.
 ///
 /// # Inputs
 ///
 /// - `ptr`: A pointer to the allocation that we should start constructing from.
-/// - `starting_id`: The ID of the allocation pointed to by `ptr`.
 /// - `ref_graph`: A lookup from allocation IDs to node information about that allocation.
-/// - `guards`: A lookup from allocation IDs to the mutex guards they control. This prevents data
-///   races during reference graph construction.
 ///
 /// # Effects
 ///
@@ -282,13 +329,12 @@ impl Dumpster {
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-/// `starting_id` must refer to the reference count for the allocation pointed to by `ptr`.
 unsafe fn dfs<T: Collectable + Sync + ?Sized>(
     ptr: ErasedPtr,
-    starting_id: AllocationId,
     ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
 ) {
     let box_ref = unsafe { ptr.specify::<GcBox<T>>().as_ref() };
+    let starting_id = AllocationId::from(box_ref);
     let Entry::Vacant(v) = ref_graph.entry(starting_id) else {
         // the weak count was incremented by another DFS operation elsewhere.
         // Decrement it to have only one from us.
@@ -339,8 +385,20 @@ impl<'a> Visitor for Dfs<'a> {
     where
         T: Collectable + Sync + ?Sized,
     {
-        let box_ref = unsafe { gc.0.into_inner().as_ref() };
+        let tagged_ptr = UnsafeCell::raw_get(&gc.0);
+        let tagged = unsafe { *tagged_ptr };
+        let box_ref = unsafe { tagged.as_ref() };
+        unsafe {
+            *tagged_ptr = tagged.with_tag(false);
+        }
+
         let mut new_id = AllocationId::from(box_ref);
+        if !tagged.tagged() {
+            // This pointer is tagged, so the allocation containing it must be accessible. Sweep!
+            sweep(self.current_id, self.ref_graph);
+            return;
+        }
+
         let Reachability::Unknown {
             ref mut children, ..
         } = self
@@ -385,7 +443,7 @@ impl<'a> Visitor for Dfs<'a> {
                 let generation = box_ref.generation.load(Ordering::Acquire);
                 box_ref.weak.fetch_add(1, Ordering::Acquire);
                 v.insert(AllocationInfo {
-                    ptr: ErasedPtr::new(unsafe { gc.0.into_inner().as_nonnull() }),
+                    ptr: ErasedPtr::new(unsafe { (*gc.0.get()).as_nonnull() }),
                     weak_drop_fn: drop_weak_zero::<T>,
                     reachability: Reachability::Unknown {
                         children: Vec::new(),
