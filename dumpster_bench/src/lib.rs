@@ -18,9 +18,9 @@ pub trait Multiref: Clone {
 }
 
 /// A trait for thread-safe synchronized multirefs.
-pub trait SyncMultiref: Sync + Multiref {}
+pub trait SyncMultiref: Send + Sync + Multiref {}
 
-impl<T> SyncMultiref for T where T: Sync + Multiref {}
+impl<T> SyncMultiref for T where T: Send + Sync + Multiref {}
 
 /// A samle multi-reference which uses `Rc`, which is technically not a garbage collector, as a
 /// baseline.
@@ -166,6 +166,22 @@ impl Multiref for shredder::Gc<ShredderMultiref> {
 
     fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
         f(self.get().refs.borrow_mut().as_mut());
+    }
+
+    fn collect() {
+        shredder::synchronize_destructors();
+    }
+}
+
+impl Multiref for shredder::Gc<ShredderSyncMultiref> {
+    fn new(points_to: Vec<Self>) -> Self {
+        shredder::Gc::new(ShredderSyncMultiref {
+            refs: Mutex::new(points_to),
+        })
+    }
+
+    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
+        f(self.get().refs.lock().unwrap().as_mut());
     }
 
     fn collect() {
