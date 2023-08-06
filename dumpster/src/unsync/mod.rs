@@ -60,7 +60,31 @@ pub struct Gc<T: Collectable + ?Sized + 'static> {
 
 /// Collect all existing unreachable allocations.
 ///
+/// This operation is most useful for making sure that the `Drop` implementation for some data has
+/// been called before moving on (such as for a file handle or mutex guard), because the garbage
+/// collector is not eager under normal conditions.
 /// This only collects the allocations local to the caller's thread.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
+/// use dumpster::unsync::{collect, Gc};
+/// use std::sync::Mutex;
+///
+/// static MY_MUTEX: Mutex<()> = Mutex::new(());
+///
+/// let guard_gc = Gc::new(MY_MUTEX.lock()?);
+/// drop(guard_gc);
+/// // We're not certain that the handle that was contained in `guard_gc` has been dropped, so we
+/// // should force a collection to make sure.
+/// collect();
+///
+/// // We know this won't cause a deadlock because we made sure to run a collection.
+/// let _x = MY_MUTEX.lock()?;
+/// # Ok(())
+/// # }
+/// ```
 pub fn collect() {
     DUMPSTER.with(Dumpster::collect_all);
 }
@@ -83,6 +107,8 @@ pub struct CollectInfo {
 /// fn always_collect(_: &CollectInfo) -> bool {
 ///     true
 /// }
+///
+/// set_collect_condition(always_collect);
 /// ```
 pub type CollectCondition = fn(&CollectInfo) -> bool;
 
@@ -92,12 +118,18 @@ pub type CollectCondition = fn(&CollectInfo) -> bool;
 /// There are no guarantees about what this function returns, other than that it will return `true`
 /// with sufficient frequency to ensure that all `Gc` operations are amortized _O(1)_ in runtime.
 ///
+/// This function isn't really meant to be called by users, but rather it's supposed to be handed
+/// off to [`set_collect_condition`] to return to the default operating mode of the library.
+///
+/// This collection condition applies locally, i.e. only to this thread.
+/// If you want it to apply globally, you'll have to update it every time you spawn a thread.
+///
 /// # Examples
 ///
 /// ```rust
 /// use dumpster::unsync::{default_collect_condition, set_collect_condition};
 ///
-/// set_collect_condition(default_collect_condition)
+/// set_collect_condition(default_collect_condition);
 /// ```
 pub fn default_collect_condition(info: &CollectInfo) -> bool {
     info.n_gcs_dropped_since_last_collect() > info.n_gcs_existing()

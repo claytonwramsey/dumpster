@@ -21,23 +21,33 @@
 use std::{
     cell::RefCell,
     collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque},
+    ops::Deref,
     sync::{
         atomic::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
             AtomicU64, AtomicU8, AtomicUsize,
         },
-        Mutex, TryLockError,
+        Mutex, MutexGuard, RwLock, RwLockReadGuard, TryLockError,
     },
 };
 
 use crate::{Collectable, Visitor};
 
-unsafe impl<T: ?Sized> Collectable for &'static T {
-    #[inline]
-    fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
-        Ok(())
-    }
+/// Implement `Collectable` trivially for some parametric `?Sized` type.
+macro_rules! param_trivial_impl_unsized {
+    ($x: ty) => {
+        unsafe impl<T: ?Sized> Collectable for $x {
+            #[inline]
+            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+                Ok(())
+            }
+        }
+    };
 }
+
+param_trivial_impl_unsized!(MutexGuard<'static, T>);
+param_trivial_impl_unsized!(RwLockReadGuard<'static, T>);
+param_trivial_impl_unsized!(&'static T);
 
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     #[inline]
@@ -54,6 +64,20 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
                 TryLockError::Poisoned(_) => panic!(),
                 TryLockError::WouldBlock => (),
             })?
+            .deref()
+            .accept(visitor)
+    }
+}
+
+unsafe impl<T: Collectable + ?Sized> Collectable for RwLock<T> {
+    #[inline]
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.try_read()
+            .map_err(|e| match e {
+                TryLockError::Poisoned(_) => panic!(),
+                TryLockError::WouldBlock => (),
+            })?
+            .deref()
             .accept(visitor)
     }
 }

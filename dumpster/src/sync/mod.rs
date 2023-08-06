@@ -125,6 +125,8 @@ pub struct CollectInfo {
 /// fn always_collect(_: &CollectInfo) -> bool {
 ///     true
 /// }
+///
+/// set_collect_condition(always_collect);
 /// ```
 pub type CollectCondition = fn(&CollectInfo) -> bool;
 
@@ -134,12 +136,17 @@ pub type CollectCondition = fn(&CollectInfo) -> bool;
 /// There are no guarantees about what this function returns, other than that it will return `true`
 /// with sufficient frequency to ensure that all `Gc` operations are amortized _O(1)_ in runtime.
 ///
+/// This function isn't really meant to be called by users, but rather it's supposed to be handed
+/// off to [`set_collect_condition`] to return to the default operating mode of the library.
+///
+/// This collection condition applies globally, i.e. to every thread.
+///
 /// # Examples
 ///
 /// ```rust
 /// use dumpster::sync::{default_collect_condition, set_collect_condition};
 ///
-/// set_collect_condition(default_collect_condition)
+/// set_collect_condition(default_collect_condition);
 /// ```
 pub fn default_collect_condition(info: &CollectInfo) -> bool {
     info.n_gcs_dropped_since_last_collect() > info.n_gcs_existing()

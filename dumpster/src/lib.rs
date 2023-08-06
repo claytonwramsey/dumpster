@@ -162,6 +162,8 @@ pub unsafe trait Collectable {
 /// garbage-collected pointer.
 /// Then, the garabge-collected pointer will call one of `visit_sync` or `visit_unsync`, depending
 /// on which type of pointer it is.
+///
+/// In general, it's not expected for consumers of this library to write their own visitors.
 pub trait Visitor {
     /// Visit a synchronized garbage-collected pointer.
     ///
