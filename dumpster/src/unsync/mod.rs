@@ -39,7 +39,7 @@ mod tests;
 /// A garbage-collected pointer.
 ///
 /// This garbage-collected pointer may be used for data which is not safe to share across threads
-/// (such as a [`RefCell`]).
+/// (such as a [`std::cell::RefCell`]).
 /// It can also be used for variably sized data.
 ///
 /// # Examples
