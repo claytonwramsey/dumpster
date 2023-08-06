@@ -261,6 +261,7 @@ where
 }
 
 impl CollectInfo {
+    #[must_use]
     /// Get the number of times that a [`Gc`] has been dropped since the last time a collection
     /// operation was performed.
     ///
@@ -280,7 +281,21 @@ impl CollectInfo {
         DUMPSTER.n_gcs_dropped.load(Ordering::Relaxed)
     }
 
+    #[must_use]
     /// Get the total number of [`Gc`]s which currently exist.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::sync::{set_collect_condition, CollectInfo};
+    ///
+    /// // Collection condition for whether many Gc's currently exist.
+    /// fn have_many_gcs_dropped(info: &CollectInfo) -> bool {
+    ///     info.n_gcs_existing() > 100
+    /// }
+    ///
+    /// set_collect_condition(have_many_gcs_dropped);
+    /// ```
     pub fn n_gcs_existing(&self) -> usize {
         DUMPSTER.n_gcs_existing.load(Ordering::Relaxed)
     }

@@ -26,9 +26,12 @@ use std::{
     ptr::{drop_in_place, NonNull},
 };
 
-use crate::{unsync::Gc, Collectable, ErasedPtr, Visitor};
+use crate::{
+    unsync::{default_collect_condition, CollectInfo, Gc},
+    Collectable, ErasedPtr, Visitor,
+};
 
-use super::GcBox;
+use super::{CollectCondition, GcBox};
 
 thread_local! {
     /// Whether the current thread is running a cleanup process.
@@ -38,6 +41,7 @@ thread_local! {
         to_collect: RefCell::new(HashMap::new()),
         n_ref_drops: Cell::new(0),
         n_refs_living: Cell::new(0),
+        collect_condition: Cell::new(default_collect_condition),
     };
 }
 
@@ -48,9 +52,11 @@ pub(super) struct Dumpster {
     /// their allocations.
     to_collect: RefCell<HashMap<AllocationId, Cleanup>>,
     /// The number of times a reference has been dropped since the last collection was triggered.
-    n_ref_drops: Cell<usize>,
+    pub n_ref_drops: Cell<usize>,
     /// The number of references that currently exist in the entire heap and stack.
-    n_refs_living: Cell<usize>,
+    pub n_refs_living: Cell<usize>,
+    /// The function for determining whether a collection should be run.
+    pub collect_condition: Cell<CollectCondition>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -198,7 +204,7 @@ impl Dumpster {
         // check if it's been a long time since the last time we collected all
         // the garbage.
         // if so, go and collect it all again (amortized O(1))
-        if self.n_ref_drops.get() > self.n_refs_living.get() {
+        if (self.collect_condition.get())(&CollectInfo { _private: () }) {
             self.collect_all();
         }
     }
