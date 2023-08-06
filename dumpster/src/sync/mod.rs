@@ -216,7 +216,7 @@ where
         box_ref.strong.fetch_add(1, Ordering::Relaxed);
         box_ref.generation.fetch_add(1, Ordering::Relaxed);
         DUMPSTER.notify_created_gc();
-        DUMPSTER.mark_clean(box_ref);
+        // DUMPSTER.mark_clean(box_ref); // causes performance drops
         Gc(UnsafeCell::new(Tagged::new(
             unsafe { (*self.0.get()).as_nonnull() },
             false,
