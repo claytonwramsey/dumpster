@@ -59,10 +59,10 @@ fn single_alloc() {
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&DROP_COUNT));
 
-    collect_await();
+    collect();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
-    collect_await();
+    collect();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 
@@ -76,7 +76,7 @@ fn ref_count() {
     drop(gc1);
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc2);
-    collect_await();
+    collect();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 
@@ -103,7 +103,7 @@ fn self_referential() {
 
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
-    collect_await();
+    collect();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 
@@ -122,15 +122,15 @@ fn two_cycle() {
     });
     gc0.refs.lock().unwrap().push(Gc::clone(&gc1));
 
-    collect_await();
+    collect();
     assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     drop(gc0);
-    collect_await();
+    collect();
     assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     drop(gc1);
-    collect_await();
+    collect();
     assert_eq!(DROP_0.load(Ordering::Acquire), 1);
     assert_eq!(DROP_0.load(Ordering::Acquire), 1);
 }
@@ -151,15 +151,15 @@ fn self_ref_two_cycle() {
     gc0.refs.lock().unwrap().extend([gc0.clone(), gc1.clone()]);
     gc1.refs.lock().unwrap().push(gc1.clone());
 
-    collect_await();
+    collect();
     assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     drop(gc0);
-    collect_await();
+    collect();
     assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     assert_eq!(DROP_0.load(Ordering::Acquire), 0);
     drop(gc1);
-    collect_await();
+    collect();
     assert_eq!(DROP_0.load(Ordering::Acquire), 1);
     assert_eq!(DROP_0.load(Ordering::Acquire), 1);
 }
@@ -194,25 +194,25 @@ fn parallel_loop() {
     assert_eq!(COUNT_3.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_4.load(Ordering::Acquire), 0);
     drop(gc1);
-    collect_await();
+    collect();
     assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_2.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_3.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_4.load(Ordering::Acquire), 0);
     drop(gc2);
-    collect_await();
+    collect();
     assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_2.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_3.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_4.load(Ordering::Acquire), 0);
     drop(gc3);
-    collect_await();
+    collect();
     assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_2.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_3.load(Ordering::Acquire), 0);
     assert_eq!(COUNT_4.load(Ordering::Acquire), 0);
     drop(gc4);
-    collect_await();
+    collect();
     assert_eq!(COUNT_1.load(Ordering::Acquire), 1);
     assert_eq!(COUNT_2.load(Ordering::Acquire), 1);
     assert_eq!(COUNT_3.load(Ordering::Acquire), 1);
@@ -228,7 +228,7 @@ fn deadlock() {
 
     let guard = gc1.lock();
     drop(gc2);
-    collect_await();
+    collect();
     drop(guard);
 }
 
@@ -242,17 +242,17 @@ fn open_drop() {
 
     gc1.refs.lock().unwrap().push(gc1.clone());
     let guard = gc1.refs.lock();
-    collect_await();
+    collect();
     assert_eq!(COUNT_1.load(Ordering::Acquire), 0);
     drop(guard);
     drop(gc1);
-    collect_await();
+    collect();
 
     assert_eq!(COUNT_1.load(Ordering::Acquire), 1);
 }
 
 #[test]
-fn eventually_collect_await() {
+fn eventually_collect() {
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
     static COUNT_2: AtomicUsize = AtomicUsize::new(0);
 
@@ -272,7 +272,7 @@ fn eventually_collect_await() {
     drop(gc1);
     drop(gc2);
 
-    for _ in 0..100 {
+    for _ in 0..10000 {
         let gc = Gc::new(());
         drop(gc);
     }
@@ -349,8 +349,8 @@ fn malicious() {
     let a = Gc::new(A { x, y });
     *a.x.a.lock().unwrap() = Some(a.clone());
 
-    collect_await();
+    collect();
     drop(a.clone());
     EVIL.store(1, Ordering::Relaxed);
-    collect_await();
+    collect();
 }

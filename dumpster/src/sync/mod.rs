@@ -26,7 +26,7 @@ mod tests;
 use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
-    cell::{Cell, UnsafeCell},
+    cell::UnsafeCell,
     ops::Deref,
     ptr::{addr_of, drop_in_place},
     sync::atomic::{fence, AtomicUsize, Ordering},
@@ -35,7 +35,10 @@ use std::{
 use crate::{Collectable, Visitor};
 
 use self::{
-    collect::{CLEANING, DUMPSTER},
+    collect::{
+        collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped,
+        n_gcs_existing, notify_created_gc, notify_dropped_gc,
+    },
     ptr::Tagged,
 };
 
@@ -91,20 +94,11 @@ where
 unsafe impl<T> Send for Gc<T> where T: Collectable + Sync + ?Sized {}
 unsafe impl<T> Sync for Gc<T> where T: Collectable + Sync + ?Sized {}
 
-/// Collect all unreachable thread-safe [`Gc`]s on the heap.
-///
-/// This function may return while some `Gc`s created by this thread but which are unreachable have
-/// still not been collected, due to concurrency.
-/// For a blocking version, refer to [`collect_await`].
+/// Begin a collection operation of the allocations on the heap.
+/// Due to concurrency issues, this may not collect every single unreachable allocation that
+/// currently exists.
 pub fn collect() {
-    DUMPSTER.collect_all();
-}
-
-/// Collect all unreachable thread-safe [`Gc`]s on the heap, blocking until no more collection
-/// operations are occurring.
-pub fn collect_await() {
-    collect();
-    DUMPSTER.await_collection_end();
+    collect_all_await();
 }
 
 /// Information passed to a [`CollectCondition`] used to determine whether the garbage collector
@@ -152,28 +146,7 @@ pub fn default_collect_condition(info: &CollectInfo) -> bool {
     info.n_gcs_dropped_since_last_collect() > info.n_gcs_existing()
 }
 
-#[allow(clippy::missing_panics_doc)]
-/// Set the function which determines whether the garbage collector should be run.
-///
-/// `f` will be periodically called by the garbage collector to determine whether it should perform
-/// a full sweep of the heap.
-/// When `f` returns true, a sweep will begin.
-///
-/// # Examples
-///
-/// ```
-/// use dumpster::sync::{set_collect_condition, CollectInfo};
-///
-/// /// This function will make sure a GC sweep never happens unless directly activated.
-/// fn never_collect(_: &CollectInfo) -> bool {
-///     false
-/// }
-///
-/// set_collect_condition(never_collect);
-/// ```
-pub fn set_collect_condition(f: CollectCondition) {
-    *DUMPSTER.collect_condition.write().unwrap() = f;
-}
+pub use collect::set_collect_condition;
 
 impl<T> Gc<T>
 where
@@ -184,7 +157,7 @@ where
     where
         T: Sized,
     {
-        DUMPSTER.notify_created_gc();
+        notify_created_gc();
         Gc(UnsafeCell::new(Tagged::new(
             Box::leak(Box::new(GcBox {
                 strong: AtomicUsize::new(1),
@@ -222,8 +195,8 @@ where
         // increment strong count before generation to ensure sweeper never underestimates ref count
         box_ref.strong.fetch_add(1, Ordering::Relaxed);
         box_ref.generation.fetch_add(1, Ordering::Relaxed);
-        DUMPSTER.notify_created_gc();
-        // DUMPSTER.mark_clean(box_ref); // causes performance drops
+        notify_created_gc();
+        // mark_clean(box_ref); // causes performance drops
         Gc(UnsafeCell::new(Tagged::new(
             unsafe { (*self.0.get()).as_nonnull() },
             false,
@@ -236,7 +209,7 @@ where
     T: Collectable + Sync + ?Sized,
 {
     fn drop(&mut self) {
-        if CLEANING.with(Cell::get) {
+        if currently_cleaning() {
             return;
         }
         let box_ref = unsafe { (*self.0.get()).as_ref() };
@@ -247,7 +220,7 @@ where
         match box_ref.strong.fetch_sub(1, Ordering::AcqRel) {
             0 => unreachable!("strong cannot reach zero while a Gc to it exists"),
             1 => {
-                DUMPSTER.mark_clean(box_ref);
+                mark_clean(box_ref);
                 if box_ref.weak.fetch_sub(1, Ordering::Release) == 1 {
                     // destroyed the last weak reference! we can safely deallocate this
                     let layout = Layout::for_value(box_ref);
@@ -260,11 +233,11 @@ where
                 }
             }
             _ => {
-                DUMPSTER.mark_dirty(unsafe { (*self.0.get()).as_nonnull() });
+                mark_dirty(unsafe { (*self.0.get()).as_nonnull() });
                 box_ref.weak.fetch_sub(1, Ordering::Release);
             }
         }
-        DUMPSTER.notify_dropped_gc();
+        notify_dropped_gc();
     }
 }
 
@@ -286,7 +259,7 @@ impl CollectInfo {
     /// set_collect_condition(have_many_gcs_dropped);
     /// ```
     pub fn n_gcs_dropped_since_last_collect(&self) -> usize {
-        DUMPSTER.n_gcs_dropped.load(Ordering::Relaxed)
+        n_gcs_dropped()
     }
 
     #[must_use]
@@ -305,7 +278,7 @@ impl CollectInfo {
     /// set_collect_condition(have_many_gcs_dropped);
     /// ```
     pub fn n_gcs_existing(&self) -> usize {
-        DUMPSTER.n_gcs_existing.load(Ordering::Relaxed)
+        n_gcs_existing()
     }
 }
 
