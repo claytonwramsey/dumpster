@@ -29,7 +29,7 @@ use std::{
     cell::{Cell, UnsafeCell},
     ops::Deref,
     ptr::{addr_of, drop_in_place},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
 use crate::{Collectable, Visitor};
@@ -241,16 +241,17 @@ where
         }
         let box_ref = unsafe { (*self.0.get()).as_ref() };
         // decrement strong count after generation to ensure sweeper never underestimates ref count
-        box_ref.generation.fetch_sub(1, Ordering::Relaxed);
-        box_ref.weak.fetch_add(1, Ordering::Acquire); // ensures that this allocation wasn't freed
-                                                      // while we weren't looking
-        match box_ref.strong.fetch_sub(1, Ordering::Release) {
+        box_ref.generation.fetch_sub(1, Ordering::Acquire);
+        box_ref.weak.fetch_add(1, Ordering::AcqRel); // ensures that this allocation wasn't freed
+                                                     // while we weren't looking
+        match box_ref.strong.fetch_sub(1, Ordering::AcqRel) {
             0 => unreachable!("strong cannot reach zero while a Gc to it exists"),
             1 => {
                 DUMPSTER.mark_clean(box_ref);
-                if box_ref.weak.fetch_sub(1, Ordering::Relaxed) == 1 {
+                if box_ref.weak.fetch_sub(1, Ordering::Release) == 1 {
                     // destroyed the last weak reference! we can safely deallocate this
                     let layout = Layout::for_value(box_ref);
+                    fence(Ordering::Acquire);
                     unsafe {
                         let mut nn = (*self.0.get()).as_nonnull();
                         drop_in_place(nn.as_mut());
@@ -260,7 +261,7 @@ where
             }
             _ => {
                 DUMPSTER.mark_dirty(unsafe { (*self.0.get()).as_nonnull() });
-                box_ref.weak.fetch_sub(1, Ordering::Relaxed);
+                box_ref.weak.fetch_sub(1, Ordering::Release);
             }
         }
         DUMPSTER.notify_dropped_gc();

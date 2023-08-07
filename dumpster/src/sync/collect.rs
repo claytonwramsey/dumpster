@@ -72,7 +72,7 @@ thread_local! {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 /// A unique identifier for an allocation.
-struct AllocationId(NonNull<()>);
+struct AllocationId(NonNull<GcBox<()>>);
 
 unsafe impl Send for AllocationId {}
 unsafe impl Sync for AllocationId {}
@@ -166,7 +166,9 @@ impl Dumpster {
             .iter()
             .filter_map(|(&k, v)| match v.reachability {
                 Reachability::Reachable => Some(k),
-                Reachability::Unknown { n_unaccounted, .. } => (n_unaccounted > 0).then_some(k),
+                Reachability::Unknown { n_unaccounted, .. } => (n_unaccounted > 0
+                    || unsafe { k.0.as_ref().weak.load(Ordering::Relaxed) > 1 })
+                .then_some(k),
             })
             .collect::<Vec<_>>();
         for root_id in root_ids {
@@ -183,11 +185,11 @@ impl Dumpster {
         // set of allocations which must be destroyed because we were the last weak pointer to it
         let mut weak_destroys = Vec::new();
         for (id, node) in ref_graph {
+            let header_ref = unsafe { id.0.as_ref() };
             match node.reachability {
                 Reachability::Unknown { destroy_fn, .. } => unsafe { destroy_fn(node.ptr) },
                 Reachability::Reachable => {
-                    let header_ref = unsafe { id.0.cast::<GcBox<()>>().as_ref() };
-                    if header_ref.weak.fetch_sub(1, Ordering::Acquire) == 1
+                    if header_ref.weak.fetch_sub(1, Ordering::Release) == 1
                         && header_ref.strong.load(Ordering::Acquire) == 0
                     {
                         // we are the last reference to the allocation.
@@ -557,6 +559,7 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
 unsafe fn drop_weak_zero<T: Collectable + Sync + ?Sized>(ptr: ErasedPtr) {
     let mut specified = ptr.specify::<GcBox<T>>();
+    assert!(specified.as_ref().weak.load(Ordering::Relaxed) == 0);
 
     let layout = Layout::for_value(specified.as_ref());
     drop_in_place(specified.as_mut());
