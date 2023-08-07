@@ -353,7 +353,7 @@ impl Dumpster {
     /// Determine whether this dumpster is full (and therefore should have its contents delivered to
     /// the garbage truck).
     fn is_full(&self) -> bool {
-        self.contents.borrow().len() > 100 || self.n_drops.get() > 100
+        self.contents.borrow().len() > 100000 || self.n_drops.get() > 100000
     }
 }
 

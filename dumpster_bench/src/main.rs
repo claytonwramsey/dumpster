@@ -45,89 +45,91 @@ fn sync_never_collect(_: &dumpster::sync::CollectInfo) -> bool {
 
 fn main() {
     const N_ITERS: usize = 1_000_000;
-    dumpster::unsync::set_collect_condition(dumpster::unsync::default_collect_condition);
-    println!(
-        "{}",
-        single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>(
-            "dumpster::unsync::Gc",
-            N_ITERS,
-        )
-    );
-    dumpster::unsync::set_collect_condition(unsync_never_collect);
-    println!(
-        "{}",
-        single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>(
-            "dumpster::unsync::Gc (manual trigger)",
-            N_ITERS,
-        )
-    );
-    dumpster::sync::set_collect_condition(dumpster::sync::default_collect_condition);
-    println!(
-        "{}",
-        single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>("dumpster::sync::Gc", N_ITERS)
-    );
-    dumpster::sync::set_collect_condition(sync_never_collect);
-    println!(
-        "{}",
-        single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>(
-            "dumpster::sync::Gc (manual trigger)",
-            N_ITERS
-        )
-    );
-    println!(
-        "{}",
-        single_threaded::<Rc<RcMultiref>>("std::rc::Rc", N_ITERS)
-    );
-    println!(
-        "{}",
-        single_threaded::<Arc<ArcMultiref>>("std::sync::Arc", N_ITERS)
-    );
-    println!(
-        "{}",
-        single_threaded::<gc::Gc<GcMultiref>>("gc::Gc", N_ITERS)
-    );
-    println!(
-        "{}",
-        single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon_rajan_cc::Cc", N_ITERS)
-    );
-    println!(
-        "{}",
-        single_threaded::<shredder::Gc<ShredderMultiref>>("shredder::Gc", N_ITERS)
-    );
+    // dumpster::unsync::set_collect_condition(dumpster::unsync::default_collect_condition);
+    // println!(
+    //     "{}",
+    //     single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>(
+    //         "dumpster::unsync::Gc",
+    //         N_ITERS,
+    //     )
+    // );
+    // dumpster::unsync::set_collect_condition(unsync_never_collect);
+    // println!(
+    //     "{}",
+    //     single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>(
+    //         "dumpster::unsync::Gc (manual trigger)",
+    //         N_ITERS,
+    //     )
+    // );
+    // dumpster::sync::set_collect_condition(dumpster::sync::default_collect_condition);
+    // println!(
+    //     "{}",
+    //     single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>("dumpster::sync::Gc",
+    // N_ITERS) );
+    // dumpster::sync::set_collect_condition(sync_never_collect);
+    // println!(
+    //     "{}",
+    //     single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>(
+    //         "dumpster::sync::Gc (manual trigger)",
+    //         N_ITERS
+    //     )
+    // );
+    // println!(
+    //     "{}",
+    //     single_threaded::<Rc<RcMultiref>>("std::rc::Rc", N_ITERS)
+    // );
+    // println!(
+    //     "{}",
+    //     single_threaded::<Arc<ArcMultiref>>("std::sync::Arc", N_ITERS)
+    // );
+    // println!(
+    //     "{}",
+    //     single_threaded::<gc::Gc<GcMultiref>>("gc::Gc", N_ITERS)
+    // );
+    // println!(
+    //     "{}",
+    //     single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon_rajan_cc::Cc", N_ITERS)
+    // );
+    // println!(
+    //     "{}",
+    //     single_threaded::<shredder::Gc<ShredderMultiref>>("shredder::Gc", N_ITERS)
+    // );
 
-    for n_threads in 1..=available_parallelism().unwrap().get() {
-        // println!("--- {n_threads} threads");
-        dumpster::sync::set_collect_condition(dumpster::sync::default_collect_condition);
-        println!(
-            "{}",
-            multi_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>(
-                "dumpster::sync::Gc",
-                N_ITERS,
-                n_threads,
-            )
-        );
+    for _ in 0..10 {
+        for n_threads in 1..=available_parallelism().unwrap().get() {
+            // println!("--- {n_threads} threads");
+            dumpster::sync::set_collect_condition(dumpster::sync::default_collect_condition);
+            println!(
+                "{}",
+                multi_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>(
+                    "dumpster::sync::Gc",
+                    N_ITERS,
+                    n_threads,
+                )
+            );
 
-        dumpster::sync::set_collect_condition(sync_never_collect);
-        println!(
-            "{}",
-            multi_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>(
-                "dumpster::sync::Gc (manual trigger)",
-                N_ITERS,
-                n_threads,
-            )
-        );
-        println!(
-            "{}",
-            multi_threaded::<shredder::Gc<ShredderSyncMultiref>>(
-                "shredder::Gc",
-                N_ITERS,
-                n_threads
-            )
-        );
-        println!(
-            "{}",
-            multi_threaded::<Arc<ArcMultiref>>("std::sync::Arc", N_ITERS, n_threads)
-        );
+            dumpster::sync::set_collect_condition(sync_never_collect);
+            println!(
+                "{}",
+                multi_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>(
+                    "dumpster::sync::Gc (manual trigger)",
+                    N_ITERS,
+                    n_threads,
+                )
+            );
+            // println!(
+            //     "{}",
+            //     multi_threaded::<shredder::Gc<ShredderSyncMultiref>>(
+            //         "shredder::Gc",
+            //         N_ITERS,
+            //         n_threads
+            //     )
+            // );
+            // println!(
+            //     "{}",
+            //     multi_threaded::<Arc<ArcMultiref>>("std::sync::Arc", N_ITERS, n_threads)
+            // );
+        }
     }
 }
 
