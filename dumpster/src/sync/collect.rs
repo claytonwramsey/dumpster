@@ -26,11 +26,10 @@ use std::{
     ptr::{drop_in_place, NonNull},
     sync::{
         atomic::{AtomicPtr, AtomicUsize, Ordering},
-        RwLock,
+        Mutex, RwLock,
     },
 };
 
-use dashmap::DashMap;
 use once_cell::sync::Lazy;
 
 use crate::{Collectable, ErasedPtr, Visitor};
@@ -42,7 +41,7 @@ use super::{default_collect_condition, CollectCondition, CollectInfo, Gc, GcBox}
 struct GarbageTruck {
     /// The contents of the garbage truck, containing all the allocations which need to be
     /// collected and have already been delivered by a [`Dumpster`].
-    contents: RwLock<DashMap<AllocationId, TrashCan>>,
+    contents: Mutex<HashMap<AllocationId, TrashCan>>,
     /// A lock used for synchronizing threads that are awaiting completion of a collection process.
     /// This lock should be acquired for reads by threads running a collection and for writes by
     /// threads awaiting collection completion.
@@ -121,7 +120,7 @@ enum Reachability {
 /// The global garbage truck.
 /// All [`TrashCans`] should eventually end up in here.
 static GARBAGE_TRUCK: Lazy<GarbageTruck> = Lazy::new(|| GarbageTruck {
-    contents: RwLock::new(DashMap::new()),
+    contents: Mutex::new(HashMap::new()),
     collecting_lock: RwLock::new(()),
     n_gcs_dropped: AtomicUsize::new(0),
     n_gcs_existing: AtomicUsize::new(0),
@@ -160,12 +159,12 @@ pub fn collect_all_await() {
 fn collect_all() {
     let collecting_guard = GARBAGE_TRUCK.collecting_lock.write().unwrap();
     GARBAGE_TRUCK.n_gcs_dropped.store(0, Ordering::Relaxed);
-    let to_collect = take(&mut *GARBAGE_TRUCK.contents.write().unwrap());
+    let to_collect = take(&mut *GARBAGE_TRUCK.contents.lock().unwrap());
     let mut visited = HashSet::with_capacity(to_collect.len());
 
     let to_dfs = to_collect
-        .into_iter()
-        .map(|(_, cleanup)| {
+        .into_values()
+        .map(|cleanup| {
             unsafe {
                 (cleanup.tag_fn)(cleanup.ptr, &mut visited);
             }
@@ -344,16 +343,16 @@ impl Dumpster {
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
         self.n_drops.set(0);
-        let read_guard = garbage_truck.contents.read().unwrap();
+        let mut guard = garbage_truck.contents.lock().unwrap();
         for (id, can) in self.contents.borrow_mut().drain() {
-            read_guard.insert(id, can);
+            guard.insert(id, can);
         }
     }
 
     /// Determine whether this dumpster is full (and therefore should have its contents delivered to
     /// the garbage truck).
     fn is_full(&self) -> bool {
-        self.contents.borrow().len() > 100000 || self.n_drops.get() > 100000
+        self.contents.borrow().len() > 100_000 || self.n_drops.get() > 100_000
     }
 }
 

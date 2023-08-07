@@ -272,7 +272,7 @@ fn eventually_collect() {
     drop(gc1);
     drop(gc2);
 
-    for _ in 0..10000 {
+    for _ in 0..200_000 {
         let gc = Gc::new(());
         drop(gc);
     }
