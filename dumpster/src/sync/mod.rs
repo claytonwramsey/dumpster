@@ -27,6 +27,7 @@ use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
     cell::UnsafeCell,
+    fmt::Debug,
     ops::Deref,
     ptr::{addr_of, drop_in_place},
     sync::atomic::{fence, AtomicUsize, Ordering},
@@ -42,7 +43,6 @@ use self::{
     ptr::Tagged,
 };
 
-#[derive(Debug)]
 /// A thread-safe garbage-collected pointer.
 ///
 /// This pointer can be duplicated and then shared across threads.
@@ -321,4 +321,10 @@ where
     T: std::marker::Unsize<U> + Collectable + Sync + ?Sized,
     U: Collectable + Sync + ?Sized,
 {
+}
+
+impl<T: Collectable + ?Sized + Sync> Debug for Gc<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Gc({:?})", unsafe { *self.0.get() }.as_ptr())
+    }
 }

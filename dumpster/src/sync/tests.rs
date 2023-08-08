@@ -17,6 +17,8 @@
 */
 
 use std::{
+    collections::{hash_map::Entry, HashMap},
+    mem::{transmute, MaybeUninit},
     ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -353,4 +355,130 @@ fn malicious() {
     drop(a.clone());
     EVIL.store(1, Ordering::Relaxed);
     collect();
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn fuzz() {
+    const N: usize = 11_252;
+    static DROP_DETECTORS: [AtomicUsize; N] = {
+        let mut detectors: [MaybeUninit<AtomicUsize>; N] =
+            unsafe { transmute(MaybeUninit::<[AtomicUsize; N]>::uninit()) };
+
+        let mut i = 0;
+        while i < N {
+            detectors[i] = MaybeUninit::new(AtomicUsize::new(0));
+            i += 1;
+        }
+
+        unsafe { transmute(detectors) }
+    };
+
+    #[derive(Debug)]
+    struct Alloc {
+        refs: Mutex<Vec<Gc<Alloc>>>,
+        id: usize,
+    }
+
+    impl Drop for Alloc {
+        fn drop(&mut self) {
+            DROP_DETECTORS[self.id].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    unsafe impl Collectable for Alloc {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.refs.accept(visitor)
+        }
+    }
+
+    fn dfs(alloc: &Gc<Alloc>, graph: &mut HashMap<usize, Vec<usize>>) {
+        if let Entry::Vacant(v) = graph.entry(alloc.id) {
+            if alloc.id == 2822 || alloc.id == 2814 {
+                println!("{} - {alloc:?}", alloc.id);
+            }
+            v.insert(Vec::new());
+            alloc.refs.lock().unwrap().iter().for_each(|a| {
+                graph.get_mut(&alloc.id).unwrap().push(a.id);
+                dfs(a, graph);
+            });
+        }
+    }
+
+    fastrand::seed(12345);
+    let mut gcs = (0..50)
+        .map(|i| {
+            Gc::new(Alloc {
+                refs: Mutex::new(Vec::new()),
+                id: i,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut next_detector = 50;
+    for _ in 0..N {
+        if gcs.is_empty() {
+            gcs.push(Gc::new(Alloc {
+                refs: Mutex::new(Vec::new()),
+                id: next_detector,
+            }));
+            next_detector += 1;
+        }
+        match fastrand::u8(0..4) {
+            0 => {
+                println!("add gc {next_detector}");
+                gcs.push(Gc::new(Alloc {
+                    refs: Mutex::new(Vec::new()),
+                    id: next_detector,
+                }));
+                next_detector += 1;
+            }
+            1 => {
+                if gcs.len() > 1 {
+                    let from = fastrand::usize(0..gcs.len());
+                    let to = fastrand::usize(0..gcs.len());
+                    println!("add ref {} -> {}", gcs[from].id, gcs[to].id);
+                    let new_gc = gcs[to].clone();
+                    let mut guard = gcs[from].refs.lock().unwrap();
+                    guard.push(new_gc);
+                }
+            }
+            2 => {
+                let idx = fastrand::usize(0..gcs.len());
+                println!("remove gc {}", gcs[idx].id);
+                gcs.swap_remove(idx);
+            }
+            3 => {
+                let from = fastrand::usize(0..gcs.len());
+                let mut guard = gcs[from].refs.lock().unwrap();
+                if !guard.is_empty() {
+                    let to = fastrand::usize(0..guard.len());
+                    println!("drop ref {} -> {}", gcs[from].id, guard[to].id);
+                    guard.swap_remove(to);
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let mut graph = HashMap::new();
+    graph.insert(9999, Vec::new());
+    for alloc in &gcs {
+        graph.get_mut(&9999).unwrap().push(alloc.id);
+        dfs(alloc, &mut graph);
+    }
+    println!("{graph:#?}");
+
+    drop(gcs);
+    collect();
+
+    let mut n_missing = 0;
+    for (id, count) in DROP_DETECTORS[..next_detector].iter().enumerate() {
+        let num = count.load(Ordering::Relaxed);
+        if num != 1 {
+            println!("expected 1 for id {id} but got {num}");
+            n_missing += 1;
+        }
+    }
+    assert_eq!(n_missing, 0);
 }

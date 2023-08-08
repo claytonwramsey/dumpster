@@ -34,7 +34,7 @@ pub struct ArcMultiref {
     refs: Mutex<Vec<Arc<Self>>>,
 }
 
-#[derive(dumpster_derive::Collectable)]
+#[derive(dumpster_derive::Collectable, Debug)]
 pub struct DumpsterSyncMultiref {
     refs: Mutex<Vec<dumpster::sync::Gc<Self>>>,
 }

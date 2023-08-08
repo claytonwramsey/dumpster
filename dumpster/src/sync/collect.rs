@@ -148,82 +148,8 @@ thread_local! {
 /// Ensures that all allocations dropped on the calling thread are cleaned up
 pub fn collect_all_await() {
     DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
-    collect_all();
+    GARBAGE_TRUCK.collect_all();
     drop(GARBAGE_TRUCK.collecting_lock.read().unwrap());
-}
-
-#[allow(clippy::module_name_repetitions)]
-/// Search through the set of existing allocations which have been marked inacessible, and see
-/// if they are inaccessible.
-/// If so, drop those allocations.
-fn collect_all() {
-    let collecting_guard = GARBAGE_TRUCK.collecting_lock.write().unwrap();
-    GARBAGE_TRUCK.n_gcs_dropped.store(0, Ordering::Relaxed);
-    let to_collect = take(&mut *GARBAGE_TRUCK.contents.lock().unwrap());
-    let mut visited = HashSet::with_capacity(to_collect.len());
-
-    let to_dfs = to_collect
-        .into_values()
-        .map(|cleanup| {
-            unsafe {
-                (cleanup.tag_fn)(cleanup.ptr, &mut visited);
-            }
-            (cleanup.ptr, cleanup.dfs_fn)
-        })
-        .collect::<Vec<_>>();
-
-    let mut ref_graph = HashMap::with_capacity(visited.len());
-
-    for (ptr, dfs_fn) in to_dfs {
-        unsafe { dfs_fn(ptr, &mut ref_graph) };
-    }
-
-    let root_ids = ref_graph
-        .iter()
-        .filter_map(|(&k, v)| match v.reachability {
-            Reachability::Reachable => Some(k),
-            Reachability::Unknown { n_unaccounted, .. } => (n_unaccounted > 0
-                || unsafe { k.0.as_ref().weak.load(Ordering::Relaxed) > 1 })
-            .then_some(k),
-        })
-        .collect::<Vec<_>>();
-    for root_id in root_ids {
-        sweep(root_id, &mut ref_graph);
-    }
-
-    for (decrement_fn, ptr) in ref_graph.iter().filter_map(|(_, v)| match v.reachability {
-        Reachability::Reachable => None,
-        Reachability::Unknown { decrement_fn, .. } => Some((decrement_fn, v.ptr)),
-    }) {
-        unsafe { decrement_fn(ptr, &ref_graph) };
-    }
-    CLEANING.with(|c| c.set(true));
-    // set of allocations which must be destroyed because we were the last weak pointer to it
-    let mut weak_destroys = Vec::new();
-    for (id, node) in ref_graph {
-        let header_ref = unsafe { id.0.as_ref() };
-        match node.reachability {
-            Reachability::Unknown { destroy_fn, .. } => unsafe { destroy_fn(node.ptr) },
-            Reachability::Reachable => {
-                if header_ref.weak.fetch_sub(1, Ordering::Release) == 1
-                    && header_ref.strong.load(Ordering::Acquire) == 0
-                {
-                    // we are the last reference to the allocation.
-                    // mark to be cleaned up later
-                    // no real synchronization loss to storing the guard because we had the last
-                    // reference anyway
-                    weak_destroys.push((node.weak_drop_fn, node.ptr));
-                }
-            }
-        };
-    }
-    CLEANING.with(|c| c.set(false));
-    for (drop_fn, ptr) in weak_destroys {
-        unsafe {
-            drop_fn(ptr);
-        }
-    }
-    drop(collecting_guard);
 }
 
 /// Notify that a `Gc` was destroyed, and update the tracking count for the number of dropped and
@@ -245,7 +171,7 @@ pub fn notify_dropped_gc() {
         transmute::<_, CollectCondition>(GARBAGE_TRUCK.collect_condition.load(Ordering::Relaxed))
     })(&CollectInfo { _private: () })
     {
-        collect_all();
+        GARBAGE_TRUCK.collect_all();
     }
 }
 
@@ -345,14 +271,94 @@ impl Dumpster {
         self.n_drops.set(0);
         let mut guard = garbage_truck.contents.lock().unwrap();
         for (id, can) in self.contents.borrow_mut().drain() {
-            guard.insert(id, can);
+            if guard.insert(id, can).is_some() {
+                unsafe {
+                    id.0.as_ref().weak.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
         }
     }
 
     /// Determine whether this dumpster is full (and therefore should have its contents delivered to
     /// the garbage truck).
     fn is_full(&self) -> bool {
-        self.contents.borrow().len() > 100_000 || self.n_drops.get() > 100_000
+        self.contents.borrow().len() > 1_000 || self.n_drops.get() > 1_000
+    }
+}
+
+impl GarbageTruck {
+    #[allow(clippy::module_name_repetitions)]
+    /// Search through the set of existing allocations which have been marked inacessible, and see
+    /// if they are inaccessible.
+    /// If so, drop those allocations.
+    fn collect_all(&self) {
+        let collecting_guard = self.collecting_lock.write().unwrap();
+        self.n_gcs_dropped.store(0, Ordering::Relaxed);
+        let to_collect = take(&mut *self.contents.lock().unwrap());
+        let mut visited = HashSet::with_capacity(to_collect.len());
+
+        let to_dfs = to_collect
+            .into_values()
+            .map(|cleanup| {
+                unsafe {
+                    (cleanup.tag_fn)(cleanup.ptr, &mut visited);
+                }
+                (cleanup.ptr, cleanup.dfs_fn)
+            })
+            .collect::<Vec<_>>();
+
+        let mut ref_graph = HashMap::with_capacity(visited.len());
+
+        for (ptr, dfs_fn) in to_dfs {
+            unsafe { dfs_fn(ptr, &mut ref_graph) };
+        }
+
+        let root_ids = ref_graph
+            .iter()
+            .filter_map(|(&k, v)| match v.reachability {
+                Reachability::Reachable => Some(k),
+                Reachability::Unknown { n_unaccounted, .. } => (n_unaccounted > 0
+                    || unsafe { k.0.as_ref().weak.load(Ordering::Relaxed) > 1 })
+                .then_some(k),
+            })
+            .collect::<Vec<_>>();
+        for root_id in root_ids {
+            sweep(root_id, &mut ref_graph);
+        }
+
+        for (decrement_fn, ptr) in ref_graph.iter().filter_map(|(_, v)| match v.reachability {
+            Reachability::Reachable => None,
+            Reachability::Unknown { decrement_fn, .. } => Some((decrement_fn, v.ptr)),
+        }) {
+            unsafe { decrement_fn(ptr, &ref_graph) };
+        }
+        CLEANING.with(|c| c.set(true));
+        // set of allocations which must be destroyed because we were the last weak pointer to it
+        let mut weak_destroys = Vec::new();
+        for (id, node) in ref_graph {
+            let header_ref = unsafe { id.0.as_ref() };
+            match node.reachability {
+                Reachability::Unknown { destroy_fn, .. } => unsafe { destroy_fn(node.ptr) },
+                Reachability::Reachable => {
+                    if header_ref.weak.fetch_sub(1, Ordering::Release) == 1
+                        && header_ref.strong.load(Ordering::Acquire) == 0
+                    {
+                        // we are the last reference to the allocation.
+                        // mark to be cleaned up later
+                        // no real synchronization loss to storing the guard because we had the last
+                        // reference anyway
+                        weak_destroys.push((node.weak_drop_fn, node.ptr));
+                    }
+                }
+            };
+        }
+        CLEANING.with(|c| c.set(false));
+        for (drop_fn, ptr) in weak_destroys {
+            unsafe {
+                drop_fn(ptr);
+            }
+        }
+        drop(collecting_guard);
     }
 }
 
@@ -653,11 +659,12 @@ where
 impl Drop for Dumpster {
     fn drop(&mut self) {
         self.deliver_to(&GARBAGE_TRUCK);
+        // collect_all();
     }
 }
 
 impl Drop for GarbageTruck {
     fn drop(&mut self) {
-        collect_all();
+        GARBAGE_TRUCK.collect_all();
     }
 }
