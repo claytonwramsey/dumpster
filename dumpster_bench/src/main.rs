@@ -58,7 +58,7 @@ fn main() {
         println!(
             "{}",
             single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>(
-                "dumpster(unsync + manual trigger)",
+                "dumpster (unsync + manual trigger)",
                 N_ITERS,
             )
         );
@@ -74,10 +74,6 @@ fn main() {
                 "dumpster (sync + manual trigger)",
                 N_ITERS
             )
-        );
-        println!(
-            "{}",
-            single_threaded::<Arc<ArcMultiref>>("std::sync::Arc", N_ITERS)
         );
         println!("{}", single_threaded::<gc::Gc<GcMultiref>>("gc", N_ITERS));
         println!(
@@ -120,14 +116,12 @@ fn main() {
     }
 
     for _ in 0..100 {
-        println!(
-            "{}",
-            single_threaded::<Rc<RcMultiref>>("std::rc::Rc", N_ITERS)
-        );
+        println!("{}", single_threaded::<Rc<RcMultiref>>("Rc", N_ITERS));
+        println!("{}", single_threaded::<Arc<ArcMultiref>>("Arc", N_ITERS));
         for n_threads in 1..available_parallelism().unwrap().get() {
             println!(
                 "{}",
-                multi_threaded::<Arc<ArcMultiref>>("std::sync::Arc", N_ITERS, n_threads)
+                multi_threaded::<Arc<ArcMultiref>>("Arc", N_ITERS, n_threads)
             );
         }
     }
@@ -204,9 +198,11 @@ fn multi_threaded<M: SyncMultiref>(
         .collect();
 
     let tic = Instant::now();
+    let toc = Mutex::new(None);
     scope(|s| {
         for i in 0..n_threads {
             let vecs = &vecs;
+            let toc = &toc;
             thread::Builder::new()
                 .name(format!("multi_threaded{i}"))
                 .spawn_scoped(s, move || {
@@ -270,13 +266,13 @@ fn multi_threaded<M: SyncMultiref>(
                             _ => unreachable!(),
                         };
                     }
+                    *toc.lock().unwrap() = Some(Instant::now());
                 })
                 .unwrap();
         }
     });
-    let toc = Instant::now();
     M::collect(); // This op is single threaded and shouldn't count
-    let duration = toc.duration_since(tic);
+    let duration = toc.lock().unwrap().unwrap().duration_since(tic);
 
     // println!("finished {name} in {duration:?}");
     BenchmarkData {

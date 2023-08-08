@@ -108,9 +108,7 @@ enum Reachability {
         /// If the generation does not match the allocation, that means it's accessible.
         generation: usize,
         /// A function used to destroy the allocation.
-        destroy_fn: unsafe fn(ErasedPtr),
-        /// A function used to decrement outbound reference counts to reachable nodes.
-        decrement_fn: unsafe fn(ErasedPtr, &HashMap<AllocationId, AllocationInfo>),
+        destroy_fn: unsafe fn(ErasedPtr, &HashMap<AllocationId, AllocationInfo>),
     },
     /// The allocation here is reachable.
     /// No further information is needed.
@@ -282,7 +280,7 @@ impl Dumpster {
     /// Determine whether this dumpster is full (and therefore should have its contents delivered to
     /// the garbage truck).
     fn is_full(&self) -> bool {
-        self.contents.borrow().len() > 1_000 || self.n_drops.get() > 1_000
+        self.contents.borrow().len() > 100_000 || self.n_drops.get() > 100_000
     }
 }
 
@@ -326,19 +324,15 @@ impl GarbageTruck {
             sweep(root_id, &mut ref_graph);
         }
 
-        for (decrement_fn, ptr) in ref_graph.iter().filter_map(|(_, v)| match v.reachability {
-            Reachability::Reachable => None,
-            Reachability::Unknown { decrement_fn, .. } => Some((decrement_fn, v.ptr)),
-        }) {
-            unsafe { decrement_fn(ptr, &ref_graph) };
-        }
         CLEANING.with(|c| c.set(true));
         // set of allocations which must be destroyed because we were the last weak pointer to it
         let mut weak_destroys = Vec::new();
-        for (id, node) in ref_graph {
+        for (id, node) in &ref_graph {
             let header_ref = unsafe { id.0.as_ref() };
             match node.reachability {
-                Reachability::Unknown { destroy_fn, .. } => unsafe { destroy_fn(node.ptr) },
+                Reachability::Unknown { destroy_fn, .. } => unsafe {
+                    destroy_fn(node.ptr, &ref_graph);
+                },
                 Reachability::Reachable => {
                     if header_ref.weak.fetch_sub(1, Ordering::Release) == 1
                         && header_ref.strong.load(Ordering::Acquire) == 0
@@ -439,7 +433,6 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
             n_unaccounted: strong_count,
             generation,
             destroy_fn: destroy_erased::<T>,
-            decrement_fn: decrement_reachable_count::<T>,
         },
     });
 
@@ -538,7 +531,6 @@ impl<'a> Visitor for Dfs<'a> {
                         n_unaccounted: strong_count - 1,
                         generation,
                         destroy_fn: destroy_erased::<T>,
-                        decrement_fn: decrement_reachable_count::<T>,
                     },
                 });
 
@@ -583,23 +575,15 @@ fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) 
 /// # Safety
 ///
 /// `ptr` must have been created from a pointer to a `GcBox<T>`.
-unsafe fn destroy_erased<T: Collectable + Sync + ?Sized>(ptr: ErasedPtr) {
-    let specified = ptr.specify::<GcBox<T>>().as_mut();
-    let layout = Layout::for_value(specified);
-    drop_in_place(specified);
-    dealloc((specified as *mut GcBox<T>).cast(), layout);
-}
-
-/// Decrement the reference count all reachable allocations pointed to by the value stored in `ptr`.
-unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
+unsafe fn destroy_erased<T: Collectable + Sync + ?Sized>(
     ptr: ErasedPtr,
-    ref_graph: &HashMap<AllocationId, AllocationInfo>,
+    graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
     /// A visitor for decrementing the reference count of pointees.
     struct DecrementOutboundReferenceCounts<'a> {
         /// The reference graph.
         /// Must have been populated with reachabiltiy already.
-        ref_graph: &'a HashMap<AllocationId, AllocationInfo>,
+        graph: &'a HashMap<AllocationId, AllocationInfo>,
     }
 
     impl Visitor for DecrementOutboundReferenceCounts<'_> {
@@ -607,10 +591,11 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
         where
             T: Collectable + Sync + ?Sized,
         {
-            let box_ref = unsafe { (*UnsafeCell::raw_get(&gc.0)).as_ref() };
-            let id = AllocationId::from(box_ref);
-            if matches!(self.ref_graph[&id].reachability, Reachability::Reachable) {
-                box_ref.strong.fetch_sub(1, Ordering::Relaxed);
+            let id = AllocationId::from(unsafe { (*UnsafeCell::raw_get(&gc.0)).as_nonnull() });
+            if matches!(self.graph[&id].reachability, Reachability::Reachable) {
+                unsafe {
+                    id.0.as_ref().strong.fetch_sub(1, Ordering::Relaxed);
+                }
             }
         }
 
@@ -622,11 +607,14 @@ unsafe fn decrement_reachable_count<T: Collectable + Sync + ?Sized>(
         }
     }
 
-    ptr.specify::<GcBox<T>>()
-        .as_ref()
+    let specified = ptr.specify::<GcBox<T>>().as_mut();
+    specified
         .value
-        .accept(&mut DecrementOutboundReferenceCounts { ref_graph })
+        .accept(&mut DecrementOutboundReferenceCounts { graph })
         .expect("allocation assumed to be unreachable but somehow was accessed");
+    let layout = Layout::for_value(specified);
+    drop_in_place(specified);
+    dealloc((specified as *mut GcBox<T>).cast(), layout);
 }
 
 /// Function for handling dropping an allocation when its weak and strong reference count reach
@@ -653,6 +641,15 @@ where
 {
     fn from(value: &GcBox<T>) -> Self {
         AllocationId(NonNull::from(value).cast())
+    }
+}
+
+impl<T> From<NonNull<GcBox<T>>> for AllocationId
+where
+    T: Collectable + Sync + ?Sized,
+{
+    fn from(value: NonNull<GcBox<T>>) -> Self {
+        AllocationId(value.cast())
     }
 }
 

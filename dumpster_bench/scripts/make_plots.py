@@ -25,7 +25,7 @@ plt.title('Garbage collector shootout')
 plt.legend()
 plt.show()
 
-multi_times.pop('shredder')
+multi_times.pop('shredder', None)
 for (name, v) in multi_times.items():
     (xs, ys) = v
     plt.scatter(xs, ys, label=name)
@@ -52,5 +52,5 @@ def violin(times: dict, name: str):
     plt.show()
 
 violin(single_times, 'Single-threaded GC comparison')
-single_times.pop('shredder')
+single_times.pop('shredder', None)
 violin(single_times, 'Single-threaded GC comparison (sans shredder)')

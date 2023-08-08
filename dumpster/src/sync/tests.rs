@@ -254,6 +254,7 @@ fn open_drop() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn eventually_collect() {
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
     static COUNT_2: AtomicUsize = AtomicUsize::new(0);
@@ -358,6 +359,7 @@ fn malicious() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 #[allow(clippy::too_many_lines)]
 fn fuzz() {
     const N: usize = 11_252;
