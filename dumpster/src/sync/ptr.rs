@@ -27,22 +27,47 @@ use super::GcBox;
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq)]
 /// A tagged pointer with an extra bit.
+#[cfg(feature = "nightly")]
 pub struct Tagged<T: Collectable + Sync + ?Sized>(NonNull<GcBox<T>>);
+#[cfg(not(feature = "nightly"))]
+/// A tagged pointer with an extra bit.
+pub struct Tagged<T: Collectable + Sync + ?Sized>(NonNull<GcBox<T>>, bool);
 
 impl<T: Collectable + Sync + ?Sized> Tagged<T> {
     /// Construct a new tagged pointer with the provided tag.
     pub(super) fn new(ptr: NonNull<GcBox<T>>, tag: bool) -> Tagged<T> {
-        Tagged(NonNull::new(ptr.as_ptr().map_addr(|a| a | usize::from(tag))).unwrap())
+        #[cfg(feature = "nightly")]
+        {
+            Tagged(NonNull::new(ptr.as_ptr().map_addr(|a| a | usize::from(tag))).unwrap())
+        }
+        #[cfg(not(feature = "nightly"))]
+        {
+            Tagged(ptr, tag)
+        }
     }
 
     /// Create a tagged pointer pointing to the same allocation as `self` but with tag `tag`.
     pub fn with_tag(self, tag: bool) -> Tagged<T> {
-        Tagged(NonNull::new(self.0.as_ptr().map_addr(|a| (a & !1) | usize::from(tag))).unwrap())
+        #[cfg(feature = "nightly")]
+        {
+            Tagged(NonNull::new(self.0.as_ptr().map_addr(|a| (a & !1) | usize::from(tag))).unwrap())
+        }
+        #[cfg(not(feature = "nightly"))]
+        {
+            Tagged(self.0, tag)
+        }
     }
 
     /// Is this pointer tagged?
     pub fn tagged(self) -> bool {
-        self.0.as_ptr().addr() & 1 == 1
+        #[cfg(feature = "nightly")]
+        {
+            self.0.as_ptr().addr() & 1 == 1
+        }
+        #[cfg(not(feature = "nightly"))]
+        {
+            self.1
+        }
     }
 
     /// Get a new reference out of this pointer.
@@ -57,7 +82,14 @@ impl<T: Collectable + Sync + ?Sized> Tagged<T> {
 
     /// Convert this pointer into a raw pointer, removing tag information.
     pub(super) fn as_ptr(self) -> *mut GcBox<T> {
-        self.0.as_ptr().map_addr(|a| a & !1)
+        #[cfg(feature = "nightly")]
+        {
+            self.0.as_ptr().map_addr(|a| a & !1)
+        }
+        #[cfg(not(feature = "nightly"))]
+        {
+            self.0.as_ptr()
+        }
     }
 
     /// Convert this pointer to a `NonNull`, removing tag information.

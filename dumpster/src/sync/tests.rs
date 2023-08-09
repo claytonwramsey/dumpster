@@ -18,7 +18,7 @@
 
 use std::{
     collections::{hash_map::Entry, HashMap},
-    mem::{transmute, MaybeUninit},
+    mem::{align_of, transmute, MaybeUninit},
     ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -483,4 +483,9 @@ fn fuzz() {
         }
     }
     assert_eq!(n_missing, 0);
+}
+
+#[test]
+fn alignment() {
+    assert!(align_of::<GcBox<()>>() >= 2);
 }

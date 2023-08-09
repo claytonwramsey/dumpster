@@ -28,7 +28,7 @@ use syn::{
 };
 
 #[proc_macro_derive(Collectable)]
-/// The macro for implementing [`dumpster::Collectable`] on an arbitrary type.
+/// The macro for implementing `dumpster::Collectable` on an arbitrary type.
 /// This implementation assumes that all fields of the structure or enum deriving Collectable have
 /// also implemented Collectable.
 pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenStream {

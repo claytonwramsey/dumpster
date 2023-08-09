@@ -46,6 +46,7 @@
 //! - There are no restrictions on the reference structure within a garbage-collected allocation
 //!   (references may point in any way you like).
 //! - It's trivial to make a custom type collectable using the provided derive macros.
+//! - You can even store `?Sized` data in a garbage-collected pointer!
 //!
 //! # Module structure
 //!
@@ -117,12 +118,6 @@
 //! // even though foo had a self reference, it still got collected!
 //! ```
 //!
-//! # License
-//!
-//! `dumpster` is licensed under the GNU GPLv3 or later.
-//! For more details, refer to
-//! [LICENSE.md](https://github.com/claytonwramsey/dumpster/blob/master/LICENSE.md).
-//!
 //! # Installation
 //!
 //! To use `dumpster`, add the following lines to your `Cargo.toml`.
@@ -131,15 +126,66 @@
 //! [dependencies]
 //! dumpster = "0.1.0"
 //! ```
+//!
+//! # Optional features
+//!
+//! `dumpster` has two optional features: `derive` and `nightly`.
+//!
+//! `derive` is enabled by default.
+//! It enables the derive macro for `Collectable`, which makes it easy for users to implement their
+//! own collectable types.
+//!
+//! ```
+//! use dumpster::{unsync::Gc, Collectable};
+//! use std::cell::RefCell;
+//!
+//! #[derive(Collectable)] // no manual implementation required
+//! struct Foo(RefCell<Option<Gc<Foo>>>);
+//!
+//! let my_foo = Gc::new(RefCell::new(None));
+//! *my_foo.borrow_mut = Some(my_foo.clone());
+//!
+//! drop(my_foo); // my_foo will be automatically cleaned up
+//! ```
+//!
+//! `nightly` is disabled by default.
+//! It contains features and optimizations which require nightly Rust to implement.
+//! For now, this has two effects: first, `dumpster` uses strict provenance to make lower-bit-tagged
+//! pointers, reducing the size of a `dumpster::sync::Gc` by one `usize`.
+//! Second, it implements [`std::ops::CoerceUnsized`] for both `Gc` types, making it possible to
+//! create garbage-collected unsized types.
+#![cfg_attr(
+    feature = "nightly",
+    doc = r##"
+```
+// this only works with "nightly" enabled while compiling on nightly Rust
+use dumpster::unsync::Gc;
+
+let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
+```
+"##
+)]
+//! To use `nightly`, edit your installation to `Cargo.toml` to include the feature.
+//!
+//! ```toml
+//! [dependencies]
+//! dumpster = { version = "0.1.0", features = ["nightly"]}
+//! ```
+//!
+//! # License
+//!
+//! `dumpster` is licensed under the GNU GPLv3 or later.
+//! For more details, refer to
+//! [LICENSE.md](https://github.com/claytonwramsey/dumpster/blob/master/LICENSE.md).
 
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 #![allow(clippy::multiple_crate_versions, clippy::result_unit_err)]
-#![cfg_attr(feature = "coerce-unsized", feature(coerce_unsized))]
-#![cfg_attr(feature = "coerce-unsized", feature(unsize))]
-#![feature(strict_provenance)]
+#![cfg_attr(feature = "nightly", feature(coerce_unsized))]
+#![cfg_attr(feature = "nightly", feature(unsize))]
+#![cfg_attr(feature = "nightly", feature(strict_provenance))]
 
 use std::{
     fmt,

@@ -22,6 +22,20 @@
 //! just work.
 //! Those with more particular needs (such as benchmarking) should turn toward
 //! [`set_collect_condition`] in order to tune exactly when the garbage collector does sweeps.
+//!
+//! # Examples
+//!
+//! ```
+//! use dumpster::sync::Gc;
+//!
+//! let my_gc = Gc::new(100);
+//! let other_gc = my_gc.clone();
+//!
+//! drop(my_gc);
+//! drop(other_gc);
+//!
+//! // contents of the Gc are automatically freed
+//! ```
 
 mod collect;
 mod ptr;
