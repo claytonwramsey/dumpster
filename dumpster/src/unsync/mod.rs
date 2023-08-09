@@ -287,11 +287,11 @@ impl CollectInfo {
     /// use dumpster::unsync::{set_collect_condition, CollectInfo};
     ///
     /// // Collection condition for whether many Gc's currently exist.
-    /// fn have_many_gcs_dropped(info: &CollectInfo) -> bool {
+    /// fn do_many_gcs_exist(info: &CollectInfo) -> bool {
     ///     info.n_gcs_existing() > 100
     /// }
     ///
-    /// set_collect_condition(have_many_gcs_dropped);
+    /// set_collect_condition(do_many_gcs_exist);
     /// ```
     pub fn n_gcs_existing(&self) -> usize {
         DUMPSTER.with(|d| d.n_refs_living.get())

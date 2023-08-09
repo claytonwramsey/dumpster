@@ -16,7 +16,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-//! A cycle-tracking garbage collector.
+//! A cycle-tracking concurrent garbage collector with an easy-to-use API.
 //!
 //! Most garbage collecters are _tracing_ garbage collectors, meaning that they keep track of a set
 //! of roots which are directly accessible from the stack, and then use those roots to find the set
@@ -35,6 +35,18 @@
 //! However, the sweeps that require _O(r)_ performance are performed once every _O(1/r)_ times
 //! a reference is dropped, yielding an amortized _O(1)_ runtime.
 //!
+//! # Why should you use this crate?
+//!
+//! In short, `dumpster` offers a great mix of usability, performance, and flexibility.
+//!
+//! - `dumpster`'s API is a drop-in replacement for `std`'s reference-counted shared allocations
+//!   (`Rc` and `Arc`).
+//! - It's very performant and has builtin implementations of both thread-local and concurrent
+//!   garbage collection.
+//! - There are no restrictions on the reference structure within a garbage-collected allocation
+//!   (references may point in any way you like).
+//! - It's trivial to make a custom type collectable using the provided derive macros.
+//!
 //! # Module structure
 //!
 //! `dumpster` contains 3 core modules: the root (this module), as well as [`sync`] and [`unsync`].
@@ -47,6 +59,78 @@
 //! The project root contains common definitions across both `sync` and `unsync`.
 //! Types which implement [`Collectable`] can immediately be used in `unsync`, but in order to use
 //! `sync`'s garbage collector, the types must also implement [`Sync`].
+//!
+//! # Examples
+//!
+//! If your code is meant to run as a single thread, or if your data doesn't need to be shared
+//! across threads, you should use [`unsync::Gc`] to store your allocations.
+//!
+//! ```
+//! use dumpster::unsync::Gc;
+//! use std::cell::Cell;
+//!
+//! let my_gc = Gc::new(Cell::new(0451));
+//!
+//! let other_gc = my_gc.clone(); // shallow copy
+//! other_gc.set(512);
+//!
+//! assert_eq!(my_gc.get(), 512);
+//! ```
+//!
+//! For data which is shared across threads, you can use [`unsync::Gc`] with the exact same API.
+//!
+//! ```
+//! use dumpster::sync::Gc;
+//! use std::sync::Mutex;
+//!
+//! let my_shared_gc = Gc::new(Mutex::new(25));
+//! let other_shared_gc = my_shared_gc.clone();
+//!
+//! std::thread::scope(|s| {
+//!     s.spawn(move || {
+//!         *other_shared_gc.lock().unwrap() = 35;
+//!     });
+//! });
+//!
+//! println!("{}", *my_shared_gc.lock().unwrap());
+//! ```
+//!
+//! It's trivial to use custom data structures with the provided derive macro.
+//!
+//! ```
+//! use dumpster::{unsync::Gc, Collectable};
+//! use std::cell::RefCell;
+//!
+//! #[derive(Collectable)]
+//! struct Foo {
+//!     refs: RefCell<Vec<Gc<Foo>>>,
+//! }
+//!
+//! let foo = Gc::new(Foo {
+//!     refs: RefCell::new(Vec::new()),
+//! });
+//!
+//! foo.refs.borrow_mut().push(foo.clone());
+//!
+//! drop(foo);
+//!
+//! // even though foo had a self reference, it still got collected!
+//! ```
+//!
+//! # License
+//!
+//! `dumpster` is licensed under the GNU GPLv3 or later.
+//! For more details, refer to
+//! [LICENSE.md](https://github.com/claytonwramsey/dumpster/blob/master/LICENSE.md).
+//!
+//! # Installation
+//!
+//! To use `dumpster`, add the following lines to your `Cargo.toml`.
+//!
+//! ```toml
+//! [dependencies]
+//! dumpster = "0.1.0"
+//! ```
 
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]
@@ -181,6 +265,18 @@ pub trait Visitor {
     where
         T: Collectable + ?Sized;
 }
+
+// Re-export #[derive(Collectable)].
+//
+// The reason re-exporting is not enabled by default is that disabling it would
+// be annoying for crates that provide handwritten impls or data formats. They
+// would need to disable default features and then explicitly re-enable std.
+#[cfg(feature = "derive")]
+extern crate dumpster_derive;
+
+/// Derive macro available if `dumpster` is built with `features = ["derive"]`.
+#[cfg(feature = "derive")]
+pub use dumpster_derive::Collectable;
 
 #[repr(align(16))]
 #[repr(C)]

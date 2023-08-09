@@ -17,6 +17,11 @@
 */
 
 //! Thread-safe shared garbage collection.
+//!
+//! Most users of this module will be interested in using [`Gc`] directly out of the box - this will
+//! just work.
+//! Those with more particular needs (such as benchmarking) should turn toward
+//! [`set_collect_condition`] in order to tune exactly when the garbage collector does sweeps.
 
 mod collect;
 mod ptr;
@@ -95,21 +100,50 @@ unsafe impl<T> Send for Gc<T> where T: Collectable + Sync + ?Sized {}
 unsafe impl<T> Sync for Gc<T> where T: Collectable + Sync + ?Sized {}
 
 /// Begin a collection operation of the allocations on the heap.
-/// Due to concurrency issues, this may not collect every single unreachable allocation that
-/// currently exists.
+///
+/// Due to concurrency issues, this might not collect every single unreachable allocation that
+/// currently exists, but often calling `collect()` will get allocations made by this thread.
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::sync::{collect, Gc};
+///
+/// let gc = Gc::new(vec![1, 2, 3]);
+/// drop(gc);
+///
+/// collect(); // the vector originally in `gc` _might_ be dropped now, but could be dropped later
+/// ```
 pub fn collect() {
     collect_all_await();
 }
 
+#[derive(Debug)]
 /// Information passed to a [`CollectCondition`] used to determine whether the garbage collector
 /// should start collecting.
+///
+/// A `CollectInfo` is exclusively created by being passed as an argument to the collection
+/// condition.
+/// To set a custom collection condition, refer to [`set_collect_condition`].
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::sync::{set_collect_condition, CollectInfo};
+///
+/// fn my_collect_condition(info: &CollectInfo) -> bool {
+///     (info.n_gcs_dropped_since_last_collect() + info.n_gcs_existing()) % 2 == 0
+/// }
+///
+/// set_collect_condition(my_collect_condition);
+/// ```
 pub struct CollectInfo {
     /// Dummy value so this is a private structure.
     _private: (),
 }
 
 /// A function which determines whether the garbage collector should start collecting.
-/// This function primarily exists so that it can be used with [`set_collect_condition`].
+/// This type primarily exists so that it can be used with [`set_collect_condition`].
 ///
 /// # Examples
 ///
@@ -138,8 +172,17 @@ pub type CollectCondition = fn(&CollectInfo) -> bool;
 /// # Examples
 ///
 /// ```rust
-/// use dumpster::sync::{default_collect_condition, set_collect_condition};
+/// use dumpster::sync::{default_collect_condition, set_collect_condition, CollectInfo};
 ///
+/// fn other_collect_condition(info: &CollectInfo) -> bool {
+///     info.n_gcs_existing() >= 25 || default_collect_condition(info)
+/// }
+///
+/// // Use my custom collection condition.
+/// set_collect_condition(other_collect_condition);
+///
+/// // I'm sick of the custom collection condition.
+/// // Return to the original.
 /// set_collect_condition(default_collect_condition);
 /// ```
 pub fn default_collect_condition(info: &CollectInfo) -> bool {
@@ -271,11 +314,11 @@ impl CollectInfo {
     /// use dumpster::sync::{set_collect_condition, CollectInfo};
     ///
     /// // Collection condition for whether many Gc's currently exist.
-    /// fn have_many_gcs_dropped(info: &CollectInfo) -> bool {
+    /// fn do_many_gcs_exist(info: &CollectInfo) -> bool {
     ///     info.n_gcs_existing() > 100
     /// }
     ///
-    /// set_collect_condition(have_many_gcs_dropped);
+    /// set_collect_condition(do_many_gcs_exist);
     /// ```
     pub fn n_gcs_existing(&self) -> usize {
         n_gcs_existing()

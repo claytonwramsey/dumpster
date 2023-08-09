@@ -52,6 +52,8 @@ struct GarbageTruck {
     /// `None`).
     n_gcs_existing: AtomicUsize,
     /// The function which determines whether a collection should be triggerd.
+    /// This pointer value should always be cast to a [`CollectCondition`], but since `AtomicPtr`
+    /// doesn't handle function pointers correctly, we just cast to `*mut ()`.
     collect_condition: AtomicPtr<()>,
 }
 

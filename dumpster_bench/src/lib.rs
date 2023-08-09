@@ -52,12 +52,12 @@ pub struct ArcMultiref {
     refs: Mutex<Vec<Arc<Self>>>,
 }
 
-#[derive(dumpster_derive::Collectable, Debug)]
+#[derive(dumpster::Collectable, Debug)]
 pub struct DumpsterSyncMultiref {
     refs: Mutex<Vec<dumpster::sync::Gc<Self>>>,
 }
 
-#[derive(dumpster_derive::Collectable)]
+#[derive(dumpster::Collectable)]
 pub struct DumpsterUnsyncMultiref {
     refs: RefCell<Vec<dumpster::unsync::Gc<Self>>>,
 }

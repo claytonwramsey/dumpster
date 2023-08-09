@@ -19,9 +19,11 @@
 //! Implementations of [`Collectable`] for common data types.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque},
+    ffi::{OsStr, OsString},
     ops::Deref,
+    path::{Path, PathBuf},
     sync::{
         atomic::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
@@ -106,6 +108,12 @@ where
     }
 }
 
+unsafe impl<T: Copy + Collectable> Collectable for Cell<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.get().accept(visitor)
+    }
+}
+
 /// Implement [`Collectable`] for a collection data structure which has some method `iter()` that
 /// iterates over all elements of the data structure and `iter_mut()` which does the same over
 /// mutable references.
@@ -187,3 +195,7 @@ collectable_trivial_impl!(AtomicIsize);
 
 collectable_trivial_impl!(String);
 collectable_trivial_impl!(str);
+collectable_trivial_impl!(PathBuf);
+collectable_trivial_impl!(Path);
+collectable_trivial_impl!(OsString);
+collectable_trivial_impl!(OsStr);
