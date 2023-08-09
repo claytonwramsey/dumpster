@@ -66,7 +66,7 @@ dumpster::unsync::collect();
 ## Installation
 
 > [!NOTE]
-> I have yet to upload this to crates.io. 
+> I have yet to upload this to crates.io.
 > However, what follows below will be the instructions once I finish the upload.
 
 To install, simply add `dumpster` as a dependency to your project.
@@ -91,8 +91,8 @@ use std::cell::RefCell;
 #[derive(Collectable)] // no manual implementation required
 struct Foo(RefCell<Option<Gc<Foo>>>);
 
-let my_foo = Gc::new(RefCell::new(None));
-*my_foo.borrow_mut = Some(my_foo.clone());
+let my_foo = Gc::new(Foo(RefCell::new(None)));
+*my_foo.0.borrow_mut() = Some(my_foo.clone());
 
 drop(my_foo); // my_foo will be automatically cleaned up
 ```
