@@ -18,12 +18,25 @@
 
 //! Implementations of [`Collectable`] for common data types.
 
+#![allow(deprecated)]
+
 use std::{
+    borrow::Cow,
     cell::{Cell, RefCell},
-    collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque},
+    collections::{
+        hash_map::{DefaultHasher, RandomState},
+        BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque,
+    },
     ffi::{OsStr, OsString},
+    hash::{BuildHasherDefault, SipHasher},
+    marker::PhantomData,
+    num::{
+        NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize, NonZeroU128,
+        NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize,
+    },
     ops::Deref,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::{
         atomic::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
@@ -50,6 +63,31 @@ macro_rules! param_trivial_impl_unsized {
 param_trivial_impl_unsized!(MutexGuard<'static, T>);
 param_trivial_impl_unsized!(RwLockReadGuard<'static, T>);
 param_trivial_impl_unsized!(&'static T);
+param_trivial_impl_unsized!(PhantomData<T>);
+
+unsafe impl<T: Collectable + ?Sized> Collectable for Box<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        (**self).accept(visitor)
+    }
+}
+
+unsafe impl<T> Collectable for BuildHasherDefault<T> {
+    fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+unsafe impl<'a, T: ToOwned> Collectable for Cow<'a, T>
+where
+    T::Owned: Collectable,
+{
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        if let Cow::Owned(ref v) = self {
+            v.accept(visitor)?;
+        }
+        Ok(())
+    }
+}
 
 unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
     #[inline]
@@ -94,11 +132,7 @@ unsafe impl<T: Collectable> Collectable for Option<T> {
     }
 }
 
-unsafe impl<T, E> Collectable for Result<T, E>
-where
-    T: Collectable,
-    E: Collectable,
-{
+unsafe impl<T: Collectable, E: Collectable> Collectable for Result<T, E> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
@@ -170,13 +204,15 @@ collectable_trivial_impl!(u32);
 collectable_trivial_impl!(u64);
 collectable_trivial_impl!(u128);
 collectable_trivial_impl!(usize);
-
 collectable_trivial_impl!(i8);
 collectable_trivial_impl!(i16);
 collectable_trivial_impl!(i32);
 collectable_trivial_impl!(i64);
 collectable_trivial_impl!(i128);
 collectable_trivial_impl!(isize);
+
+collectable_trivial_impl!(bool);
+collectable_trivial_impl!(char);
 
 collectable_trivial_impl!(f32);
 collectable_trivial_impl!(f64);
@@ -186,12 +222,24 @@ collectable_trivial_impl!(AtomicU16);
 collectable_trivial_impl!(AtomicU32);
 collectable_trivial_impl!(AtomicU64);
 collectable_trivial_impl!(AtomicUsize);
-
 collectable_trivial_impl!(AtomicI8);
 collectable_trivial_impl!(AtomicI16);
 collectable_trivial_impl!(AtomicI32);
 collectable_trivial_impl!(AtomicI64);
 collectable_trivial_impl!(AtomicIsize);
+
+collectable_trivial_impl!(NonZeroU8);
+collectable_trivial_impl!(NonZeroU16);
+collectable_trivial_impl!(NonZeroU32);
+collectable_trivial_impl!(NonZeroU64);
+collectable_trivial_impl!(NonZeroU128);
+collectable_trivial_impl!(NonZeroUsize);
+collectable_trivial_impl!(NonZeroI8);
+collectable_trivial_impl!(NonZeroI16);
+collectable_trivial_impl!(NonZeroI32);
+collectable_trivial_impl!(NonZeroI64);
+collectable_trivial_impl!(NonZeroI128);
+collectable_trivial_impl!(NonZeroIsize);
 
 collectable_trivial_impl!(String);
 collectable_trivial_impl!(str);
@@ -199,3 +247,74 @@ collectable_trivial_impl!(PathBuf);
 collectable_trivial_impl!(Path);
 collectable_trivial_impl!(OsString);
 collectable_trivial_impl!(OsStr);
+
+collectable_trivial_impl!(DefaultHasher);
+collectable_trivial_impl!(RandomState);
+collectable_trivial_impl!(Rc<str>);
+collectable_trivial_impl!(SipHasher);
+
+/// Implement [`Collectable`] for a tuple.
+macro_rules! collectable_tuple {
+    () => {}; // This case is handled above by the trivial case
+    ($($args:ident),*) => {
+        unsafe impl<$($args: Collectable),*> Collectable for ($($args,)*) {
+            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+                #[allow(non_snake_case)]
+                let &($(ref $args,)*) = self;
+                $(($args).accept(visitor)?;)*
+                Ok(())
+            }
+        }
+    }
+}
+
+collectable_tuple!();
+collectable_tuple!(A);
+collectable_tuple!(A, B);
+collectable_tuple!(A, B, C);
+collectable_tuple!(A, B, C, D);
+collectable_tuple!(A, B, C, D, E);
+collectable_tuple!(A, B, C, D, E, F);
+collectable_tuple!(A, B, C, D, E, F, G);
+collectable_tuple!(A, B, C, D, E, F, G, H);
+collectable_tuple!(A, B, C, D, E, F, G, H, I);
+collectable_tuple!(A, B, C, D, E, F, G, H, I, J);
+
+/// Implement `Collectable` for one function type.
+macro_rules! collectable_fn {
+    ($ty:ty $(,$args:ident)*) => {
+        unsafe impl<Ret $(,$args)*> Collectable for $ty {
+            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> { Ok(()) }
+        }
+    }
+}
+
+/// Implement `Collectable` for all functions with a given set of args.
+macro_rules! collectable_fn_group {
+    () => {
+        collectable_fn!(extern "Rust" fn () -> Ret);
+        collectable_fn!(extern "C" fn () -> Ret);
+        collectable_fn!(unsafe extern "Rust" fn () -> Ret);
+        collectable_fn!(unsafe extern "C" fn () -> Ret);
+    };
+    ($($args:ident),*) => {
+        collectable_fn!(extern "Rust" fn ($($args),*) -> Ret, $($args),*);
+        collectable_fn!(extern "C" fn ($($args),*) -> Ret, $($args),*);
+        collectable_fn!(extern "C" fn ($($args),*, ...) -> Ret, $($args),*);
+        collectable_fn!(unsafe extern "Rust" fn ($($args),*) -> Ret, $($args),*);
+        collectable_fn!(unsafe extern "C" fn ($($args),*) -> Ret, $($args),*);
+        collectable_fn!(unsafe extern "C" fn ($($args),*, ...) -> Ret, $($args),*);
+    }
+}
+
+collectable_fn_group!();
+collectable_fn_group!(A);
+collectable_fn_group!(A, B);
+collectable_fn_group!(A, B, C);
+collectable_fn_group!(A, B, C, D);
+collectable_fn_group!(A, B, C, D, E);
+collectable_fn_group!(A, B, C, D, E, F);
+collectable_fn_group!(A, B, C, D, E, F, G);
+collectable_fn_group!(A, B, C, D, E, F, G, H);
+collectable_fn_group!(A, B, C, D, E, F, G, H, I);
+collectable_fn_group!(A, B, C, D, E, F, G, H, I, J);

@@ -200,8 +200,8 @@ pub mod unsync;
 
 /// The trait that any garbage-collectable data must implement.
 ///
-/// This trait should usually be implemented by using `#[derive(Collectable)]`, using the macro from
-/// the crate `dumpster_derive`.
+/// This trait should usually be implemented by using `#[derive(Collectable)]`, using the provided
+/// macro.
 /// Only data structures using raw pointers or other magic should manually implement `Collectable`.
 ///
 /// # Safety
