@@ -1,18 +1,20 @@
 # `dumpster`: A cycle-tracking garbage collector for Rust
 
-`dumpster` is an experimental garbage-collector for Rust.
+`dumpster` is an cycle-detecting garbage collector for Rust.
 It detects unreachable allocations and automatically frees them.
 
-## Why should you use this library?
+## Why should you use this crate?
 
-You should use this library if:
+In short, `dumpster` offers a great mix of usability, performance, and flexibility.
 
-- You want to be able to trivially use your pre-existing data structures without manually
-  implementing traits.
-- You cannot remove cyclic references from your data structures.
-- You're only moderately picky about performance.
-- You don't mind a little instability.
-- You need to work with `?Sized` data.
+- `dumpster`'s API is a drop-in replacement for `std`'s reference-counted shared allocations
+  (`Rc` and `Arc`).
+- It's very performant and has builtin implementations of both thread-local and concurrent
+  garbage collection.
+- There are no restrictions on the reference structure within a garbage-collected allocation
+  (references may point in any way you like).
+- It's trivial to make a custom type collectable using the provided derive macros.
+- You can even store `?Sized` data in a garbage-collected pointer!
 
 ## How it works
 
@@ -29,8 +31,7 @@ garbarge collector in the module `unsync`, and one thread-safe garbage collector
 `sync`.
 These garbage collectors can be safely mixed and matched.
 
-Additionally, we provide a second crate, `dumpster_derive`, which implements derive macros for
-the `Collectable` trait mandated for all data that is used in a garbage-collected allocation.
+This library also comes with a derive macro for creating custom collectable types.
 
 ## Examples
 
@@ -64,19 +65,57 @@ dumpster::unsync::collect();
 
 ## Installation
 
-`dumpster` has not been published to [crates.io](https://crates.io) yet.
-Check back later for installation instructions.
+> [!NOTE]
+> I have yet to upload this to crates.io. 
+> However, what follows below will be the instructions once I finish the upload.
+
+To install, simply add `dumpster` as a dependency to your project.
+
+```toml
+[dependencies]
+dumpster = "0.1.0"
+```
 
 ## Optional features
 
-`dumpster` provides one optional feature, `coerce-unsized`.
-This unsized types to be stored in a `Gc`.
-For example, the following code works (when compiling on nightly and the feature is enabled):
+`dumpster` has two optional features: `derive` and `nightly`.
+
+`derive` is enabled by default.
+It enables the derive macro for `Collectable`, which makes it easy for users to implement their
+own collectable types.
+
+```rust
+use dumpster::{unsync::Gc, Collectable};
+use std::cell::RefCell;
+
+#[derive(Collectable)] // no manual implementation required
+struct Foo(RefCell<Option<Gc<Foo>>>);
+
+let my_foo = Gc::new(RefCell::new(None));
+*my_foo.borrow_mut = Some(my_foo.clone());
+
+drop(my_foo); // my_foo will be automatically cleaned up
+```
+
+`nightly` is disabled by default.
+It contains features and optimizations which require nightly Rust to implement.
+For now, this has two effects: first, `dumpster` uses strict provenance to make lower-bit-tagged
+pointers, reducing the size of a `dumpster::sync::Gc` by one `usize`.
+Second, it implements [`std::ops::CoerceUnsized`] for both `Gc` types, making it possible to
+create garbage-collected unsized types.
 
 ```rust
 use dumpster::unsync::Gc;
 
-let gc: Gc<[u8]> = Gc::new([1, 2, 3]);
+// this only works with "nightly" enabled while compiling on nightly Rust
+let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
+```
+
+To use `nightly`, edit your installation to `Cargo.toml` to include the feature.
+
+```toml
+[dependencies]
+dumpster = { version = "0.1.0", features = ["nightly"]}
 ```
 
 ## License
