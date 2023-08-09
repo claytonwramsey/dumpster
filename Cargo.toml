@@ -5,4 +5,6 @@ members = [
     "dumpster_test",
     "dumpster_bench",
 ]
-resolver = "2"
+
+[patch.crates-io]
+dumpster = { path = "dumpster" }
