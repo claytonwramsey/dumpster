@@ -252,7 +252,7 @@ fn double_borrow() {
 }
 
 #[test]
-#[cfg(feature = "coerce-unsized")]
+#[cfg(feature = "nightly")]
 fn coerce_array() {
     let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
     let gc2: Gc<[u8]> = gc1;

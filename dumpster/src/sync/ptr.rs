@@ -98,7 +98,7 @@ impl<T: Collectable + Sync + ?Sized> Tagged<T> {
     }
 }
 
-#[cfg(feature = "coerce-unsized")]
+#[cfg(feature = "nightly")]
 impl<T, U> std::ops::CoerceUnsized<Tagged<U>> for Tagged<T>
 where
     T: std::marker::Unsize<U> + Collectable + Sync + ?Sized,
