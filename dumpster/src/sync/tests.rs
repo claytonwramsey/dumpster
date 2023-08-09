@@ -254,7 +254,7 @@ fn open_drop() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore = "miri is too slow")]
 fn eventually_collect() {
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
     static COUNT_2: AtomicUsize = AtomicUsize::new(0);
@@ -359,10 +359,10 @@ fn malicious() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore = "miri is too slow")]
 #[allow(clippy::too_many_lines)]
 fn fuzz() {
-    const N: usize = 11_252;
+    const N: usize = 20_000;
     static DROP_DETECTORS: [AtomicUsize; N] = {
         let mut detectors: [MaybeUninit<AtomicUsize>; N] =
             unsafe { transmute(MaybeUninit::<[AtomicUsize; N]>::uninit()) };

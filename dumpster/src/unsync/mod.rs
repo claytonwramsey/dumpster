@@ -17,6 +17,30 @@
 */
 
 //! Thread-local garbage collection.
+//!
+//! Most users of this library will want to direct their attention to [`Gc`].
+//! If you want to tune the garbage collector's sweep frequency, take a look at
+//! [`set_collect_condition`].
+//!
+//! # Examples
+//!
+//! ```
+//! use dumpster::{Collectable, unsync::Gc};
+//! use std::cell::RefCell;
+//!
+//! #[derive(Collectable)]
+//! struct Foo {
+//!     refs: RefCell<Vec<Gc<Self>>>,
+//! }
+//!
+//! let foo = Gc::new(Foo {
+//!     refs: RefCell::new(Vec::new())
+//! });
+//!
+//! // If you had used `Rc`, this would be a memory leak.
+//! // `Gc` can collect it, though!
+//! foo.refs.borrow_mut().push(foo.clone());
+//! ```
 
 use std::{
     alloc::{dealloc, Layout},
