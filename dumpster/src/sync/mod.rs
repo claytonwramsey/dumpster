@@ -21,7 +21,7 @@
 //! Most users of this module will be interested in using [`Gc`] directly out of the box - this will
 //! just work.
 //! Those with more particular needs (such as benchmarking) should turn toward
-//! [`set_collect_condition`] in order to tune exactly when the garbage collector does sweeps.
+//! [`set_collect_condition`] in order to tune exactly when the garbage collector does cleanups.
 //!
 //! # Examples
 //!
@@ -249,7 +249,7 @@ where
     /// ```
     fn clone(&self) -> Gc<T> {
         let box_ref = unsafe { (*self.0.get()).as_ref() };
-        // increment strong count before generation to ensure sweeper never underestimates ref count
+        // increment strong count before generation to ensure cleanup never underestimates ref count
         box_ref.strong.fetch_add(1, Ordering::Relaxed);
         box_ref.generation.fetch_add(1, Ordering::Relaxed);
         notify_created_gc();

@@ -46,7 +46,7 @@ thread_local! {
 }
 
 /// A dumpster is a collection of all the garbage that may or may not need to be cleaned up.
-/// It also contains information relevant to when a sweep should be triggered.
+/// It also contains information relevant to when a cleanup should be triggered.
 pub(super) struct Dumpster {
     /// A map from allocation IDs for allocations which may need to be collected to pointers to
     /// their allocations.
@@ -82,9 +82,8 @@ struct Cleanup {
     /// The function which is called to build the reference graph and find all allocations
     /// reachable from this allocation.
     dfs_fn: unsafe fn(ErasedPtr, &mut Dfs),
-    /// The function which is called to sweep out and mark allocations reachable from this
-    /// allocation as reachable.
-    sweep_fn: unsafe fn(ErasedPtr, &mut Sweep),
+    /// The function which is called to mark descendants of this allocation as reachable.
+    mark_fn: unsafe fn(ErasedPtr, &mut Mark),
     /// A function used for dropping the allocation.
     drop_fn: unsafe fn(ErasedPtr, &mut DropAlloc<'_>),
     /// An erased pointer to the allocation.
@@ -96,7 +95,7 @@ impl Cleanup {
     fn new<T: Collectable + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
         Cleanup {
             dfs_fn: apply_visitor::<T, Dfs>,
-            sweep_fn: apply_visitor::<T, Sweep>,
+            mark_fn: apply_visitor::<T, Mark>,
             drop_fn: drop_assist::<T>,
             ptr: ErasedPtr::new(box_ptr),
         }
@@ -130,7 +129,7 @@ impl Dumpster {
                 }
             }
 
-            let mut sweep = Sweep {
+            let mut mark = Mark {
                 visited: HashSet::with_capacity(dfs.visited.len()),
             };
             for (id, reachability) in dfs
@@ -138,8 +137,8 @@ impl Dumpster {
                 .iter()
                 .filter(|(_, reachability)| reachability.n_unaccounted != 0)
             {
-                sweep.visited.insert(*id);
-                (reachability.sweep_fn)(reachability.ptr, &mut sweep);
+                mark.visited.insert(*id);
+                (reachability.mark_fn)(reachability.ptr, &mut mark);
             }
 
             // any allocations which we didn't find must also be roots
@@ -149,14 +148,14 @@ impl Dumpster {
                 .iter()
                 .filter(|(id, _)| !dfs.ref_graph.contains_key(id))
             {
-                sweep.visited.insert(*id);
-                (cleanup.sweep_fn)(cleanup.ptr, &mut sweep);
+                mark.visited.insert(*id);
+                (cleanup.mark_fn)(cleanup.ptr, &mut mark);
             }
 
             dfs.visited.clear();
             let mut decrementer = DropAlloc {
                 visited: dfs.visited,
-                reachable: &sweep.visited,
+                reachable: &mark.visited,
             };
 
             COLLECTING.with(|c| c.set(true));
@@ -164,7 +163,7 @@ impl Dumpster {
                 .to_collect
                 .borrow_mut()
                 .drain()
-                .filter_map(|(id, cleanup)| (!sweep.visited.contains(&id)).then_some(cleanup))
+                .filter_map(|(id, cleanup)| (!mark.visited.contains(&id)).then_some(cleanup))
             {
                 (cleanup.drop_fn)(cleanup.ptr, &mut decrementer);
             }
@@ -191,7 +190,7 @@ impl Dumpster {
 
     /// Notify the dumpster that a garbage-collected pointer has been dropped.
     ///
-    /// This may trigger a sweep of the heap, but is guaranteed to be amortized to _O(1)_.
+    /// This may trigger a cleanup of the heap, but is guaranteed to be amortized to _O(1)_.
     pub fn notify_dropped_gc(&self) {
         self.n_ref_drops.set(self.n_ref_drops.get() + 1);
         let old_refs_living = self.n_refs_living.get();
@@ -238,8 +237,8 @@ struct Reachability {
     n_unaccounted: usize,
     /// An erased pointer to the allocation under concern.
     ptr: ErasedPtr,
-    /// A function used to sweep from `ptr` if this allocation is proven reachable.
-    sweep_fn: unsafe fn(ErasedPtr, &mut Sweep),
+    /// A function used to mark descendants of this allocation as accessible.
+    mark_fn: unsafe fn(ErasedPtr, &mut Mark),
 }
 
 impl Visitor for Dfs {
@@ -264,7 +263,7 @@ impl Visitor for Dfs {
                 v.insert(Reachability {
                     n_unaccounted: unsafe { next_id.0.as_ref().get().get() - 1 },
                     ptr: ErasedPtr::new(gc.ptr),
-                    sweep_fn: apply_visitor::<T, Sweep>,
+                    mark_fn: apply_visitor::<T, Mark>,
                 });
             }
         }
@@ -274,13 +273,13 @@ impl Visitor for Dfs {
     }
 }
 
-/// A sweep, which marks allocations as reachable.
-struct Sweep {
+/// A mark traversal, which marks allocations as reachable.
+struct Mark {
     /// The set of allocations which have been marked as reachable.
     visited: HashSet<AllocationId>,
 }
 
-impl Visitor for Sweep {
+impl Visitor for Mark {
     fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
         T: Collectable + Sync + ?Sized,

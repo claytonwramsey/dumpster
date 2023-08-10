@@ -228,15 +228,15 @@ where
 /// Set the function which determines whether the garbage collector should be run.
 ///
 /// `f` will be periodically called by the garbage collector to determine whether it should perform
-/// a full sweep of the heap.
-/// When `f` returns true, a sweep will begin.
+/// a full traversal of the heap.
+/// When `f` returns true, a traversal will begin.
 ///
 /// # Examples
 ///
 /// ```
 /// use dumpster::sync::{set_collect_condition, CollectInfo};
 ///
-/// /// This function will make sure a GC sweep never happens unless directly activated.
+/// /// This function will make sure a GC traversal never happens unless directly activated.
 /// fn never_collect(_: &CollectInfo) -> bool {
 ///     false
 /// }
@@ -323,7 +323,7 @@ impl GarbageTruck {
             })
             .collect::<Vec<_>>();
         for root_id in root_ids {
-            sweep(root_id, &mut ref_graph);
+            mark(root_id, &mut ref_graph);
         }
 
         CLEANING.with(|c| c.set(true));
@@ -358,7 +358,7 @@ impl GarbageTruck {
     }
 }
 
-/// Tag all allocations reachable from `ptr` as being part of a sweep (i.e. setting their tag to
+/// Tag all allocations reachable from `ptr` as being part of a traversal (i.e. setting their tag to
 /// `true`).
 unsafe fn tag_all<T: Collectable + Sync + ?Sized>(
     ptr: ErasedPtr,
@@ -448,7 +448,7 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
     {
         // box_ref.value was accessed while we worked
         // mark this allocation as reachable
-        sweep(starting_id, ref_graph);
+        mark(starting_id, ref_graph);
     }
 }
 
@@ -477,8 +477,8 @@ impl<'a> Visitor for Dfs<'a> {
 
         let mut new_id = AllocationId::from(box_ref);
         if !tagged.tagged() {
-            // This pointer is tagged, so the allocation containing it must be accessible. Sweep!
-            sweep(self.current_id, self.ref_graph);
+            // This pointer is tagged, so the allocation containing it must be accessible. Mark!
+            mark(self.current_id, self.ref_graph);
             return;
         }
 
@@ -514,7 +514,7 @@ impl<'a> Visitor for Dfs<'a> {
                             unreachable!();
                         };
                         for child in children {
-                            sweep(child, self.ref_graph);
+                            mark(child, self.ref_graph);
                         }
                     }
                 }
@@ -542,7 +542,7 @@ impl<'a> Visitor for Dfs<'a> {
                 if box_ref.value.accept(self).is_err() {
                     // On failure, this means `**gc` is accessible, and should be marked
                     // as such
-                    sweep(new_id, self.ref_graph);
+                    mark(new_id, self.ref_graph);
                 }
 
                 // Restore current_id and carry on
@@ -559,15 +559,15 @@ impl<'a> Visitor for Dfs<'a> {
     }
 }
 
-/// Sweep through the reference graph, marking `root` and any allocations reachable from `root` as
+/// Traverse the reference graph, marking `root` and any allocations reachable from `root` as
 /// reachable.
-fn sweep(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) {
+fn mark(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) {
     let node = graph.get_mut(&root).unwrap();
     if let Reachability::Unknown { children, .. } =
         replace(&mut node.reachability, Reachability::Reachable)
     {
         for child in children {
-            sweep(child, graph);
+            mark(child, graph);
         }
     }
 }

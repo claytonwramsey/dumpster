@@ -19,7 +19,7 @@
 //! Thread-local garbage collection.
 //!
 //! Most users of this library will want to direct their attention to [`Gc`].
-//! If you want to tune the garbage collector's sweep frequency, take a look at
+//! If you want to tune the garbage collector's cleanup frequency, take a look at
 //! [`set_collect_condition`].
 //!
 //! # Examples
@@ -163,15 +163,15 @@ pub fn default_collect_condition(info: &CollectInfo) -> bool {
 /// Set the function which determines whether the garbage collector should be run.
 ///
 /// `f` will be periodically called by the garbage collector to determine whether it should perform
-/// a full sweep of the heap.
-/// When `f` returns true, a sweep will begin.
+/// a full cleanup of the heap.
+/// When `f` returns true, a cleanup will begin.
 ///
 /// # Examples
 ///
 /// ```
 /// use dumpster::unsync::{set_collect_condition, CollectInfo};
 ///
-/// /// This function will make sure a GC sweep never happens unless directly activated.
+/// /// This function will make sure a GC cleanup never happens unless directly activated.
 /// fn never_collect(_: &CollectInfo) -> bool {
 ///     false
 /// }
@@ -275,7 +275,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                     d.mark_dirty(self.ptr);
                 }
             }
-            // Notify that a GC has been dropped, potentially triggering a sweep
+            // Notify that a GC has been dropped, potentially triggering a cleanup
             d.notify_dropped_gc();
         });
     }

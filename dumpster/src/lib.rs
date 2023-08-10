@@ -32,7 +32,7 @@
 //! Garbage-collected pointers can be created and destroyed in _O(1)_ amortized time, but destroying
 //! a garbage-collected pointer may take _O(r)_, where _r_ is the number of existing
 //! garbage-collected references, on occasion.
-//! However, the sweeps that require _O(r)_ performance are performed once every _O(1/r)_ times
+//! However, the cleanups that require _O(r)_ performance are performed once every _O(1/r)_ times
 //! a reference is dropped, yielding an amortized _O(1)_ runtime.
 //!
 //! # Why should you use this crate?
