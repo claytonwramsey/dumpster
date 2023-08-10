@@ -320,8 +320,22 @@ pub trait Visitor {
 #[cfg(feature = "derive")]
 extern crate dumpster_derive;
 
-/// Derive macro available if `dumpster` is built with `features = ["derive"]`.
 #[cfg(feature = "derive")]
+/// The derive macro for implementing `Collectable`.
+///
+/// This enables users of `dumpster` to easily store custom types inside a `Gc`.
+/// To do so, simply annotate your type with `#[derive(Collectable)]`.
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::Collectable;
+///
+/// #[derive(Collectable)]
+/// struct Foo {
+///     bar: Option<Box<Foo>>,
+/// }
+/// ```
 pub use dumpster_derive::Collectable;
 
 #[repr(align(16))]

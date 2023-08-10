@@ -26,6 +26,6 @@ fastrand = "2.0.0"
 features = ["derive"]
 
 [package.metadata.docs.rs]
-features = ["derive", "nightly"]
+features = ["derive"]
 targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--generate-link-to-definition"]
