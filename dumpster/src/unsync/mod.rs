@@ -25,7 +25,7 @@
 //! # Examples
 //!
 //! ```
-//! use dumpster::{Collectable, unsync::Gc};
+//! use dumpster::{unsync::Gc, Collectable};
 //! use std::cell::RefCell;
 //!
 //! #[derive(Collectable)]
@@ -34,7 +34,7 @@
 //! }
 //!
 //! let foo = Gc::new(Foo {
-//!     refs: RefCell::new(Vec::new())
+//!     refs: RefCell::new(Vec::new()),
 //! });
 //!
 //! // If you had used `Rc`, this would be a memory leak.
