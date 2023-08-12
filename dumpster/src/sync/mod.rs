@@ -382,7 +382,7 @@ impl<T: Collectable + ?Sized + Sync> std::fmt::Pointer for Gc<T> {
     }
 }
 
-#[cfg(feature = "nightly")]
+#[cfg(feature = "coerce-unsized")]
 impl<T, U> std::ops::CoerceUnsized<Gc<U>> for Gc<T>
 where
     T: std::marker::Unsize<U> + Collectable + Sync + ?Sized,

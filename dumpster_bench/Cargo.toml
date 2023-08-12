@@ -17,6 +17,3 @@ bacon_rajan_cc = "0.3"
 fastrand = "2.0.0"
 shredder = "0.2.0"
 shredder_derive = "0.2.0"
-
-[profile.release]
-lto = true

@@ -286,14 +286,14 @@ fn eventually_collect() {
 }
 
 #[test]
-#[cfg(feature = "nightly")]
+#[cfg(feature = "coerce-unsized")]
 fn coerce_array() {
     let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
     let gc2: Gc<[u8]> = gc1;
     assert_eq!(gc2.len(), 3);
     assert_eq!(
         std::mem::size_of::<Gc<[u8]>>(),
-        2 * std::mem::size_of::<usize>()
+        3 * std::mem::size_of::<usize>()
     );
 }
 

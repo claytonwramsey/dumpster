@@ -12,7 +12,7 @@ categories = ["memory-management", "data-structures"]
 
 [features]
 default = ["derive"]
-nightly = []
+coerce-unsized = []
 derive = ["dep:dumpster_derive"]
 
 [dependencies]
