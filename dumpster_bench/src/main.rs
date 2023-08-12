@@ -215,15 +215,17 @@ fn multi_threaded<M: SyncMultiref>(
         .map(|_| Mutex::new((0..50).map(|_| M::new(Vec::new())).collect()))
         .collect();
 
-    let tic = Instant::now();
-    let toc = Mutex::new(None);
+    let tic = Mutex::new(Instant::now());
+    let toc = Mutex::new(Instant::now());
     scope(|s| {
         for i in 0..n_threads {
             let vecs = &vecs;
+            let tic = &tic;
             let toc = &toc;
             thread::Builder::new()
                 .name(format!("multi_threaded{i}"))
                 .spawn_scoped(s, move || {
+                    *tic.lock().unwrap() = Instant::now();
                     fastrand::seed(12345 + i as u64);
 
                     for _n in 0..(n_iters / n_threads) {
@@ -284,13 +286,13 @@ fn multi_threaded<M: SyncMultiref>(
                             _ => unreachable!(),
                         };
                     }
-                    *toc.lock().unwrap() = Some(Instant::now());
+                    *toc.lock().unwrap() = Instant::now();
                 })
                 .unwrap();
         }
     });
     M::collect(); // This op is single threaded and shouldn't count
-    let duration = toc.lock().unwrap().unwrap().duration_since(tic);
+    let duration = toc.lock().unwrap().duration_since(*tic.lock().unwrap());
 
     // println!("finished {name} in {duration:?}");
     BenchmarkData {

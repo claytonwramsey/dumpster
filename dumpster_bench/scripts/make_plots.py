@@ -37,7 +37,7 @@ for (name, v) in multi_times.items():
     plt.scatter(xs, ys, label=name)
 plt.xlabel('Number of threads')
 plt.ylabel('Time taken for 1M ops (ms)')
-plt.title('Garbage collector shootout')
+plt.title('Parallel garbage collector scaling')
 plt.legend()
 plt.show()
 

@@ -17,7 +17,6 @@
 */
 
 use std::{
-    cell::RefCell,
     rc::Rc,
     sync::{Arc, Mutex},
 };
@@ -43,7 +42,7 @@ impl<T> SyncMultiref for T where T: Send + Sync + Multiref {}
 /// A samle multi-reference which uses `Rc`, which is technically not a garbage collector, as a
 /// baseline.
 pub struct RcMultiref {
-    refs: RefCell<Vec<Rc<Self>>>,
+    refs: Mutex<Vec<Rc<Self>>>,
 }
 
 /// A samle multi-reference which uses `Arc`, which is technically not a garbage collector, as a
@@ -59,7 +58,7 @@ pub struct DumpsterSyncMultiref {
 
 #[derive(dumpster::Collectable)]
 pub struct DumpsterUnsyncMultiref {
-    refs: RefCell<Vec<dumpster::unsync::Gc<Self>>>,
+    refs: Mutex<Vec<dumpster::unsync::Gc<Self>>>,
 }
 
 pub struct GcMultiref {
@@ -67,12 +66,12 @@ pub struct GcMultiref {
 }
 
 pub struct BaconRajanMultiref {
-    refs: RefCell<Vec<bacon_rajan_cc::Cc<Self>>>,
+    refs: Mutex<Vec<bacon_rajan_cc::Cc<Self>>>,
 }
 
 #[derive(shredder_derive::Scan)]
 pub struct ShredderMultiref {
-    refs: RefCell<Vec<shredder::Gc<Self>>>,
+    refs: Mutex<Vec<shredder::Gc<Self>>>,
 }
 
 #[derive(shredder_derive::Scan)]
@@ -82,7 +81,7 @@ pub struct ShredderSyncMultiref {
 
 impl bacon_rajan_cc::Trace for BaconRajanMultiref {
     fn trace(&self, tracer: &mut bacon_rajan_cc::Tracer) {
-        self.refs.borrow().trace(tracer);
+        self.refs.lock().unwrap().trace(tracer);
     }
 }
 
@@ -129,12 +128,12 @@ impl Multiref for dumpster::sync::Gc<DumpsterSyncMultiref> {
 impl Multiref for dumpster::unsync::Gc<DumpsterUnsyncMultiref> {
     fn new(points_to: Vec<Self>) -> Self {
         dumpster::unsync::Gc::new(DumpsterUnsyncMultiref {
-            refs: RefCell::new(points_to),
+            refs: Mutex::new(points_to),
         })
     }
 
     fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
-        f(self.refs.borrow_mut().as_mut());
+        f(self.refs.lock().unwrap().as_mut());
     }
 
     fn collect() {
@@ -161,12 +160,12 @@ impl Multiref for gc::Gc<GcMultiref> {
 impl Multiref for bacon_rajan_cc::Cc<BaconRajanMultiref> {
     fn new(points_to: Vec<Self>) -> Self {
         bacon_rajan_cc::Cc::new(BaconRajanMultiref {
-            refs: RefCell::new(points_to),
+            refs: Mutex::new(points_to),
         })
     }
 
     fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
-        f(self.refs.borrow_mut().as_mut());
+        f(self.refs.lock().unwrap().as_mut());
     }
 
     fn collect() {
@@ -178,12 +177,12 @@ impl Multiref for bacon_rajan_cc::Cc<BaconRajanMultiref> {
 impl Multiref for shredder::Gc<ShredderMultiref> {
     fn new(points_to: Vec<Self>) -> Self {
         shredder::Gc::new(ShredderMultiref {
-            refs: RefCell::new(points_to),
+            refs: Mutex::new(points_to),
         })
     }
 
     fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
-        f(self.get().refs.borrow_mut().as_mut());
+        f(self.get().refs.lock().unwrap().as_mut());
     }
 
     fn collect() {
@@ -210,12 +209,12 @@ impl Multiref for shredder::Gc<ShredderSyncMultiref> {
 impl Multiref for Rc<RcMultiref> {
     fn new(points_to: Vec<Self>) -> Self {
         Rc::new(RcMultiref {
-            refs: RefCell::new(points_to),
+            refs: Mutex::new(points_to),
         })
     }
 
     fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
-        f(self.refs.borrow_mut().as_mut());
+        f(self.refs.lock().unwrap().as_mut());
     }
 
     fn collect() {}

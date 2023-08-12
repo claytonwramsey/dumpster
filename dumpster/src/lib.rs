@@ -129,7 +129,7 @@
 //!
 //! # Optional features
 //!
-//! `dumpster` has two optional features: `derive` and `nightly`.
+//! `dumpster` has two optional features: `derive` and `coerce-unsized`.
 //!
 //! `derive` is enabled by default.
 //! It enables the derive macro for `Collectable`, which makes it easy for users to implement their
@@ -148,28 +148,25 @@
 //! drop(my_foo); // my_foo will be automatically cleaned up
 //! ```
 //!
-//! `nightly` is disabled by default.
-//! It contains features and optimizations which require nightly Rust to implement.
-//! For now, this has two effects: first, `dumpster` uses strict provenance to make lower-bit-tagged
-//! pointers, reducing the size of a `dumpster::sync::Gc` by one `usize`.
-//! Second, it implements [`std::ops::CoerceUnsized`] for both `Gc` types, making it possible to
-//! create garbage-collected unsized types.
+//! `coerce-unsized` is disabled by default.
+//! This enables the implementation of [`std::ops::CoerceUnsized`] for each garbage collector,
+//! making it possible to use `Gc` with `!Sized` types conveniently.
 #![cfg_attr(
-    feature = "nightly",
+    feature = "coerce-unsized",
     doc = r##"
 ```
-// this only works with "nightly" enabled while compiling on nightly Rust
+// this only works with "coerce-unsized" enabled while compiling on nightly Rust
 use dumpster::unsync::Gc;
 
 let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 ```
 "##
 )]
-//! To use `nightly`, edit your installation to `Cargo.toml` to include the feature.
+//! To use `coerce-unsized`, edit your installation to `Cargo.toml` to include the feature.
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = { version = "0.1.0", features = ["nightly"]}
+//! dumpster = { version = "0.1.0", features = ["coerce-unsized"]}
 //! ```
 //!
 //! # License
@@ -183,9 +180,8 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 #![allow(clippy::multiple_crate_versions, clippy::result_unit_err)]
-#![cfg_attr(feature = "nightly", feature(coerce_unsized))]
-#![cfg_attr(feature = "nightly", feature(unsize))]
-#![cfg_attr(feature = "nightly", feature(strict_provenance))]
+#![cfg_attr(feature = "coerce-unsized", feature(coerce_unsized))]
+#![cfg_attr(feature = "coerce-unsized", feature(unsize))]
 
 use std::{
     fmt,

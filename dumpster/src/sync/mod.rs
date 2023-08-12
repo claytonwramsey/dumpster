@@ -357,9 +357,9 @@ impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
 
     fn deref(&self) -> &Self::Target {
         let box_ref = unsafe { self.ptr.as_ref() };
-        box_ref
-            .generation
-            .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Relaxed);
+        let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
+        self.tag.store(current_tag, Ordering::Relaxed);
+        box_ref.generation.store(current_tag, Ordering::Relaxed);
         &box_ref.value
     }
 }
