@@ -20,8 +20,8 @@
 
 use std::{
     alloc::{dealloc, Layout},
-    cell::{Cell, RefCell, UnsafeCell},
-    collections::{hash_map::Entry, HashMap, HashSet},
+    cell::{Cell, RefCell},
+    collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take, transmute},
     ptr::{drop_in_place, NonNull},
     sync::{
@@ -34,7 +34,7 @@ use once_cell::sync::Lazy;
 
 use crate::{Collectable, ErasedPtr, Visitor};
 
-use super::{default_collect_condition, CollectCondition, CollectInfo, Gc, GcBox};
+use super::{default_collect_condition, CollectCondition, CollectInfo, Gc, GcBox, CURRENT_TAG};
 
 /// The garbage truck, which is a global data structure containing information about allocations
 /// which might need to be collected.
@@ -74,9 +74,6 @@ struct AllocationId(NonNull<GcBox<()>>);
 struct TrashCan {
     /// A pointer to the allocation to be cleaned up.
     ptr: ErasedPtr,
-    /// The function which can be used to tag the allocation and all its descendants prior to a
-    /// DFS. this function is safe to call on `ptr`.
-    tag_fn: unsafe fn(ErasedPtr, &mut HashSet<AllocationId>),
     /// The function which can be used to build a reference graph.
     /// This function is safe to call on `ptr`.
     dfs_fn: unsafe fn(ErasedPtr, &mut HashMap<AllocationId, AllocationInfo>),
@@ -106,9 +103,6 @@ enum Reachability {
         /// It is the difference between the allocations indegree in the "true" reference graph vs
         /// the one we are currently building.
         n_unaccounted: usize,
-        /// The last recorded generation of this allocation from when the reachability was created.
-        /// If the generation does not match the allocation, that means it's accessible.
-        generation: usize,
         /// A function used to destroy the allocation.
         destroy_fn: unsafe fn(ErasedPtr, &HashMap<AllocationId, AllocationInfo>),
     },
@@ -195,7 +189,6 @@ where
                 AllocationId::from(box_ref),
                 TrashCan {
                     ptr: ErasedPtr::new(allocation),
-                    tag_fn: tag_all::<T>,
                     dfs_fn: dfs::<T>,
                 },
             )
@@ -295,21 +288,11 @@ impl GarbageTruck {
         let collecting_guard = self.collecting_lock.write().unwrap();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.contents.lock().unwrap());
-        let mut visited = HashSet::with_capacity(to_collect.len());
+        let mut ref_graph = HashMap::with_capacity(to_collect.len());
 
-        let to_dfs = to_collect
-            .into_values()
-            .map(|cleanup| {
-                unsafe {
-                    (cleanup.tag_fn)(cleanup.ptr, &mut visited);
-                }
-                (cleanup.ptr, cleanup.dfs_fn)
-            })
-            .collect::<Vec<_>>();
+        CURRENT_TAG.fetch_add(1, Ordering::Release);
 
-        let mut ref_graph = HashMap::with_capacity(visited.len());
-
-        for (ptr, dfs_fn) in to_dfs {
+        for (_, TrashCan { ptr, dfs_fn }) in to_collect {
             unsafe { dfs_fn(ptr, &mut ref_graph) };
         }
 
@@ -358,46 +341,6 @@ impl GarbageTruck {
     }
 }
 
-/// Tag all allocations reachable from `ptr` as being part of a traversal (i.e. setting their tag to
-/// `true`).
-unsafe fn tag_all<T: Collectable + Sync + ?Sized>(
-    ptr: ErasedPtr,
-    visited: &mut HashSet<AllocationId>,
-) {
-    /// A visitor for tagging all `Gc`s reachable from one allocation.
-    struct TagAll<'a> {
-        /// The set of allocations already visited.
-        visited: &'a mut HashSet<AllocationId>,
-    }
-
-    impl Visitor for TagAll<'_> {
-        fn visit_sync<T>(&mut self, gc: &Gc<T>)
-        where
-            T: Collectable + Sync + ?Sized,
-        {
-            let tagged_ptr = UnsafeCell::raw_get(&gc.0);
-            let tagged = unsafe { *tagged_ptr };
-            unsafe { tagged_ptr.write(tagged.with_tag(true)) };
-            let box_ref = unsafe { tagged.as_ref() };
-            if self.visited.insert(AllocationId::from(box_ref)) {
-                let _ = box_ref.value.accept(self);
-            }
-        }
-
-        fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
-        where
-            T: Collectable + ?Sized,
-        {
-            unreachable!()
-        }
-    }
-
-    let box_ref = unsafe { ptr.specify::<GcBox<T>>().as_ref() };
-    if visited.insert(AllocationId::from(box_ref)) {
-        let _ = box_ref.value.accept(&mut TagAll { visited });
-    }
-}
-
 /// Build out a part of the reference graph, making note of all allocations which are reachable from
 /// the one described in `ptr`.
 ///
@@ -426,14 +369,12 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
         return;
     };
     let strong_count = box_ref.strong.load(Ordering::Acquire);
-    let generation = box_ref.generation.load(Ordering::Acquire);
     v.insert(AllocationInfo {
         ptr,
         weak_drop_fn: drop_weak_zero::<T>,
         reachability: Reachability::Unknown {
             children: Vec::new(),
             n_unaccounted: strong_count,
-            generation,
             destroy_fn: destroy_erased::<T>,
         },
     });
@@ -445,6 +386,7 @@ unsafe fn dfs<T: Collectable + Sync + ?Sized>(
             current_id: starting_id,
         })
         .is_err()
+        || box_ref.generation.load(Ordering::Relaxed) >= CURRENT_TAG.load(Ordering::Relaxed)
     {
         // box_ref.value was accessed while we worked
         // mark this allocation as reachable
@@ -468,19 +410,17 @@ impl<'a> Visitor for Dfs<'a> {
     where
         T: Collectable + Sync + ?Sized,
     {
-        let tagged_ptr = UnsafeCell::raw_get(&gc.0);
-        let tagged = unsafe { *tagged_ptr };
-        let box_ref = unsafe { tagged.as_ref() };
-        unsafe {
-            *tagged_ptr = tagged.with_tag(false);
-        }
-
-        let mut new_id = AllocationId::from(box_ref);
-        if !tagged.tagged() {
-            // This pointer is tagged, so the allocation containing it must be accessible. Mark!
+        let box_ref = unsafe { gc.ptr.as_ref() };
+        let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
+        if gc.tag.swap(current_tag, Ordering::Relaxed) >= current_tag
+            || box_ref.generation.load(Ordering::Relaxed) >= current_tag
+        {
+            // This pointer was already tagged by this sweep, so it must have been moved by
             mark(self.current_id, self.ref_graph);
             return;
         }
+
+        let mut new_id = AllocationId::from(box_ref);
 
         let Reachability::Unknown {
             ref mut children, ..
@@ -500,38 +440,22 @@ impl<'a> Visitor for Dfs<'a> {
             Entry::Occupied(mut o) => match o.get_mut().reachability {
                 Reachability::Unknown {
                     ref mut n_unaccounted,
-                    generation,
                     ..
                 } => {
-                    if generation == box_ref.generation.load(Ordering::Acquire) {
-                        *n_unaccounted -= 1;
-                    } else {
-                        // generation has changed under our feet
-                        // that means it's reachable
-                        let Reachability::Unknown { children, .. } =
-                            replace(&mut o.get_mut().reachability, Reachability::Reachable)
-                        else {
-                            unreachable!();
-                        };
-                        for child in children {
-                            mark(child, self.ref_graph);
-                        }
-                    }
+                    *n_unaccounted -= 1;
                 }
                 Reachability::Reachable => (),
             },
             Entry::Vacant(v) => {
                 // This allocation has never been visited by the reference graph builder
                 let strong_count = box_ref.strong.load(Ordering::Acquire);
-                let generation = box_ref.generation.load(Ordering::Acquire);
                 box_ref.weak.fetch_add(1, Ordering::Acquire);
                 v.insert(AllocationInfo {
-                    ptr: ErasedPtr::new(unsafe { (*gc.0.get()).as_nonnull() }),
+                    ptr: ErasedPtr::new(gc.ptr),
                     weak_drop_fn: drop_weak_zero::<T>,
                     reachability: Reachability::Unknown {
                         children: Vec::new(),
                         n_unaccounted: strong_count - 1,
-                        generation,
                         destroy_fn: destroy_erased::<T>,
                     },
                 });
@@ -539,10 +463,12 @@ impl<'a> Visitor for Dfs<'a> {
                 // Save the previously visited ID, then carry on to the next one
                 swap(&mut new_id, &mut self.current_id);
 
-                if box_ref.value.accept(self).is_err() {
+                if box_ref.value.accept(self).is_err()
+                    || box_ref.generation.load(Ordering::Relaxed) >= current_tag
+                {
                     // On failure, this means `**gc` is accessible, and should be marked
                     // as such
-                    mark(new_id, self.ref_graph);
+                    mark(self.current_id, self.ref_graph);
                 }
 
                 // Restore current_id and carry on
@@ -593,7 +519,7 @@ unsafe fn destroy_erased<T: Collectable + Sync + ?Sized>(
         where
             T: Collectable + Sync + ?Sized,
         {
-            let id = AllocationId::from(unsafe { (*UnsafeCell::raw_get(&gc.0)).as_nonnull() });
+            let id = AllocationId::from(gc.ptr);
             if matches!(self.graph[&id].reachability, Reachability::Reachable) {
                 unsafe {
                     id.0.as_ref().strong.fetch_sub(1, Ordering::Relaxed);
@@ -627,7 +553,8 @@ unsafe fn destroy_erased<T: Collectable + Sync + ?Sized>(
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
 unsafe fn drop_weak_zero<T: Collectable + Sync + ?Sized>(ptr: ErasedPtr) {
     let mut specified = ptr.specify::<GcBox<T>>();
-    assert!(specified.as_ref().weak.load(Ordering::Relaxed) == 0);
+    assert_eq!(specified.as_ref().weak.load(Ordering::Relaxed), 0);
+    assert_eq!(specified.as_ref().strong.load(Ordering::Relaxed), 0);
 
     let layout = Layout::for_value(specified.as_ref());
     drop_in_place(specified.as_mut());

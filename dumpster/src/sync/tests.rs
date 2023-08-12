@@ -18,7 +18,7 @@
 
 use std::{
     collections::{hash_map::Entry, HashMap},
-    mem::{align_of, transmute, MaybeUninit},
+    mem::{swap, take, transmute, MaybeUninit},
     ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -101,7 +101,7 @@ fn self_referential() {
     }
 
     let gc1 = Gc::new(Foo(Mutex::new(None)));
-    *(*gc1).0.lock().unwrap() = Some(Gc::clone(&gc1));
+    *gc1.0.lock().unwrap() = Some(Gc::clone(&gc1));
 
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc1);
@@ -300,6 +300,7 @@ fn coerce_array() {
 #[test]
 fn malicious() {
     static EVIL: AtomicUsize = AtomicUsize::new(0);
+    static A_DROP_DETECT: AtomicUsize = AtomicUsize::new(0);
     struct A {
         x: Gc<X>,
         y: Gc<Y>,
@@ -323,7 +324,7 @@ fn malicious() {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.a.accept(visitor)?;
 
-            if EVIL.fetch_add(1, Ordering::Relaxed) == 2 {
+            if EVIL.fetch_add(1, Ordering::Relaxed) == 1 {
                 println!("committing evil...");
                 // simulates a malicious thread
                 let y = unsafe { self.y.as_ref() };
@@ -342,6 +343,12 @@ fn malicious() {
 
     unsafe impl Sync for X {}
 
+    impl Drop for A {
+        fn drop(&mut self) {
+            A_DROP_DETECT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     let y = Gc::new(Y {
         a: Mutex::new(None),
     });
@@ -356,6 +363,10 @@ fn malicious() {
     drop(a.clone());
     EVIL.store(1, Ordering::Relaxed);
     collect();
+    assert_eq!(A_DROP_DETECT.load(Ordering::Relaxed), 0);
+    drop(a);
+    collect();
+    assert_eq!(A_DROP_DETECT.load(Ordering::Relaxed), 1);
 }
 
 #[test]
@@ -486,6 +497,117 @@ fn fuzz() {
 }
 
 #[test]
-fn alignment() {
-    assert!(align_of::<GcBox<()>>() >= 2);
+fn root_canal() {
+    struct A {
+        b: Gc<B>,
+    }
+
+    struct B {
+        a0: Mutex<Option<Gc<A>>>,
+        a1: Mutex<Option<Gc<A>>>,
+        a2: Mutex<Option<Gc<A>>>,
+        a3: Mutex<Option<Gc<A>>>,
+    }
+
+    unsafe impl Collectable for A {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.b.accept(visitor)
+        }
+    }
+
+    unsafe impl Collectable for B {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            let n_prior_visits = B_VISIT_COUNT.fetch_add(1, Ordering::Relaxed);
+            self.a0.accept(visitor)?;
+            self.a1.accept(visitor)?;
+
+            // simulate a malicious thread swapping things around
+            if n_prior_visits == 1 {
+                println!("committing evil...");
+                swap(
+                    &mut *SMUGGLED_POINTERS[0].lock().unwrap(),
+                    &mut *SMUGGLED_POINTERS[1]
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .b
+                        .a0
+                        .lock()
+                        .unwrap(),
+                );
+                swap(&mut *self.a0.lock().unwrap(), &mut *self.a2.lock().unwrap());
+                swap(
+                    &mut *SMUGGLED_POINTERS[0].lock().unwrap(),
+                    &mut *SMUGGLED_POINTERS[1]
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .b
+                        .a1
+                        .lock()
+                        .unwrap(),
+                );
+                swap(&mut *self.a1.lock().unwrap(), &mut *self.a3.lock().unwrap());
+            }
+
+            self.a2.accept(visitor)?;
+            self.a3.accept(visitor)?;
+
+            // smuggle out some pointers
+            if n_prior_visits == 0 {
+                println!("smuggling...");
+                *SMUGGLED_POINTERS[0].lock().unwrap() = take(&mut *self.a2.lock().unwrap());
+                *SMUGGLED_POINTERS[1].lock().unwrap() = take(&mut *self.a3.lock().unwrap());
+            }
+
+            Ok(())
+        }
+    }
+
+    impl Drop for B {
+        fn drop(&mut self) {
+            B_DROP_DETECT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    static SMUGGLED_POINTERS: [Mutex<Option<Gc<A>>>; 2] = [Mutex::new(None), Mutex::new(None)];
+    static B_VISIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static B_DROP_DETECT: AtomicUsize = AtomicUsize::new(0);
+
+    let a = Gc::new(A {
+        b: Gc::new(B {
+            a0: Mutex::new(None),
+            a1: Mutex::new(None),
+            a2: Mutex::new(None),
+            a3: Mutex::new(None),
+        }),
+    });
+    *a.b.a0.lock().unwrap() = Some(a.clone());
+    *a.b.a1.lock().unwrap() = Some(a.clone());
+    *a.b.a2.lock().unwrap() = Some(a.clone());
+    *a.b.a3.lock().unwrap() = Some(a.clone());
+
+    drop(a.clone());
+    collect();
+    println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
+
+    assert!(dbg!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref()).is_some());
+    assert!(SMUGGLED_POINTERS[1].lock().unwrap().as_ref().is_some());
+    println!("{}", B_VISIT_COUNT.load(Ordering::Relaxed));
+
+    assert_eq!(B_DROP_DETECT.load(Ordering::Relaxed), 0);
+    drop(a);
+    assert_eq!(B_DROP_DETECT.load(Ordering::Relaxed), 0);
+    collect();
+    println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
+
+    assert_eq!(B_DROP_DETECT.load(Ordering::Relaxed), 0);
+
+    *SMUGGLED_POINTERS[0].lock().unwrap() = None;
+    *SMUGGLED_POINTERS[1].lock().unwrap() = None;
+    collect();
+
+    assert_eq!(B_DROP_DETECT.load(Ordering::Relaxed), 1);
 }

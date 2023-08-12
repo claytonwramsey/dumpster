@@ -38,28 +38,23 @@
 //! ```
 
 mod collect;
-mod ptr;
 #[cfg(test)]
 mod tests;
 
 use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
-    cell::UnsafeCell,
     fmt::Debug,
     ops::Deref,
-    ptr::{addr_of, drop_in_place},
+    ptr::{addr_of, drop_in_place, NonNull},
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
 use crate::{Collectable, Visitor};
 
-use self::{
-    collect::{
-        collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped,
-        n_gcs_existing, notify_created_gc, notify_dropped_gc,
-    },
-    ptr::Tagged,
+use self::collect::{
+    collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
+    notify_created_gc, notify_dropped_gc,
 };
 
 /// A thread-safe garbage-collected pointer.
@@ -86,7 +81,16 @@ use self::{
 ///
 /// println!("{}", shared.load(Ordering::Relaxed));
 /// ```
-pub struct Gc<T: Collectable + Sync + ?Sized + 'static>(UnsafeCell<Tagged<T>>);
+pub struct Gc<T: Collectable + Sync + ?Sized + 'static> {
+    /// The pointer to the allocation.
+    ptr: NonNull<GcBox<T>>,
+    /// The tag information of this pointer, used for mutation detection when marking.
+    tag: AtomicUsize,
+}
+
+/// The tag of the current sweep operation.
+/// All new allocations are minted with the current tag.
+static CURRENT_TAG: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
 /// The backing allocation for a [`Gc`].
@@ -103,8 +107,8 @@ where
     /// If the weak count is zero, the allocation may be destroyed.
     weak: AtomicUsize,
     /// The current generation number of the allocation.
-    /// The generation number is incremented or decremented every time a strong reference is added
-    /// to or removed from the allocation.
+    /// The generation number is assigend to the global generation every time a strong reference is
+    /// created or destroyed or a `Gc` pointing to this allocation is dereferenced.
     generation: AtomicUsize,
     /// The actual data stored in the allocation.
     value: T,
@@ -215,16 +219,16 @@ where
         T: Sized,
     {
         notify_created_gc();
-        Gc(UnsafeCell::new(Tagged::new(
-            Box::leak(Box::new(GcBox {
+        Gc {
+            ptr: Box::leak(Box::new(GcBox {
                 strong: AtomicUsize::new(1),
                 weak: AtomicUsize::new(0),
-                generation: AtomicUsize::new(0),
+                generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Relaxed)),
                 value,
             }))
             .into(),
-            false,
-        )))
+            tag: AtomicUsize::new(0),
+        }
     }
 }
 
@@ -248,16 +252,18 @@ where
     /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
     /// ```
     fn clone(&self) -> Gc<T> {
-        let box_ref = unsafe { (*self.0.get()).as_ref() };
+        let box_ref = unsafe { self.ptr.as_ref() };
         // increment strong count before generation to ensure cleanup never underestimates ref count
         box_ref.strong.fetch_add(1, Ordering::Relaxed);
-        box_ref.generation.fetch_add(1, Ordering::Relaxed);
+        box_ref
+            .generation
+            .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Relaxed);
         notify_created_gc();
         // mark_clean(box_ref); // causes performance drops
-        Gc(UnsafeCell::new(Tagged::new(
-            unsafe { (*self.0.get()).as_nonnull() },
-            false,
-        )))
+        Gc {
+            ptr: self.ptr,
+            tag: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
+        }
     }
 }
 
@@ -269,11 +275,12 @@ where
         if currently_cleaning() {
             return;
         }
-        let box_ref = unsafe { (*self.0.get()).as_ref() };
-        // decrement strong count after generation to ensure sweeper never underestimates ref count
-        box_ref.generation.fetch_sub(1, Ordering::Acquire);
+        let box_ref = unsafe { self.ptr.as_ref() };
         box_ref.weak.fetch_add(1, Ordering::AcqRel); // ensures that this allocation wasn't freed
                                                      // while we weren't looking
+        box_ref
+            .generation
+            .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Relaxed);
         match box_ref.strong.fetch_sub(1, Ordering::AcqRel) {
             0 => unreachable!("strong cannot reach zero while a Gc to it exists"),
             1 => {
@@ -283,14 +290,13 @@ where
                     let layout = Layout::for_value(box_ref);
                     fence(Ordering::Acquire);
                     unsafe {
-                        let mut nn = (*self.0.get()).as_nonnull();
-                        drop_in_place(nn.as_mut());
-                        dealloc(nn.as_ptr().cast(), layout);
+                        drop_in_place(self.ptr.as_mut());
+                        dealloc(self.ptr.as_ptr().cast(), layout);
                     }
                 }
             }
             _ => {
-                mark_dirty(unsafe { (*self.0.get()).as_nonnull() });
+                mark_dirty(self.ptr);
                 box_ref.weak.fetch_sub(1, Ordering::Release);
             }
         }
@@ -350,7 +356,11 @@ impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &(*self.0.get()).as_ref().value }
+        let box_ref = unsafe { self.ptr.as_ref() };
+        box_ref
+            .generation
+            .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Relaxed);
+        &box_ref.value
     }
 }
 
@@ -362,7 +372,7 @@ impl<T: Collectable + ?Sized + Sync> AsRef<T> for Gc<T> {
 
 impl<T: Collectable + ?Sized + Sync> Borrow<T> for Gc<T> {
     fn borrow(&self) -> &T {
-        self.as_ref()
+        self
     }
 }
 
@@ -382,6 +392,11 @@ where
 
 impl<T: Collectable + ?Sized + Sync> Debug for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Gc({:?})", unsafe { *self.0.get() }.as_ptr())
+        write!(
+            f,
+            "Gc({:?}, {})",
+            self.ptr,
+            self.tag.load(Ordering::Relaxed)
+        )
     }
 }

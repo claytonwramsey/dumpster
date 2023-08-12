@@ -76,7 +76,7 @@ fn main() {
         println!(
             "{}",
             single_threaded::<dumpster::unsync::Gc<DumpsterUnsyncMultiref>>(
-                "dumpster (unsync + manual trigger)",
+                "dumpster (unsync/manual)",
                 N_ITERS,
             )
         );
@@ -89,7 +89,7 @@ fn main() {
         println!(
             "{}",
             single_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>(
-                "dumpster (sync + manual trigger)",
+                "dumpster (sync/manual)",
                 N_ITERS
             )
         );
@@ -119,7 +119,7 @@ fn main() {
             println!(
                 "{}",
                 multi_threaded::<dumpster::sync::Gc<DumpsterSyncMultiref>>(
-                    "dumpster (sync + manual trigger)",
+                    "dumpster (sync/manual)",
                     N_ITERS,
                     n_threads,
                 )
