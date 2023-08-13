@@ -36,8 +36,7 @@ This library also comes with a derive macro for creating custom collectable type
 ## Examples
 
 ```rust
-use dumpster::unsync::Gc;
-use dumpster_derive::Collectable;
+use dumpster::{Collectable, unsync::Gc};
 
 #[derive(Collectable)]
 struct Foo {
