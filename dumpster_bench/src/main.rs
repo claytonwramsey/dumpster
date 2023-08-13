@@ -27,9 +27,8 @@ use std::{
 };
 
 use dumpster_bench::{
-    ArcMultiref, BaconRajanMultiref, DumpsterSyncMultiref, DumpsterUnsyncMultiref,
-    GcModuleMultiref, GcMultiref, Multiref, RcMultiref, ShredderMultiref, ShredderSyncMultiref,
-    SyncMultiref,
+    ArcMultiref, BaconRajanMultiref, DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref,
+    Multiref, RcMultiref, ShredderMultiref, ShredderSyncMultiref, SyncMultiref,
 };
 
 struct BenchmarkData {
@@ -102,10 +101,6 @@ fn main() {
         println!(
             "{}",
             single_threaded::<shredder::Gc<ShredderMultiref>>("shredder", N_ITERS)
-        );
-        println!(
-            "{}",
-            single_threaded::<gcmodule::Cc<GcModuleMultiref>>("gcmodule", N_ITERS)
         );
 
         for n_threads in 1..=available_parallelism().unwrap().get() {

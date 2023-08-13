@@ -79,11 +79,6 @@ pub struct ShredderSyncMultiref {
     refs: Mutex<Vec<shredder::Gc<Self>>>,
 }
 
-#[derive(gcmodule::Trace)]
-pub struct GcModuleMultiref {
-    refs: Mutex<Vec<gcmodule::Cc<Self>>>,
-}
-
 impl bacon_rajan_cc::Trace for BaconRajanMultiref {
     fn trace(&self, tracer: &mut bacon_rajan_cc::Tracer) {
         self.refs.lock().unwrap().trace(tracer);
@@ -237,20 +232,4 @@ impl Multiref for Arc<ArcMultiref> {
     }
 
     fn collect() {}
-}
-
-impl Multiref for gcmodule::Cc<GcModuleMultiref> {
-    fn new(points_to: Vec<Self>) -> Self {
-        gcmodule::Cc::new(GcModuleMultiref {
-            refs: Mutex::new(points_to),
-        })
-    }
-
-    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
-        f(&mut self.refs.lock().unwrap());
-    }
-
-    fn collect() {
-        gcmodule::collect_thread_cycles();
-    }
 }
