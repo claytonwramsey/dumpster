@@ -313,6 +313,8 @@ fn malicious() {
         a: Mutex<Option<Gc<A>>>,
     }
 
+    unsafe impl Send for X {}
+
     unsafe impl Collectable for A {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.x.accept(visitor)?;

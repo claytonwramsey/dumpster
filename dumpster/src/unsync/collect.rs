@@ -244,7 +244,7 @@ struct Reachability {
 impl Visitor for Dfs {
     fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
-        T: Collectable + Sync + ?Sized,
+        T: Collectable + Send + Sync + ?Sized,
     {
         // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
         // immediately.
@@ -282,7 +282,7 @@ struct Mark {
 impl Visitor for Mark {
     fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
-        T: Collectable + Sync + ?Sized,
+        T: Collectable + Send + Sync + ?Sized,
     {
         // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
         // immediately.
@@ -309,7 +309,7 @@ struct DropAlloc<'a> {
 impl Visitor for DropAlloc<'_> {
     fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
-        T: Collectable + Sync + ?Sized,
+        T: Collectable + Send + Sync + ?Sized,
     {
         // do nothing
     }

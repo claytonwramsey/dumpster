@@ -81,7 +81,7 @@ use self::collect::{
 ///
 /// println!("{}", shared.load(Ordering::Relaxed));
 /// ```
-pub struct Gc<T: Collectable + Sync + ?Sized + 'static> {
+pub struct Gc<T: Collectable + Send + Sync + ?Sized + 'static> {
     /// The pointer to the allocation.
     ptr: NonNull<GcBox<T>>,
     /// The tag information of this pointer, used for mutation detection when marking.
@@ -96,7 +96,7 @@ static CURRENT_TAG: AtomicUsize = AtomicUsize::new(0);
 /// The backing allocation for a [`Gc`].
 struct GcBox<T>
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Send + Sync + ?Sized,
 {
     /// The "strong" count, which is the number of extant `Gc`s to this allocation.
     /// If the strong count is zero, a value contained in the allocation may be dropped, but the
@@ -114,8 +114,8 @@ where
     value: T,
 }
 
-unsafe impl<T> Send for Gc<T> where T: Collectable + Sync + ?Sized {}
-unsafe impl<T> Sync for Gc<T> where T: Collectable + Sync + ?Sized {}
+unsafe impl<T> Send for Gc<T> where T: Collectable + Send + Sync + ?Sized {}
+unsafe impl<T> Sync for Gc<T> where T: Collectable + Send + Sync + ?Sized {}
 
 /// Begin a collection operation of the allocations on the heap.
 ///
@@ -211,7 +211,7 @@ pub use collect::set_collect_condition;
 
 impl<T> Gc<T>
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Send + Sync + ?Sized,
 {
     /// Construct a new garbage-collected value.
     pub fn new(value: T) -> Gc<T>
@@ -234,7 +234,7 @@ where
 
 impl<T> Clone for Gc<T>
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Send + Sync + ?Sized,
 {
     /// Clone a garbage-collected reference.
     /// This does not clone the underlying data.
@@ -269,7 +269,7 @@ where
 
 impl<T> Drop for Gc<T>
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Send + Sync + ?Sized,
 {
     fn drop(&mut self) {
         if currently_cleaning() {
@@ -345,14 +345,14 @@ impl CollectInfo {
     }
 }
 
-unsafe impl<T: Collectable + Sync + ?Sized> Collectable for Gc<T> {
+unsafe impl<T: Collectable + Send + Sync + ?Sized> Collectable for Gc<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         visitor.visit_sync(self);
         Ok(())
     }
 }
 
-impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
+impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -364,19 +364,19 @@ impl<T: Collectable + Sync + ?Sized> Deref for Gc<T> {
     }
 }
 
-impl<T: Collectable + ?Sized + Sync> AsRef<T> for Gc<T> {
+impl<T: Collectable + Send + Sync + ?Sized> AsRef<T> for Gc<T> {
     fn as_ref(&self) -> &T {
         self
     }
 }
 
-impl<T: Collectable + ?Sized + Sync> Borrow<T> for Gc<T> {
+impl<T: Collectable + Send + Sync + ?Sized> Borrow<T> for Gc<T> {
     fn borrow(&self) -> &T {
         self
     }
 }
 
-impl<T: Collectable + ?Sized + Sync> std::fmt::Pointer for Gc<T> {
+impl<T: Collectable + Send + Sync + ?Sized> std::fmt::Pointer for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Pointer::fmt(&addr_of!(**self), f)
     }
@@ -385,12 +385,12 @@ impl<T: Collectable + ?Sized + Sync> std::fmt::Pointer for Gc<T> {
 #[cfg(feature = "coerce-unsized")]
 impl<T, U> std::ops::CoerceUnsized<Gc<U>> for Gc<T>
 where
-    T: std::marker::Unsize<U> + Collectable + Sync + ?Sized,
-    U: Collectable + Sync + ?Sized,
+    T: std::marker::Unsize<U> + Collectable + Send + Sync + ?Sized,
+    U: Collectable + Send + Sync + ?Sized,
 {
 }
 
-impl<T: Collectable + ?Sized + Sync> Debug for Gc<T> {
+impl<T: Collectable + Send + Sync + ?Sized> Debug for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

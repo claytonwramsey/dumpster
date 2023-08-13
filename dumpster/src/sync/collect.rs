@@ -178,7 +178,7 @@ pub fn notify_created_gc() {
 /// be cleaned up.
 pub(super) fn mark_dirty<T>(allocation: NonNull<GcBox<T>>)
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Send + Sync + ?Sized,
 {
     let box_ref = unsafe { allocation.as_ref() };
     DUMPSTER.with(|dumpster| {
@@ -203,7 +203,7 @@ where
 /// need to be cleaned again.
 pub(super) fn mark_clean<T>(allocation: &GcBox<T>)
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Send + Sync + ?Sized,
 {
     DUMPSTER.with(|dumpster| {
         if dumpster
@@ -356,7 +356,7 @@ impl GarbageTruck {
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-unsafe fn dfs<T: Collectable + Sync + ?Sized>(
+unsafe fn dfs<T: Collectable + Send + Sync + ?Sized>(
     ptr: ErasedPtr,
     ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
 ) {
@@ -408,7 +408,7 @@ struct Dfs<'a> {
 impl<'a> Visitor for Dfs<'a> {
     fn visit_sync<T>(&mut self, gc: &Gc<T>)
     where
-        T: Collectable + Sync + ?Sized,
+        T: Collectable + Send + Sync + ?Sized,
     {
         let box_ref = unsafe { gc.ptr.as_ref() };
         let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
@@ -503,7 +503,7 @@ fn mark(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) {
 /// # Safety
 ///
 /// `ptr` must have been created from a pointer to a `GcBox<T>`.
-unsafe fn destroy_erased<T: Collectable + Sync + ?Sized>(
+unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
     ptr: ErasedPtr,
     graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
@@ -517,7 +517,7 @@ unsafe fn destroy_erased<T: Collectable + Sync + ?Sized>(
     impl Visitor for DecrementOutboundReferenceCounts<'_> {
         fn visit_sync<T>(&mut self, gc: &crate::sync::Gc<T>)
         where
-            T: Collectable + Sync + ?Sized,
+            T: Collectable + Send + Sync + ?Sized,
         {
             let id = AllocationId::from(gc.ptr);
             if matches!(self.graph[&id].reachability, Reachability::Reachable) {
@@ -551,7 +551,7 @@ unsafe fn destroy_erased<T: Collectable + Sync + ?Sized>(
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-unsafe fn drop_weak_zero<T: Collectable + Sync + ?Sized>(ptr: ErasedPtr) {
+unsafe fn drop_weak_zero<T: Collectable + Send + Sync + ?Sized>(ptr: ErasedPtr) {
     let mut specified = ptr.specify::<GcBox<T>>();
     assert_eq!(specified.as_ref().weak.load(Ordering::Relaxed), 0);
     assert_eq!(specified.as_ref().strong.load(Ordering::Relaxed), 0);
@@ -566,7 +566,7 @@ unsafe impl Sync for AllocationId {}
 
 impl<T> From<&GcBox<T>> for AllocationId
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Send + Sync + ?Sized,
 {
     fn from(value: &GcBox<T>) -> Self {
         AllocationId(NonNull::from(value).cast())
@@ -575,7 +575,7 @@ where
 
 impl<T> From<NonNull<GcBox<T>>> for AllocationId
 where
-    T: Collectable + Sync + ?Sized,
+    T: Collectable + Send + Sync + ?Sized,
 {
     fn from(value: NonNull<GcBox<T>>) -> Self {
         AllocationId(value.cast())

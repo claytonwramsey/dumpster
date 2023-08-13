@@ -297,7 +297,7 @@ pub trait Visitor {
     /// visitor.
     fn visit_sync<T>(&mut self, gc: &sync::Gc<T>)
     where
-        T: Collectable + Sync + ?Sized;
+        T: Collectable + Send + Sync + ?Sized;
 
     /// Visit a thread-local garbage-collected pointer.
     ///
