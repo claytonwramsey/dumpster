@@ -266,7 +266,7 @@ impl Dumpster {
         for (id, can) in self.contents.borrow_mut().drain() {
             if guard.insert(id, can).is_some() {
                 unsafe {
-                    id.0.as_ref().weak.fetch_sub(1, Ordering::Relaxed);
+                    id.0.as_ref().weak.fetch_sub(1, Ordering::Release);
                 }
             }
         }
@@ -301,7 +301,7 @@ impl GarbageTruck {
             .filter_map(|(&k, v)| match v.reachability {
                 Reachability::Reachable => Some(k),
                 Reachability::Unknown { n_unaccounted, .. } => (n_unaccounted > 0
-                    || unsafe { k.0.as_ref().weak.load(Ordering::Relaxed) > 1 })
+                    || unsafe { k.0.as_ref().weak.load(Ordering::Acquire) > 1 })
                 .then_some(k),
             })
             .collect::<Vec<_>>();
@@ -365,7 +365,7 @@ unsafe fn dfs<T: Collectable + Send + Sync + ?Sized>(
     let Entry::Vacant(v) = ref_graph.entry(starting_id) else {
         // the weak count was incremented by another DFS operation elsewhere.
         // Decrement it to have only one from us.
-        box_ref.weak.fetch_sub(1, Ordering::Relaxed);
+        box_ref.weak.fetch_sub(1, Ordering::Release);
         return;
     };
     let strong_count = box_ref.strong.load(Ordering::Acquire);
@@ -386,7 +386,7 @@ unsafe fn dfs<T: Collectable + Send + Sync + ?Sized>(
             current_id: starting_id,
         })
         .is_err()
-        || box_ref.generation.load(Ordering::Relaxed) >= CURRENT_TAG.load(Ordering::Relaxed)
+        || box_ref.generation.load(Ordering::Acquire) >= CURRENT_TAG.load(Ordering::Relaxed)
     {
         // box_ref.value was accessed while we worked
         // mark this allocation as reachable
@@ -413,7 +413,7 @@ impl<'a> Visitor for Dfs<'a> {
         let box_ref = unsafe { gc.ptr.as_ref() };
         let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
         if gc.tag.swap(current_tag, Ordering::Relaxed) >= current_tag
-            || box_ref.generation.load(Ordering::Relaxed) >= current_tag
+            || box_ref.generation.load(Ordering::Acquire) >= current_tag
         {
             // This pointer was already tagged by this sweep, so it must have been moved by
             mark(self.current_id, self.ref_graph);
@@ -464,7 +464,7 @@ impl<'a> Visitor for Dfs<'a> {
                 swap(&mut new_id, &mut self.current_id);
 
                 if box_ref.value.accept(self).is_err()
-                    || box_ref.generation.load(Ordering::Relaxed) >= current_tag
+                    || box_ref.generation.load(Ordering::Acquire) >= current_tag
                 {
                     // On failure, this means `**gc` is accessible, and should be marked
                     // as such
@@ -522,7 +522,7 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
             let id = AllocationId::from(gc.ptr);
             if matches!(self.graph[&id].reachability, Reachability::Reachable) {
                 unsafe {
-                    id.0.as_ref().strong.fetch_sub(1, Ordering::Relaxed);
+                    id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
                 }
             }
         }

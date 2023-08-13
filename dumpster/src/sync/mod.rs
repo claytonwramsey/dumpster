@@ -223,7 +223,7 @@ where
             ptr: Box::leak(Box::new(GcBox {
                 strong: AtomicUsize::new(1),
                 weak: AtomicUsize::new(0),
-                generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Relaxed)),
+                generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
                 value,
             }))
             .into(),
@@ -254,10 +254,10 @@ where
     fn clone(&self) -> Gc<T> {
         let box_ref = unsafe { self.ptr.as_ref() };
         // increment strong count before generation to ensure cleanup never underestimates ref count
-        box_ref.strong.fetch_add(1, Ordering::Relaxed);
+        box_ref.strong.fetch_add(1, Ordering::Acquire);
         box_ref
             .generation
-            .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Relaxed);
+            .store(CURRENT_TAG.load(Ordering::Acquire), Ordering::Release);
         notify_created_gc();
         // mark_clean(box_ref); // causes performance drops
         Gc {
@@ -280,7 +280,7 @@ where
                                                      // while we weren't looking
         box_ref
             .generation
-            .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Relaxed);
+            .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Release);
         match box_ref.strong.fetch_sub(1, Ordering::AcqRel) {
             0 => unreachable!("strong cannot reach zero while a Gc to it exists"),
             1 => {
@@ -357,9 +357,9 @@ impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
 
     fn deref(&self) -> &Self::Target {
         let box_ref = unsafe { self.ptr.as_ref() };
-        let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
-        self.tag.store(current_tag, Ordering::Relaxed);
-        box_ref.generation.store(current_tag, Ordering::Relaxed);
+        let current_tag = CURRENT_TAG.load(Ordering::Acquire);
+        self.tag.store(current_tag, Ordering::Release);
+        box_ref.generation.store(current_tag, Ordering::Release);
         &box_ref.value
     }
 }
@@ -396,7 +396,7 @@ impl<T: Collectable + Send + Sync + ?Sized> Debug for Gc<T> {
             f,
             "Gc({:?}, {})",
             self.ptr,
-            self.tag.load(Ordering::Relaxed)
+            self.tag.load(Ordering::Acquire)
         )
     }
 }
