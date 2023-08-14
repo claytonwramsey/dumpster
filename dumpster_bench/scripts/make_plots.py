@@ -47,7 +47,7 @@ for (i, (name, v)) in enumerate(multi_times.items()):
     plt.scatter(xs, ys, label=name, color=f"tab:{['blue', 'orange', 'red'][i]}")
 plt.xlabel('Number of threads')
 plt.ylabel('Time taken for 1M ops (ms)')
-plt.title('Garbage collector shootout (sans shredder)')
+plt.title('Parallel garbage collector scaling (sans shredder)')
 plt.legend()
 plt.show()
 
