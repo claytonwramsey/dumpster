@@ -78,7 +78,7 @@
 //! assert_eq!(my_gc.get(), 512);
 //! ```
 //!
-//! For data which is shared across threads, you can use [`unsync::Gc`] with the exact same API.
+//! For data which is shared across threads, you can use [`sync::Gc`] with the exact same API.
 //!
 //! ```
 //! use dumpster::sync::Gc;
