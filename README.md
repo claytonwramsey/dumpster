@@ -24,6 +24,9 @@ which allocations are reachable and which are not.
 Instead, `dumpster` extends reference-counted garbage collection (such as `std::rc::Rc`) with a
 cycle-detection algorithm, enabling it to effectively clean up self-referential data structures.
 
+For a deeper dive, check out this
+[blog post](https://claytonwramsey.github.io/2023/08/14/dumpster.html).
+
 ## What this library contains
 
 `dumpster` actually contains two garbage collector implementations: one thread-local, non-`Send`
