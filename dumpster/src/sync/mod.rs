@@ -355,7 +355,56 @@ unsafe impl<T: Collectable + Send + Sync + ?Sized> Collectable for Gc<T> {
 impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
     type Target = T;
 
+    /// Dereference this pointer, creating a reference to the contained value `T`.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it is called from within the implementation of `std::ops::Drop`
+    /// of its owning value, since returning such a reference could cause a use-after-free.
+    /// It is not guaranteed to panic.
+    ///
+    /// # Examples
+    ///
+    /// The following is a correct time to dereference a `Gc`.
+    ///
+    /// ```
+    /// use dumpster::sync::Gc;
+    ///
+    /// let my_gc = Gc::new(0u8);
+    /// let my_ref: &u8 = &my_gc;
+    /// ```
+    ///
+    /// Dereferencing a `Gc` while dropping is not correct.
+    ///
+    /// ```should_panic
+    /// // This is wrong!
+    /// use std::sync::Mutex;
+    /// use dumpster::{sync::Gc, Collectable};
+    ///
+    /// #[derive(Collectable)]
+    /// struct Bad {
+    ///     s: String,
+    ///     cycle: Mutex<Option<Gc<Bad>>>,
+    /// }
+    ///
+    /// impl Drop for Bad {
+    ///     fn drop(&mut self) {
+    ///         // The second time this `print` is executed it will try to
+    ///         // print a `String` that has already been dropped.
+    ///         println!("{}", self.cycle.lock().unwrap().as_ref().unwrap().s)
+    ///     }
+    /// }
+    ///
+    /// let foo = Gc::new(Bad {
+    ///     s: "foo".to_string(),
+    ///     cycle: Mutex::new(None),
+    /// });
+    /// ```
     fn deref(&self) -> &Self::Target {
+        assert!(
+            !currently_cleaning(),
+            "Gc to dropped value may not be dereferenced"
+        );
         let box_ref = unsafe { self.ptr.as_ref() };
         let current_tag = CURRENT_TAG.load(Ordering::Acquire);
         self.tag.store(current_tag, Ordering::Release);

@@ -213,8 +213,56 @@ impl<T: Collectable + ?Sized> Gc<T> {
 impl<T: Collectable + ?Sized> Deref for Gc<T> {
     type Target = T;
 
+    /// Dereference this pointer, creating a reference to the contained value `T`.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it is called from within the implementation of `std::ops::Drop`
+    /// of its owning value, since returning such a reference could cause a use-after-free.
+    /// It is not guaranteed to panic.
+    ///
+    /// # Examples
+    ///
+    /// The following is a correct time to dereference a `Gc`.
+    ///
+    /// ```
+    /// use dumpster::unsync::Gc;
+    ///
+    /// let my_gc = Gc::new(0u8);
+    /// let my_ref: &u8 = &my_gc;
+    /// ```
+    ///
+    /// Dereferencing a `Gc` while dropping is not correct.
+    ///
+    /// ```should_panic
+    /// // This is wrong!
+    /// use std::cell::RefCell;
+    /// use dumpster::{unsync::Gc, Collectable};
+    ///
+    /// #[derive(Collectable)]
+    /// struct Bad {
+    ///     s: String,
+    ///     cycle: RefCell<Option<Gc<Bad>>>,
+    /// }
+    ///
+    /// impl Drop for Bad {
+    ///     fn drop(&mut self) {
+    ///         // The second time this `print` is executed it will try to
+    ///         // print a `String` that has already been dropped.
+    ///         println!("{}", self.cycle.borrow().as_ref().unwrap().s)
+    ///     }
+    /// }
+    ///
+    /// let foo = Gc::new(Bad {
+    ///     s: "foo".to_string(),
+    ///     cycle: RefCell::new(None),
+    /// });
+    /// ```
     fn deref(&self) -> &Self::Target {
-        // DUMPSTER.with(|d| d.mark_cleaned(self.ptr));
+        assert!(
+            !COLLECTING.with(Cell::get),
+            "dereferencing GC to already-collected object"
+        );
         unsafe { &self.ptr.as_ref().value }
     }
 }
