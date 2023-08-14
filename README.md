@@ -64,10 +64,6 @@ dumpster::unsync::collect();
 
 ## Installation
 
-> [!NOTE]
-> I have yet to upload this to crates.io.
-> However, what follows below will be the instructions once I finish the upload.
-
 To install, simply add `dumpster` as a dependency to your project.
 
 ```toml
@@ -97,7 +93,7 @@ drop(my_foo); // my_foo will be automatically cleaned up
 ```
 
 `coerce-unsized` is disabled by default.
-This enables the implementation of [`std::ops::CoerceUnsized`] for each garbage collector,
+This enables the implementation of `CoerceUnsized` for each garbage collector,
 making it possible to use `Gc` with `!Sized` types conveniently.
 
 ```rust
