@@ -7,7 +7,7 @@ authors = ["Clayton Ramsey"]
 description = "Benchmark for dumpster garbage collection crate"
 repository = "https://github.com/claytonwramsey/dumpster"
 readme = "../README.md"
-keywords = ["dumpster", "garbage collector", "benchmark"]
+keywords = ["dumpster", "garbage_collector", "benchmark"]
 categories = ["data-structures", "memory-management"]
 
 [dependencies]

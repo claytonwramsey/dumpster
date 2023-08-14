@@ -7,7 +7,7 @@ authors = ["Clayton Ramsey"]
 description = "A concurrent cycle-tracking garbage collector."
 repository = "https://github.com/claytonwramsey/dumpster"
 readme = "../README.md"
-keywords = ["dumpster", "garbage collector", "gc"]
+keywords = ["dumpster", "garbage_collector", "gc"]
 categories = ["memory-management", "data-structures"]
 
 [features]

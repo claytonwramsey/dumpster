@@ -7,7 +7,7 @@ authors = ["Clayton Ramsey"]
 description = "Implementation of #[derive(Collectable)] for dumpster"
 repository = "https://github.com/claytonwramsey/dumpster"
 readme = "../README.md"
-keywords = ["dumpster", "garbage collector", "derive", "gc"]
+keywords = ["dumpster", "garbage_collector", "derive", "gc"]
 categories = [ "memory-management", "data-structures"]
 
 [lib]
