@@ -30,7 +30,7 @@ For a deeper dive, check out this
 ## What this library contains
 
 `dumpster` actually contains two garbage collector implementations: one thread-local, non-`Send`
-garbarge collector in the module `unsync`, and one thread-safe garbage collector in the module
+garbage collector in the module `unsync`, and one thread-safe garbage collector in the module
 `sync`.
 These garbage collectors can be safely mixed and matched.
 
