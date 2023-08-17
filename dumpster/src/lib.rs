@@ -171,7 +171,7 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 //!
 //! # License
 //!
-//! `dumpster` is licensed under the GNU GPLv3 or later.
+//! `dumpster` is licensed under the GNU GPLv3 any later version of the GPL at your choice.
 //! For more details, refer to
 //! [LICENSE.md](https://github.com/claytonwramsey/dumpster/blob/master/LICENSE.md).
 
