@@ -613,3 +613,39 @@ fn root_canal() {
 
     assert_eq!(B_DROP_DETECT.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+#[should_panic]
+fn escape_dead_pointer() {
+    static ESCAPED: Mutex<Option<Gc<Escape>>> = Mutex::new(None);
+
+    struct Escape {
+        x: u8,
+        ptr: Mutex<Option<Gc<Escape>>>,
+    }
+
+    impl Drop for Escape {
+        fn drop(&mut self) {
+            let mut escaped_guard = ESCAPED.lock().unwrap();
+            if escaped_guard.is_none() {
+                *escaped_guard = self.ptr.lock().unwrap().take();
+            }
+        }
+    }
+
+    unsafe impl Collectable for Escape {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.ptr.accept(visitor)
+        }
+    }
+
+    let esc = Gc::new(Escape {
+        x: 0,
+        ptr: Mutex::new(None),
+    });
+
+    *(*esc).ptr.lock().unwrap() = Some(esc.clone());
+    drop(esc);
+    collect();
+    println!("{}", ESCAPED.lock().unwrap().as_ref().unwrap().x);
+}

@@ -243,8 +243,8 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
     ///
     /// ```should_panic
     /// // This is wrong!
-    /// use std::cell::RefCell;
     /// use dumpster::{unsync::Gc, Collectable};
+    /// use std::cell::RefCell;
     ///
     /// #[derive(Collectable)]
     /// struct Bad {

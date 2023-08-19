@@ -410,7 +410,8 @@ impl<'a> Visitor for Dfs<'a> {
     where
         T: Collectable + Send + Sync + ?Sized,
     {
-        let box_ref = unsafe { gc.ptr.as_ref() };
+        let ptr = unsafe { (*gc.ptr.get()).unwrap() };
+        let box_ref = unsafe { ptr.as_ref() };
         let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
         if gc.tag.swap(current_tag, Ordering::Relaxed) >= current_tag
             || box_ref.generation.load(Ordering::Acquire) >= current_tag
@@ -451,7 +452,7 @@ impl<'a> Visitor for Dfs<'a> {
                 let strong_count = box_ref.strong.load(Ordering::Acquire);
                 box_ref.weak.fetch_add(1, Ordering::Acquire);
                 v.insert(AllocationInfo {
-                    ptr: ErasedPtr::new(gc.ptr),
+                    ptr: ErasedPtr::new(ptr),
                     weak_drop_fn: drop_weak_zero::<T>,
                     reachability: Reachability::Unknown {
                         children: Vec::new(),
@@ -508,21 +509,25 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
     graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
     /// A visitor for decrementing the reference count of pointees.
-    struct DecrementOutboundReferenceCounts<'a> {
+    struct PrepareForDestruction<'a> {
         /// The reference graph.
         /// Must have been populated with reachabiltiy already.
         graph: &'a HashMap<AllocationId, AllocationInfo>,
     }
 
-    impl Visitor for DecrementOutboundReferenceCounts<'_> {
+    impl Visitor for PrepareForDestruction<'_> {
         fn visit_sync<T>(&mut self, gc: &crate::sync::Gc<T>)
         where
             T: Collectable + Send + Sync + ?Sized,
         {
-            let id = AllocationId::from(gc.ptr);
+            let id = AllocationId::from(unsafe { (*gc.ptr.get()).unwrap() });
             if matches!(self.graph[&id].reachability, Reachability::Reachable) {
                 unsafe {
                     id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
+                }
+            } else {
+                unsafe {
+                    gc.ptr.get().write(None);
                 }
             }
         }
@@ -538,7 +543,7 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
     let specified = ptr.specify::<GcBox<T>>().as_mut();
     specified
         .value
-        .accept(&mut DecrementOutboundReferenceCounts { graph })
+        .accept(&mut PrepareForDestruction { graph })
         .expect("allocation assumed to be unreachable but somehow was accessed");
     let layout = Layout::for_value(specified);
     drop_in_place(specified);

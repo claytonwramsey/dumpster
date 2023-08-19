@@ -44,6 +44,7 @@ mod tests;
 use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
+    cell::UnsafeCell,
     fmt::Debug,
     ops::Deref,
     ptr::{addr_of, drop_in_place, NonNull},
@@ -83,7 +84,7 @@ use self::collect::{
 /// ```
 pub struct Gc<T: Collectable + Send + Sync + ?Sized + 'static> {
     /// The pointer to the allocation.
-    ptr: NonNull<GcBox<T>>,
+    ptr: UnsafeCell<Option<NonNull<GcBox<T>>>>,
     /// The tag information of this pointer, used for mutation detection when marking.
     tag: AtomicUsize,
 }
@@ -220,13 +221,15 @@ where
     {
         notify_created_gc();
         Gc {
-            ptr: Box::leak(Box::new(GcBox {
-                strong: AtomicUsize::new(1),
-                weak: AtomicUsize::new(0),
-                generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
-                value,
-            }))
-            .into(),
+            ptr: UnsafeCell::new(Some(
+                Box::leak(Box::new(GcBox {
+                    strong: AtomicUsize::new(1),
+                    weak: AtomicUsize::new(0),
+                    generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
+                    value,
+                }))
+                .into(),
+            )),
             tag: AtomicUsize::new(0),
         }
     }
@@ -252,7 +255,10 @@ where
     /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
     /// ```
     fn clone(&self) -> Gc<T> {
-        let box_ref = unsafe { self.ptr.as_ref() };
+        let box_ref = unsafe {
+            (*self.ptr.get()).expect("attempt to clone Gc to already-deallocated object. \
+            This means a Gc was accessed during a Drop implementation, likely implying a bug in your code.").as_ref()
+        };
         // increment strong count before generation to ensure cleanup never underestimates ref count
         box_ref.strong.fetch_add(1, Ordering::Acquire);
         box_ref
@@ -261,7 +267,7 @@ where
         notify_created_gc();
         // mark_clean(box_ref); // causes performance drops
         Gc {
-            ptr: self.ptr,
+            ptr: UnsafeCell::new(unsafe { *self.ptr.get() }),
             tag: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
         }
     }
@@ -275,7 +281,8 @@ where
         if currently_cleaning() {
             return;
         }
-        let box_ref = unsafe { self.ptr.as_ref() };
+        let Some(mut ptr) = (unsafe { *self.ptr.get() }) else { return; };
+        let box_ref = unsafe { ptr.as_ref() };
         box_ref.weak.fetch_add(1, Ordering::AcqRel); // ensures that this allocation wasn't freed
                                                      // while we weren't looking
         box_ref
@@ -290,13 +297,13 @@ where
                     let layout = Layout::for_value(box_ref);
                     fence(Ordering::Acquire);
                     unsafe {
-                        drop_in_place(self.ptr.as_mut());
-                        dealloc(self.ptr.as_ptr().cast(), layout);
+                        drop_in_place(ptr.as_mut());
+                        dealloc(ptr.as_ptr().cast(), layout);
                     }
                 }
             }
             _ => {
-                mark_dirty(self.ptr);
+                mark_dirty(ptr);
                 box_ref.weak.fetch_sub(1, Ordering::Release);
             }
         }
@@ -378,8 +385,8 @@ impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
     ///
     /// ```should_panic
     /// // This is wrong!
-    /// use std::sync::Mutex;
     /// use dumpster::{sync::Gc, Collectable};
+    /// use std::sync::Mutex;
     ///
     /// #[derive(Collectable)]
     /// struct Bad {
@@ -401,11 +408,12 @@ impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
     /// });
     /// ```
     fn deref(&self) -> &Self::Target {
-        assert!(
-            !currently_cleaning(),
-            "Gc to dropped value may not be dereferenced"
-        );
-        let box_ref = unsafe { self.ptr.as_ref() };
+        let box_ref = unsafe {
+            (*self.ptr.get()).expect(
+            "Attempting to dereference Gc to already-deallocated object.\
+            This is caused by accessing a Gc during a Drop implementation, likely implying a bug in your code."
+        ).as_ref()
+        };
         let current_tag = CURRENT_TAG.load(Ordering::Acquire);
         self.tag.store(current_tag, Ordering::Release);
         box_ref.generation.store(current_tag, Ordering::Release);
