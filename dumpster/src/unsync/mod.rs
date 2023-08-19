@@ -79,7 +79,12 @@ mod tests;
 pub struct Gc<T: Collectable + ?Sized + 'static> {
     /// A pointer to the heap allocation containing the data under concern.
     /// The pointee box should never be mutated.
-    ptr: NonNull<GcBox<T>>,
+    ///
+    /// If `ptr` is `None`, then this is a dead `Gc`, meaning that the allocation it points to has
+    /// been dropped.
+    /// This can only happen observably if this `Gc` is accessed during the [`Drop`] implementation
+    /// of a [`Collectable`] type.
+    ptr: Cell<Option<NonNull<GcBox<T>>>>,
 }
 
 /// Collect all existing unreachable allocations.
@@ -201,11 +206,13 @@ impl<T: Collectable + ?Sized> Gc<T> {
     {
         DUMPSTER.with(Dumpster::notify_created_gc);
         Gc {
-            ptr: Box::leak(Box::new(GcBox {
-                ref_count: Cell::new(NonZeroUsize::MIN),
-                value,
-            }))
-            .into(),
+            ptr: Cell::new(Some(
+                Box::leak(Box::new(GcBox {
+                    ref_count: Cell::new(NonZeroUsize::MIN),
+                    value,
+                }))
+                .into(),
+            )),
         }
     }
 }
@@ -263,7 +270,10 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
             !COLLECTING.with(Cell::get),
             "dereferencing GC to already-collected object"
         );
-        unsafe { &self.ptr.as_ref().value }
+        unsafe {
+            &self.ptr.get().expect("dereferencing Gc to already-collected object. \
+            This means a Gc escaped from a Drop implementation, likely implying a bug in your code.").as_ref().value
+        }
     }
 }
 
@@ -273,7 +283,8 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
     /// This does not duplicate the data.
     fn clone(&self) -> Self {
         unsafe {
-            let box_ref = self.ptr.as_ref();
+            let box_ref = self.ptr.get().expect("Attempt to clone Gc to already-collected object. \
+            This means a Gc escaped from a Drop implementation, likely implying a bug in your code.").as_ref();
             box_ref
                 .ref_count
                 .set(box_ref.ref_count.get().saturating_add(1));
@@ -297,19 +308,19 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
         if COLLECTING.with(Cell::get) {
             return;
         }
+        let Some(mut ptr) = self.ptr.get() else {
+            return;
+        };
         DUMPSTER.with(|d| {
-            let box_ref = unsafe { self.ptr.as_ref() };
+            let box_ref = unsafe { ptr.as_ref() };
             match box_ref.ref_count.get() {
                 NonZeroUsize::MIN => {
-                    d.mark_cleaned(self.ptr);
+                    d.mark_cleaned(ptr);
                     unsafe {
                         // this was the last reference, drop unconditionally
-                        drop_in_place(addr_of_mut!(self.ptr.as_mut().value));
+                        drop_in_place(addr_of_mut!(ptr.as_mut().value));
                         // note: `box_ref` is no longer usable
-                        dealloc(
-                            self.ptr.as_ptr().cast::<u8>(),
-                            Layout::for_value(self.ptr.as_ref()),
-                        );
+                        dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
                     }
                 }
                 n => {
@@ -320,7 +331,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
                         .set(NonZeroUsize::new(n.get() - 1).unwrap());
                     // remaining references could be a cycle - therefore, mark it as dirty
                     // so we can check later
-                    d.mark_dirty(self.ptr);
+                    d.mark_dirty(ptr);
                 }
             }
             // Notify that a GC has been dropped, potentially triggering a cleanup
@@ -379,14 +390,13 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
 
 impl<T: Collectable + ?Sized> AsRef<T> for Gc<T> {
     fn as_ref(&self) -> &T {
-        // DUMPSTER.with(|d| d.mark_cleaned(self.ptr));
-        unsafe { addr_of!(self.ptr.as_ref().value).as_ref().unwrap() }
+        self
     }
 }
 
 impl<T: Collectable + ?Sized> Borrow<T> for Gc<T> {
     fn borrow(&self) -> &T {
-        self.as_ref()
+        self
     }
 }
 

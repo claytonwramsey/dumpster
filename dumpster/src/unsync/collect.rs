@@ -254,7 +254,8 @@ impl Visitor for Dfs {
     where
         T: Collectable + ?Sized,
     {
-        let next_id = AllocationId::from(gc.ptr);
+        let ptr = gc.ptr.get().unwrap();
+        let next_id = AllocationId::from(ptr);
         match self.ref_graph.entry(next_id) {
             Entry::Occupied(ref mut o) => {
                 o.get_mut().n_unaccounted -= 1;
@@ -262,13 +263,13 @@ impl Visitor for Dfs {
             Entry::Vacant(v) => {
                 v.insert(Reachability {
                     n_unaccounted: unsafe { next_id.0.as_ref().get().get() - 1 },
-                    ptr: ErasedPtr::new(gc.ptr),
+                    ptr: ErasedPtr::new(ptr),
                     mark_fn: apply_visitor::<T, Mark>,
                 });
             }
         }
         if self.visited.insert(next_id) {
-            let _ = unsafe { gc.ptr.as_ref() }.value.accept(self);
+            let _ = unsafe { ptr.as_ref() }.value.accept(self);
         }
     }
 }
@@ -292,8 +293,9 @@ impl Visitor for Mark {
     where
         T: Collectable + ?Sized,
     {
-        if self.visited.insert(AllocationId::from(gc.ptr)) {
-            let _ = unsafe { gc.ptr.as_ref().value.accept(self) };
+        let ptr = gc.ptr.get().unwrap();
+        if self.visited.insert(AllocationId::from(ptr)) {
+            let _ = unsafe { ptr.as_ref().value.accept(self) };
         }
     }
 }
@@ -318,18 +320,22 @@ impl Visitor for DropAlloc<'_> {
     where
         T: Collectable + ?Sized,
     {
-        let id = AllocationId::from(gc.ptr);
+        let ptr = gc.ptr.get().unwrap();
+        let id = AllocationId::from(ptr);
         if self.reachable.contains(&id) {
             unsafe {
-                let cell_ref = id.0.as_ref();
+                let cell_ref = &ptr.as_ref().ref_count;
                 cell_ref.set(NonZeroUsize::new(cell_ref.get().get() - 1).unwrap());
             }
-        } else if self.visited.insert(id) {
+            return;
+        }
+        gc.ptr.set(None);
+        if self.visited.insert(id) {
             unsafe {
-                gc.ptr.as_ref().value.accept(self).unwrap();
-                let layout = Layout::for_value(gc.ptr.as_ref());
-                drop_in_place(gc.ptr.as_ptr());
-                dealloc(gc.ptr.as_ptr().cast(), layout);
+                ptr.as_ref().value.accept(self).unwrap();
+                let layout = Layout::for_value(ptr.as_ref());
+                drop_in_place(ptr.as_ptr());
+                dealloc(ptr.as_ptr().cast(), layout);
             }
         }
     }

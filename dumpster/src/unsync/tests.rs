@@ -23,7 +23,10 @@ use crate::Visitor;
 use super::*;
 use std::{
     cell::RefCell,
-    sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 #[test]
@@ -260,5 +263,46 @@ fn coerce_array() {
     assert_eq!(
         std::mem::size_of::<Gc<[u8]>>(),
         2 * std::mem::size_of::<usize>()
+    );
+}
+
+#[test]
+#[should_panic]
+fn escape_dead_pointer() {
+    thread_local! {static  ESCAPED: Mutex<Option<Gc<Escape>>> = Mutex::new(None);}
+
+    struct Escape {
+        x: u8,
+        ptr: Mutex<Option<Gc<Escape>>>,
+    }
+
+    impl Drop for Escape {
+        fn drop(&mut self) {
+            ESCAPED.with(|e| {
+                let mut escaped_guard = e.lock().unwrap();
+                if escaped_guard.is_none() {
+                    *escaped_guard = (*self.ptr.lock().unwrap()).take();
+                }
+            });
+        }
+    }
+
+    unsafe impl Collectable for Escape {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.ptr.accept(visitor)
+        }
+    }
+
+    let esc = Gc::new(Escape {
+        x: 0,
+        ptr: Mutex::new(None),
+    });
+
+    *(*esc).ptr.lock().unwrap() = Some(esc.clone());
+    drop(esc);
+    collect();
+    println!(
+        "{}",
+        ESCAPED.with(|e| e.lock().unwrap().as_ref().unwrap().x)
     );
 }
