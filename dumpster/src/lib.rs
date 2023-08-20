@@ -124,7 +124,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = "0.1.0"
+//! dumpster = "0.1.2"
 //! ```
 //!
 //! # Optional features
