@@ -82,6 +82,17 @@ use self::collect::{
 ///
 /// println!("{}", shared.load(Ordering::Relaxed));
 /// ```
+///
+/// # Interaction with `Drop`
+///
+/// While collecting cycles, it's possible for a `Gc` to exist that points to some deallocated
+/// object.
+/// To prevent undefined behavior, these `Gc`s are marked as dead during collection and rendered
+/// inaccessible.
+/// Dereferencing or cloning a `Gc` during the `Drop` implementation of a `Collectable` type could
+/// result in the program panicking to keep the program from accessing memory after freeing it.
+/// If you're accessing a `Gc` during a `Drop` implementation, make sure to use the fallible
+/// operations [`Gc::try_deref`] and [`Gc::try_clone`].
 pub struct Gc<T: Collectable + Send + Sync + ?Sized + 'static> {
     /// The pointer to the allocation.
     ptr: UnsafeCell<Option<NonNull<GcBox<T>>>>,
@@ -215,6 +226,14 @@ where
     T: Collectable + Send + Sync + ?Sized,
 {
     /// Construct a new garbage-collected value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::sync::Gc;
+    ///
+    /// let _ = Gc::new(0);
+    /// ```
     pub fn new(value: T) -> Gc<T>
     where
         T: Sized,
@@ -233,6 +252,102 @@ where
             tag: AtomicUsize::new(0),
         }
     }
+
+    /// Attempt to dereference this `Gc`.
+    ///
+    /// This function will return `None` if `self` is a "dead" `Gc`, which points to an
+    /// already-deallocated object.
+    /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
+    /// [`Collectable`] object.
+    ///
+    /// For a version which panics instead of returning `None`, consider using [`Deref`].
+    ///
+    /// # Examples
+    ///
+    /// For a still-living `Gc`, this always returns `Some`.
+    ///
+    /// ```
+    /// use dumpster::sync::Gc;
+    ///
+    /// let gc1 = Gc::new(0);
+    /// assert!(Gc::try_deref(&gc1).is_some());
+    /// ```
+    ///
+    /// The only way to get a `Gc` which fails on `try_clone` is by accessing a `Gc` during its
+    /// `Drop` implementation.
+    ///
+    /// ```
+    /// use dumpster::{Collectable, sync::Gc};
+    /// use std::sync::Mutex;
+    ///
+    /// #[derive(Collectable)]
+    /// struct Cycle(Mutex<Option<Gc<Self>>>);
+    ///
+    /// impl Drop for Cycle {
+    ///     fn drop(&mut self) {
+    ///         let guard = self.0.lock().unwrap();
+    ///         let maybe_ref = Gc::try_deref(guard.as_ref().unwrap());
+    ///         assert!(maybe_ref.is_none());
+    ///     }
+    /// }
+    ///
+    /// let gc1 = Gc::new(Cycle(Mutex::new(None)));
+    /// *gc1.0.lock().unwrap() = Some(gc1.clone());
+    /// # drop(gc1);
+    /// # dumpster::sync::collect();
+    /// ```
+    pub fn try_deref(gc: &Gc<T>) -> Option<&T> {
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        unsafe {
+            (*gc.ptr.get()).is_some().then(|| &**gc)
+        }
+    }
+
+    /// Attempt to clone this `Gc`.
+    ///
+    /// This function will return `None` if `self` is a "dead" `Gc`, which points to an
+    /// already-deallocated object.
+    /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
+    /// [`Collectable`] object.
+    ///
+    /// For a version which panics instead of returning `None`, consider using [`Clone`].
+    ///
+    /// # Examples
+    ///
+    /// For a still-living `Gc`, this always returns `Some`.
+    ///
+    /// ```
+    /// use dumpster::sync::Gc;
+    ///
+    /// let gc1 = Gc::new(0);
+    /// let gc2 = Gc::try_clone(&gc1).unwrap();
+    /// ```
+    ///
+    /// The only way to get a `Gc` which fails on `try_clone` is by accessing a `Gc` during its
+    /// `Drop` implementation.
+    ///
+    /// ```
+    /// use dumpster::{Collectable, sync::Gc};
+    /// use std::sync::Mutex;
+    ///
+    /// #[derive(Collectable)]
+    /// struct Cycle(Mutex<Option<Gc<Self>>>);
+    ///
+    /// impl Drop for Cycle {
+    ///     fn drop(&mut self) {
+    ///         let cloned = Gc::try_clone(self.0.lock().unwrap().as_ref().unwrap());
+    ///         assert!(cloned.is_none());
+    ///     }
+    /// }
+    ///
+    /// let gc1 = Gc::new(Cycle(Mutex::new(None)));
+    /// *gc1.0.lock().unwrap() = Some(gc1.clone());
+    /// # drop(gc1);
+    /// # dumpster::sync::collect();
+    /// ```
+    pub fn try_clone(gc: &Gc<T>) -> Option<Gc<T>> {
+        unsafe { (*gc.ptr.get()).is_some().then(|| gc.clone()) }
+    }
 }
 
 impl<T> Clone for Gc<T>
@@ -241,6 +356,14 @@ where
 {
     /// Clone a garbage-collected reference.
     /// This does not clone the underlying data.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the `Gc` being cloned points to a deallocated object.
+    /// This is only possible if said `Gc` is accessed during the `Drop` implementation of a
+    /// `Collectable` value.
+    ///
+    /// For a fallible version, refer to [`Gc::try_clone`].
     ///
     /// # Examples
     ///
@@ -253,6 +376,27 @@ where
     ///
     /// gc1.store(1, Ordering::Relaxed);
     /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
+    /// ```
+    ///
+    /// The following example will fail, because cloning a `Gc` to a deallocated object is wrong.
+    ///
+    /// ```should_panic
+    /// use dumpster::{Collectable, sync::Gc};
+    /// use std::sync::Mutex;
+    ///
+    /// #[derive(Collectable)]
+    /// struct Cycle(Mutex<Option<Gc<Self>>>);
+    ///
+    /// impl Drop for Cycle {
+    ///     fn drop(&mut self) {
+    ///         let _ = self.0.lock().unwrap().as_ref().unwrap().clone();
+    ///     }
+    /// }
+    ///
+    /// let gc1 = Gc::new(Cycle(Mutex::new(None)));
+    /// *gc1.0.lock().unwrap() = Some(gc1.clone());
+    /// # drop(gc1);
+    /// # dumpster::sync::collect();
     /// ```
     fn clone(&self) -> Gc<T> {
         let box_ref = unsafe {
@@ -396,8 +540,6 @@ impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
     ///
     /// impl Drop for Bad {
     ///     fn drop(&mut self) {
-    ///         // The second time this `print` is executed it will try to
-    ///         // print a `String` that has already been dropped.
     ///         println!("{}", self.cycle.lock().unwrap().as_ref().unwrap().s)
     ///     }
     /// }

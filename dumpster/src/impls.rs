@@ -22,7 +22,7 @@
 
 use std::{
     borrow::Cow,
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::{
         hash_map::{DefaultHasher, RandomState},
         BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque,
@@ -145,6 +145,12 @@ unsafe impl<T: Collectable, E: Collectable> Collectable for Result<T, E> {
 unsafe impl<T: Copy + Collectable> Collectable for Cell<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().accept(visitor)
+    }
+}
+
+unsafe impl<T: Collectable> Collectable for OnceCell<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.get().map_or(Ok(()), |x| x.accept(visitor))
     }
 }
 
