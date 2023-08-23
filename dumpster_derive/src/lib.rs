@@ -43,7 +43,7 @@ pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let generated = quote! {
         unsafe impl #impl_generics dumpster::Collectable for #name #ty_generics #where_clause {
             #[inline]
-            fn accept<V: dumpster::Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            fn accept<V: dumpster::Visitor>(&self, visitor: &mut V) -> std::result::Result<(), ()> {
                 #do_visitor
             }
         }
