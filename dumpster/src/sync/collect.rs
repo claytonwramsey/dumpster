@@ -32,7 +32,7 @@ use std::{
 
 use once_cell::sync::Lazy;
 
-use crate::{Collectable, ErasedPtr, Visitor};
+use crate::{ptr::Erased, Collectable, Visitor};
 
 use super::{default_collect_condition, CollectCondition, CollectInfo, Gc, GcBox, CURRENT_TAG};
 
@@ -73,20 +73,20 @@ struct AllocationId(NonNull<GcBox<()>>);
 /// The information which describes an allocation that may need to be cleaned up later.
 struct TrashCan {
     /// A pointer to the allocation to be cleaned up.
-    ptr: ErasedPtr,
+    ptr: Erased,
     /// The function which can be used to build a reference graph.
     /// This function is safe to call on `ptr`.
-    dfs_fn: unsafe fn(ErasedPtr, &mut HashMap<AllocationId, AllocationInfo>),
+    dfs_fn: unsafe fn(Erased, &mut HashMap<AllocationId, AllocationInfo>),
 }
 
 #[derive(Debug)]
 /// A node in the reference graph, which is constructed while searching for unreachable allocations.
 struct AllocationInfo {
     /// An erased pointer to the allocation.
-    ptr: ErasedPtr,
+    ptr: Erased,
     /// Function for dropping the allocation when its weak and strong count hits zero.
     /// Should have the same behavior as dropping a Gc normally to a reference count of zero.
-    weak_drop_fn: unsafe fn(ErasedPtr),
+    weak_drop_fn: unsafe fn(Erased),
     /// Information about this allocation's reachability.
     reachability: Reachability,
 }
@@ -104,7 +104,7 @@ enum Reachability {
         /// the one we are currently building.
         n_unaccounted: usize,
         /// A function used to destroy the allocation.
-        destroy_fn: unsafe fn(ErasedPtr, &HashMap<AllocationId, AllocationInfo>),
+        destroy_fn: unsafe fn(Erased, &HashMap<AllocationId, AllocationInfo>),
     },
     /// The allocation here is reachable.
     /// No further information is needed.
@@ -188,7 +188,7 @@ where
             .insert(
                 AllocationId::from(box_ref),
                 TrashCan {
-                    ptr: ErasedPtr::new(allocation),
+                    ptr: Erased::new(allocation),
                     dfs_fn: dfs::<T>,
                 },
             )
@@ -357,7 +357,7 @@ impl GarbageTruck {
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
 unsafe fn dfs<T: Collectable + Send + Sync + ?Sized>(
-    ptr: ErasedPtr,
+    ptr: Erased,
     ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
 ) {
     let box_ref = unsafe { ptr.specify::<GcBox<T>>().as_ref() };
@@ -452,7 +452,7 @@ impl<'a> Visitor for Dfs<'a> {
                 let strong_count = box_ref.strong.load(Ordering::Acquire);
                 box_ref.weak.fetch_add(1, Ordering::Acquire);
                 v.insert(AllocationInfo {
-                    ptr: ErasedPtr::new(ptr),
+                    ptr: Erased::new(ptr),
                     weak_drop_fn: drop_weak_zero::<T>,
                     reachability: Reachability::Unknown {
                         children: Vec::new(),
@@ -505,7 +505,7 @@ fn mark(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) {
 ///
 /// `ptr` must have been created from a pointer to a `GcBox<T>`.
 unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
-    ptr: ErasedPtr,
+    ptr: Erased,
     graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
     /// A visitor for decrementing the reference count of pointees.
@@ -527,7 +527,7 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
                 }
             } else {
                 unsafe {
-                    gc.ptr.get().write(None);
+                    gc.ptr.get().write((*gc.ptr.get()).as_null());
                 }
             }
         }
@@ -556,7 +556,7 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-unsafe fn drop_weak_zero<T: Collectable + Send + Sync + ?Sized>(ptr: ErasedPtr) {
+unsafe fn drop_weak_zero<T: Collectable + Send + Sync + ?Sized>(ptr: Erased) {
     let mut specified = ptr.specify::<GcBox<T>>();
     assert_eq!(specified.as_ref().weak.load(Ordering::Relaxed), 0);
     assert_eq!(specified.as_ref().strong.load(Ordering::Relaxed), 0);

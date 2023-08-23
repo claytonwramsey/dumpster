@@ -27,8 +27,9 @@ use std::{
 };
 
 use crate::{
+    ptr::Erased,
     unsync::{default_collect_condition, CollectInfo, Gc},
-    Collectable, ErasedPtr, Visitor,
+    Collectable, Visitor,
 };
 
 use super::{CollectCondition, GcBox};
@@ -81,13 +82,13 @@ where
 struct Cleanup {
     /// The function which is called to build the reference graph and find all allocations
     /// reachable from this allocation.
-    dfs_fn: unsafe fn(ErasedPtr, &mut Dfs),
+    dfs_fn: unsafe fn(Erased, &mut Dfs),
     /// The function which is called to mark descendants of this allocation as reachable.
-    mark_fn: unsafe fn(ErasedPtr, &mut Mark),
+    mark_fn: unsafe fn(Erased, &mut Mark),
     /// A function used for dropping the allocation.
-    drop_fn: unsafe fn(ErasedPtr, &mut DropAlloc<'_>),
+    drop_fn: unsafe fn(Erased, &mut DropAlloc<'_>),
     /// An erased pointer to the allocation.
-    ptr: ErasedPtr,
+    ptr: Erased,
 }
 
 impl Cleanup {
@@ -97,7 +98,7 @@ impl Cleanup {
             dfs_fn: apply_visitor::<T, Dfs>,
             mark_fn: apply_visitor::<T, Mark>,
             drop_fn: drop_assist::<T>,
-            ptr: ErasedPtr::new(box_ptr),
+            ptr: Erased::new(box_ptr),
         }
     }
 }
@@ -107,7 +108,7 @@ impl Cleanup {
 /// # Safety
 ///
 /// `T` must be the same type that `ptr` was created with via [`ErasedPtr::new`].
-unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: ErasedPtr, visitor: &mut V) {
+unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: Erased, visitor: &mut V) {
     let specified: NonNull<GcBox<T>> = ptr.specify();
     let _ = specified.as_ref().value.accept(visitor);
 }
@@ -236,9 +237,9 @@ struct Reachability {
     /// If this number is 0, the reference is not a root.
     n_unaccounted: usize,
     /// An erased pointer to the allocation under concern.
-    ptr: ErasedPtr,
+    ptr: Erased,
     /// A function used to mark descendants of this allocation as accessible.
-    mark_fn: unsafe fn(ErasedPtr, &mut Mark),
+    mark_fn: unsafe fn(Erased, &mut Mark),
 }
 
 impl Visitor for Dfs {
@@ -263,7 +264,7 @@ impl Visitor for Dfs {
             Entry::Vacant(v) => {
                 v.insert(Reachability {
                     n_unaccounted: unsafe { next_id.0.as_ref().get().get() - 1 },
-                    ptr: ErasedPtr::new(ptr),
+                    ptr: Erased::new(ptr),
                     mark_fn: apply_visitor::<T, Mark>,
                 });
             }
@@ -329,7 +330,7 @@ impl Visitor for DropAlloc<'_> {
             }
             return;
         }
-        gc.ptr.set(None);
+        gc.ptr.set(gc.ptr.get().as_null());
         if self.visited.insert(id) {
             unsafe {
                 ptr.as_ref().value.accept(self).unwrap();
@@ -344,7 +345,7 @@ impl Visitor for DropAlloc<'_> {
 /// Decrement the outbound reference counts for any reachable allocations which this allocation can
 /// find.
 /// Also, drop the allocation when done.
-unsafe fn drop_assist<T: Collectable + ?Sized>(ptr: ErasedPtr, visitor: &mut DropAlloc<'_>) {
+unsafe fn drop_assist<T: Collectable + ?Sized>(ptr: Erased, visitor: &mut DropAlloc<'_>) {
     if visitor
         .visited
         .insert(AllocationId::from(ptr.specify::<GcBox<T>>()))

@@ -51,7 +51,7 @@ use std::{
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
-use crate::{Collectable, Visitor};
+use crate::{ptr::Nullable, Collectable, Visitor};
 
 use self::collect::{
     collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
@@ -95,7 +95,7 @@ use self::collect::{
 /// operations [`Gc::try_deref`] and [`Gc::try_clone`].
 pub struct Gc<T: Collectable + Send + Sync + ?Sized + 'static> {
     /// The pointer to the allocation.
-    ptr: UnsafeCell<Option<NonNull<GcBox<T>>>>,
+    ptr: UnsafeCell<Nullable<GcBox<T>>>,
     /// The tag information of this pointer, used for mutation detection when marking.
     tag: AtomicUsize,
 }
@@ -240,15 +240,12 @@ where
     {
         notify_created_gc();
         Gc {
-            ptr: UnsafeCell::new(Some(
-                Box::leak(Box::new(GcBox {
-                    strong: AtomicUsize::new(1),
-                    weak: AtomicUsize::new(0),
-                    generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
-                    value,
-                }))
-                .into(),
-            )),
+            ptr: UnsafeCell::new(Nullable::new(NonNull::from(Box::leak(Box::new(GcBox {
+                strong: AtomicUsize::new(1),
+                weak: AtomicUsize::new(0),
+                generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
+                value,
+            }))))),
             tag: AtomicUsize::new(0),
         }
     }
@@ -277,7 +274,7 @@ where
     /// `Drop` implementation.
     ///
     /// ```
-    /// use dumpster::{Collectable, sync::Gc};
+    /// use dumpster::{sync::Gc, Collectable};
     /// use std::sync::Mutex;
     ///
     /// #[derive(Collectable)]
@@ -299,7 +296,7 @@ where
     pub fn try_deref(gc: &Gc<T>) -> Option<&T> {
         #[allow(clippy::unnecessary_lazy_evaluations)]
         unsafe {
-            (*gc.ptr.get()).is_some().then(|| &**gc)
+            (!(*gc.ptr.get()).is_null()).then(|| &**gc)
         }
     }
 
@@ -327,7 +324,7 @@ where
     /// `Drop` implementation.
     ///
     /// ```
-    /// use dumpster::{Collectable, sync::Gc};
+    /// use dumpster::{sync::Gc, Collectable};
     /// use std::sync::Mutex;
     ///
     /// #[derive(Collectable)]
@@ -346,7 +343,7 @@ where
     /// # dumpster::sync::collect();
     /// ```
     pub fn try_clone(gc: &Gc<T>) -> Option<Gc<T>> {
-        unsafe { (*gc.ptr.get()).is_some().then(|| gc.clone()) }
+        unsafe { (!(*gc.ptr.get()).is_null()).then(|| gc.clone()) }
     }
 }
 
@@ -381,7 +378,7 @@ where
     /// The following example will fail, because cloning a `Gc` to a deallocated object is wrong.
     ///
     /// ```should_panic
-    /// use dumpster::{Collectable, sync::Gc};
+    /// use dumpster::{sync::Gc, Collectable};
     /// use std::sync::Mutex;
     ///
     /// #[derive(Collectable)]
@@ -425,7 +422,9 @@ where
         if currently_cleaning() {
             return;
         }
-        let Some(mut ptr) = (unsafe { *self.ptr.get() }) else { return; };
+        let Some(mut ptr) = unsafe { *self.ptr.get() }.as_option() else {
+            return;
+        };
         let box_ref = unsafe { ptr.as_ref() };
         box_ref.weak.fetch_add(1, Ordering::AcqRel); // ensures that this allocation wasn't freed
                                                      // while we weren't looking

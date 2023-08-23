@@ -41,7 +41,6 @@
 //! // `Gc` can collect it, though!
 //! foo.refs.borrow_mut().push(foo.clone());
 //! ```
-//!
 
 use std::{
     alloc::{dealloc, Layout},
@@ -52,7 +51,7 @@ use std::{
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
 };
 
-use crate::{Collectable, Visitor};
+use crate::{ptr::Nullable, Collectable, Visitor};
 
 use self::collect::{Dumpster, COLLECTING, DUMPSTER};
 
@@ -96,7 +95,7 @@ pub struct Gc<T: Collectable + ?Sized + 'static> {
     /// been dropped.
     /// This can only happen observably if this `Gc` is accessed during the [`Drop`] implementation
     /// of a [`Collectable`] type.
-    ptr: Cell<Option<NonNull<GcBox<T>>>>,
+    ptr: Cell<Nullable<GcBox<T>>>,
 }
 
 /// Collect all existing unreachable allocations.
@@ -226,13 +225,10 @@ impl<T: Collectable + ?Sized> Gc<T> {
     {
         DUMPSTER.with(Dumpster::notify_created_gc);
         Gc {
-            ptr: Cell::new(Some(
-                Box::leak(Box::new(GcBox {
-                    ref_count: Cell::new(NonZeroUsize::MIN),
-                    value,
-                }))
-                .into(),
-            )),
+            ptr: Cell::new(Nullable::new(NonNull::from(Box::leak(Box::new(GcBox {
+                ref_count: Cell::new(NonZeroUsize::MIN),
+                value,
+            }))))),
         }
     }
 
@@ -261,7 +257,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// `Drop` implementation.
     ///
     /// ```
-    /// use dumpster::{Collectable, unsync::Gc};
+    /// use dumpster::{unsync::Gc, Collectable};
     /// use std::cell::OnceCell;
     ///
     /// #[derive(Collectable)]
@@ -280,7 +276,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// # dumpster::unsync::collect();
     /// ```
     pub fn try_deref(gc: &Gc<T>) -> Option<&T> {
-        gc.ptr.get().is_some().then(|| &**gc)
+        (!gc.ptr.get().is_null()).then(|| &**gc)
     }
 
     /// Attempt to clone this `Gc`.
@@ -307,7 +303,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// `Drop` implementation.
     ///
     /// ```
-    /// use dumpster::{Collectable, unsync::Gc};
+    /// use dumpster::{unsync::Gc, Collectable};
     /// use std::cell::OnceCell;
     ///
     /// #[derive(Collectable)]
@@ -326,7 +322,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// # dumpster::unsync::collect();
     /// ```
     pub fn try_clone(gc: &Gc<T>) -> Option<Gc<T>> {
-        gc.ptr.get().is_some().then(|| gc.clone())
+        (!gc.ptr.get().is_null()).then(|| gc.clone())
     }
 }
 
@@ -419,7 +415,7 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
     /// The following example will fail, because cloning a `Gc` to a deallocated object is wrong.
     ///
     /// ```should_panic
-    /// use dumpster::{Collectable, unsync::Gc};
+    /// use dumpster::{unsync::Gc, Collectable};
     /// use std::cell::OnceCell;
     ///
     /// #[derive(Collectable)]
@@ -463,7 +459,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
         if COLLECTING.with(Cell::get) {
             return;
         }
-        let Some(mut ptr) = self.ptr.get() else {
+        let Some(mut ptr) = self.ptr.get().as_option() else {
             return;
         };
         DUMPSTER.with(|d| {
