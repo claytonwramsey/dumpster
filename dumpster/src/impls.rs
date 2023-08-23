@@ -25,10 +25,10 @@ use std::{
     cell::{Cell, OnceCell, RefCell},
     collections::{
         hash_map::{DefaultHasher, RandomState},
-        BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque,
+        BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque,
     },
     ffi::{OsStr, OsString},
-    hash::{BuildHasherDefault, SipHasher},
+    hash::{BuildHasher, BuildHasherDefault, SipHasher},
     marker::PhantomData,
     num::{
         NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize, NonZeroU128,
@@ -177,7 +177,29 @@ collectable_collection_impl!(LinkedList<T>);
 collectable_collection_impl!([T]);
 collectable_collection_impl!(HashSet<T>);
 collectable_collection_impl!(BinaryHeap<T>);
-collectable_collection_impl!(BTreeSet<T>); // awaiting stabilization of `drain` on `BTreeSet`
+collectable_collection_impl!(BTreeSet<T>);
+
+unsafe impl<K: Collectable, V: Collectable, S: BuildHasher + Collectable> Collectable
+    for HashMap<K, V, S>
+{
+    fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
+        for (k, v) in self {
+            k.accept(visitor)?;
+            v.accept(visitor)?;
+        }
+        self.hasher().accept(visitor)
+    }
+}
+
+unsafe impl<K: Collectable, V: Collectable> Collectable for BTreeMap<K, V> {
+    fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
+        for (k, v) in self {
+            k.accept(visitor)?;
+            v.accept(visitor)?;
+        }
+        Ok(())
+    }
+}
 
 unsafe impl<T: Collectable, const N: usize> Collectable for [T; N] {
     #[inline]
