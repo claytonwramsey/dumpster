@@ -90,13 +90,11 @@ impl fmt::Debug for Erased {
     }
 }
 
-#[derive(PartialEq, Eq)]
 #[cfg(not(feature = "coerce-unsized"))]
 /// A nullable pointer to an `?Sized` type.
 ///
 /// We need this because it's actually impossible to create a null `*mut T` if `T` is `?Sized`.
 pub(crate) struct Nullable<T: ?Sized>(Option<NonNull<T>>);
-#[derive(PartialEq, Eq)]
 #[cfg(feature = "coerce-unsized")]
 /// A nullable pointer to an `?Sized` type.
 ///
