@@ -78,7 +78,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                     }
                 });
 
-                quote! { #(#delegate_visit)* Ok(()) }
+                quote! { #(#delegate_visit)* std::result::Result::Ok(()) }
             }
             Fields::Unnamed(ref f) => {
                 let delegate_visit = f.unnamed.iter().enumerate().map(|(i, f)| {
@@ -91,9 +91,9 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                     }
                 });
 
-                quote! { #(#delegate_visit)* Ok(()) }
+                quote! { #(#delegate_visit)* std::result::Result::Ok(()) }
             }
-            Fields::Unit => quote! { Ok(()) },
+            Fields::Unit => quote! { std::result::Result::Ok(()) },
         },
         Data::Enum(e) => {
             let mut delegate_visit = TokenStream::new();
@@ -133,7 +133,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                         }
 
                         delegate_visit.extend(
-                            quote! {#name::#var_name{#binding} => {#execution_visit Ok(())},},
+                            quote! {#name::#var_name{#binding} => {#execution_visit std::result::Result::Ok(())},},
                         );
                     }
                     Fields::Unnamed(u) => {
@@ -165,11 +165,12 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                         }
 
                         delegate_visit.extend(
-                            quote! {#name::#var_name(#binding) => {#execution_visit Ok(())},},
+                            quote! {#name::#var_name(#binding) => {#execution_visit std::result::Result::Ok(())},},
                         );
                     }
                     Fields::Unit => {
-                        delegate_visit.extend(quote! {#name::#var_name => Ok(()),});
+                        delegate_visit
+                            .extend(quote! {#name::#var_name => std::result::Result::Ok(()),});
                     }
                 }
             }
