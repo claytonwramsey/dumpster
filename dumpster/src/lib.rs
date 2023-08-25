@@ -166,7 +166,7 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = { version = "0.1.0", features = ["coerce-unsized"]}
+//! dumpster = { version = "0.1.2", features = ["coerce-unsized"]}
 //! ```
 //!
 //! # License
