@@ -12,4 +12,4 @@ categories = ["data-structures", "memory-management"]
 
 [dev-dependencies]
 dumpster = {version = "0.1.2", path = "../dumpster"}
-dumpster_derive = {version= "0.1.0", path = "../dumpster_derive"}
+dumpster_derive = {version= "0.1.2", path = "../dumpster_derive"}

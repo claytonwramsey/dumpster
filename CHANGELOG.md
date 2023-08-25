@@ -11,6 +11,7 @@
 ### Bugfixes
 
 - Prevent dead `Gc`s from escaping their `Drop` implementation, potentially causing UAFs.
+- Use fully-qualified name for `Result` in derive macro, preventing some bugs.
 
 ### Other
 
