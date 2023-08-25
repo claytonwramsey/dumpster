@@ -24,11 +24,10 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take, transmute},
     ptr::{drop_in_place, NonNull},
-    sync::{
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
-        Mutex, RwLock,
-    },
+    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
+
+use parking_lot::{Mutex, RwLock};
 
 use once_cell::sync::Lazy;
 
@@ -143,7 +142,7 @@ thread_local! {
 pub fn collect_all_await() {
     DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
     GARBAGE_TRUCK.collect_all();
-    drop(GARBAGE_TRUCK.collecting_lock.read().unwrap());
+    drop(GARBAGE_TRUCK.collecting_lock.read());
 }
 
 /// Notify that a `Gc` was destroyed, and update the tracking count for the number of dropped and
@@ -262,7 +261,7 @@ impl Dumpster {
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
         self.n_drops.set(0);
-        let mut guard = garbage_truck.contents.lock().unwrap();
+        let mut guard = garbage_truck.contents.lock();
         for (id, can) in self.contents.borrow_mut().drain() {
             if guard.insert(id, can).is_some() {
                 unsafe {
@@ -285,9 +284,9 @@ impl GarbageTruck {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     fn collect_all(&self) {
-        let collecting_guard = self.collecting_lock.write().unwrap();
+        let collecting_guard = self.collecting_lock.write();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
-        let to_collect = take(&mut *self.contents.lock().unwrap());
+        let to_collect = take(&mut *self.contents.lock());
         let mut ref_graph = HashMap::with_capacity(to_collect.len());
 
         CURRENT_TAG.fetch_add(1, Ordering::Release);
@@ -333,9 +332,7 @@ impl GarbageTruck {
         }
         CLEANING.with(|c| c.set(false));
         for (drop_fn, ptr) in weak_destroys {
-            unsafe {
-                drop_fn(ptr);
-            }
+            unsafe { drop_fn(ptr) };
         }
         drop(collecting_guard);
     }

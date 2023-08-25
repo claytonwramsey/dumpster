@@ -21,7 +21,7 @@
 use std::{
     fmt::Display,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::Arc,
     thread::{self, available_parallelism, scope},
     time::{Duration, Instant},
 };
@@ -30,6 +30,8 @@ use dumpster_bench::{
     ArcMultiref, BaconRajanMultiref, DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref,
     Multiref, RcMultiref, ShredderMultiref, ShredderSyncMultiref, SyncMultiref,
 };
+
+use parking_lot::Mutex;
 
 struct BenchmarkData {
     name: &'static str,
@@ -225,19 +227,19 @@ fn multi_threaded<M: SyncMultiref>(
             thread::Builder::new()
                 .name(format!("multi_threaded{i}"))
                 .spawn_scoped(s, move || {
-                    *tic.lock().unwrap() = Instant::now();
+                    *tic.lock() = Instant::now();
                     fastrand::seed(12345 + i as u64);
 
                     for _n in 0..(n_iters / n_threads) {
                         let v1_id = fastrand::usize(0..vecs.len());
                         match fastrand::u8(0..4) {
                             // create
-                            0 => vecs[v1_id].lock().unwrap().push(M::new(Vec::new())),
+                            0 => vecs[v1_id].lock().push(M::new(Vec::new())),
                             // add ref
                             1 => {
                                 let v2_id = fastrand::usize(0..vecs.len());
                                 if v1_id == v2_id {
-                                    let g1 = vecs[v1_id].lock().unwrap();
+                                    let g1 = vecs[v1_id].lock();
                                     if g1.len() < 2 {
                                         continue;
                                     }
@@ -248,10 +250,10 @@ fn multi_threaded<M: SyncMultiref>(
                                 } else {
                                     // prevent deadlock by locking lower one first
                                     let (g1, g2) = if v1_id < v2_id {
-                                        (vecs[v1_id].lock().unwrap(), vecs[v2_id].lock().unwrap())
+                                        (vecs[v1_id].lock(), vecs[v2_id].lock())
                                     } else {
-                                        let g2 = vecs[v2_id].lock().unwrap();
-                                        (vecs[v1_id].lock().unwrap(), g2)
+                                        let g2 = vecs[v2_id].lock();
+                                        (vecs[v1_id].lock(), g2)
                                     };
                                     if g1.is_empty() || g2.is_empty() {
                                         continue;
@@ -264,7 +266,7 @@ fn multi_threaded<M: SyncMultiref>(
                             }
                             // destroy gc
                             2 => {
-                                let mut guard = vecs[v1_id].lock().unwrap();
+                                let mut guard = vecs[v1_id].lock();
                                 if guard.is_empty() {
                                     continue;
                                 }
@@ -273,7 +275,7 @@ fn multi_threaded<M: SyncMultiref>(
                             }
                             // destroy ref
                             3 => {
-                                let guard = vecs[v1_id].lock().unwrap();
+                                let guard = vecs[v1_id].lock();
                                 if guard.is_empty() {
                                     continue;
                                 }
@@ -286,13 +288,13 @@ fn multi_threaded<M: SyncMultiref>(
                             _ => unreachable!(),
                         };
                     }
-                    *toc.lock().unwrap() = Instant::now();
+                    *toc.lock() = Instant::now();
                 })
                 .unwrap();
         }
     });
     M::collect(); // This op is single threaded and shouldn't count
-    let duration = toc.lock().unwrap().duration_since(*tic.lock().unwrap());
+    let duration = toc.lock().duration_since(*tic.lock());
 
     // println!("finished {name} in {duration:?}");
     BenchmarkData {

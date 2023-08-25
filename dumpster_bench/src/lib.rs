@@ -39,13 +39,13 @@ pub trait SyncMultiref: Send + Sync + Multiref {}
 
 impl<T> SyncMultiref for T where T: Send + Sync + Multiref {}
 
-/// A samle multi-reference which uses `Rc`, which is technically not a garbage collector, as a
+/// A simple multi-reference which uses `Rc`, which is technically not a garbage collector, as a
 /// baseline.
 pub struct RcMultiref {
     refs: Mutex<Vec<Rc<Self>>>,
 }
 
-/// A samle multi-reference which uses `Arc`, which is technically not a garbage collector, as a
+/// A simple multi-reference which uses `Arc`, which is technically not a garbage collector, as a
 /// baseline.
 pub struct ArcMultiref {
     refs: Mutex<Vec<Arc<Self>>>,
