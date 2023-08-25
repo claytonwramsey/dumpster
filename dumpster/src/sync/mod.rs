@@ -119,7 +119,7 @@ where
     /// If the weak count is zero, the allocation may be destroyed.
     weak: AtomicUsize,
     /// The current generation number of the allocation.
-    /// The generation number is assigend to the global generation every time a strong reference is
+    /// The generation number is assigned to the global generation every time a strong reference is
     /// created or destroyed or a `Gc` pointing to this allocation is dereferenced.
     generation: AtomicUsize,
     /// The actual data stored in the allocation.

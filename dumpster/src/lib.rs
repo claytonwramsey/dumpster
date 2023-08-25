@@ -18,7 +18,7 @@
 
 //! A cycle-tracking concurrent garbage collector with an easy-to-use API.
 //!
-//! Most garbage collecters are _tracing_ garbage collectors, meaning that they keep track of a set
+//! Most garbage collectors are _tracing_ garbage collectors, meaning that they keep track of a set
 //! of roots which are directly accessible from the stack, and then use those roots to find the set
 //! of all accessible allocations.
 //! However, because Rust does not allow us to hook into when a value is moved, it's quite difficult
@@ -282,7 +282,7 @@ pub unsafe trait Collectable {
 ///
 /// When accepted by a `Collectable`, this visitor will be delegated down until it reaches a
 /// garbage-collected pointer.
-/// Then, the garabge-collected pointer will call one of `visit_sync` or `visit_unsync`, depending
+/// Then, the garbage-collected pointer will call one of `visit_sync` or `visit_unsync`, depending
 /// on which type of pointer it is.
 ///
 /// In general, it's not expected for consumers of this library to write their own visitors.
