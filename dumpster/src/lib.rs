@@ -329,3 +329,33 @@ extern crate dumpster_derive;
 /// }
 /// ```
 pub use dumpster_derive::Collectable;
+
+/// Determine whether some value contains a garbage-collected pointer.
+///
+/// This function will return one of three values:
+/// - `Ok(true)`: The data structure contains a garbage-collected pointer.
+/// - `Ok(false)`: The data structure contains no garbage-collected pointers.
+/// - `Err(())`: The data structure was accessed while we checked it for garbage-collected pointers.
+fn contains_gcs<T: Collectable + ?Sized>(x: &T) -> Result<bool, ()> {
+    struct ContainsGcs(bool);
+
+    impl Visitor for ContainsGcs {
+        fn visit_sync<T>(&mut self, _: &sync::Gc<T>)
+        where
+            T: Collectable + Send + Sync + ?Sized,
+        {
+            self.0 = true;
+        }
+
+        fn visit_unsync<T>(&mut self, _: &unsync::Gc<T>)
+        where
+            T: Collectable + ?Sized,
+        {
+            self.0 = true;
+        }
+    }
+
+    let mut visit = ContainsGcs(false);
+    x.accept(&mut visit)?;
+    Ok(visit.0)
+}
