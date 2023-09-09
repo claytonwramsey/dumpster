@@ -77,7 +77,6 @@ fn ref_count() {
     drop(gc1);
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 0);
     drop(gc2);
-    collect();
     assert_eq!(DROP_COUNT.load(Ordering::Acquire), 1);
 }
 

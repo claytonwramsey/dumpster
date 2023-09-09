@@ -51,7 +51,7 @@ use std::{
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
-use crate::{ptr::Nullable, Collectable, Visitor};
+use crate::{contains_gcs, ptr::Nullable, Collectable, Visitor};
 
 use self::collect::{
     collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
@@ -442,7 +442,9 @@ where
                 }
             }
             _ => {
-                mark_dirty(ptr);
+                if contains_gcs(&box_ref.value).unwrap_or(true) {
+                    mark_dirty(ptr);
+                }
                 box_ref.weak.fetch_sub(1, Ordering::Release);
             }
         }
