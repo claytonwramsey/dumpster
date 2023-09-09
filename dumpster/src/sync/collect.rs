@@ -410,13 +410,6 @@ impl<'a> Visitor for Dfs<'a> {
         let ptr = unsafe { (*gc.ptr.get()).unwrap() };
         let box_ref = unsafe { ptr.as_ref() };
         let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
-        if gc.tag.swap(current_tag, Ordering::Relaxed) >= current_tag
-            || box_ref.generation.load(Ordering::Acquire) >= current_tag
-        {
-            // This pointer was already tagged by this sweep, so it must have been moved by
-            mark(self.current_id, self.ref_graph);
-            return;
-        }
 
         let mut new_id = AllocationId::from(box_ref);
 
@@ -462,7 +455,7 @@ impl<'a> Visitor for Dfs<'a> {
                 swap(&mut new_id, &mut self.current_id);
 
                 if box_ref.value.accept(self).is_err()
-                    || box_ref.generation.load(Ordering::Acquire) >= current_tag
+                    || box_ref.generation.load(Ordering::Relaxed) >= current_tag
                 {
                     // On failure, this means `**gc` is accessible, and should be marked
                     // as such

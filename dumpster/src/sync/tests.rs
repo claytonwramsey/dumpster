@@ -19,7 +19,6 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
     mem::{swap, take, transmute, MaybeUninit},
-    ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
@@ -301,13 +300,13 @@ fn coerce_array() {
 fn malicious() {
     static EVIL: AtomicUsize = AtomicUsize::new(0);
     static A_DROP_DETECT: AtomicUsize = AtomicUsize::new(0);
+    static A_REF: Mutex<Option<Gc<A>>> = Mutex::new(None);
     struct A {
         x: Gc<X>,
         y: Gc<Y>,
     }
     struct X {
         a: Mutex<Option<Gc<A>>>,
-        y: NonNull<Y>,
     }
     struct Y {
         a: Mutex<Option<Gc<A>>>,
@@ -329,7 +328,8 @@ fn malicious() {
             if EVIL.fetch_add(1, Ordering::Relaxed) == 1 {
                 println!("committing evil...");
                 // simulates a malicious thread
-                let y = unsafe { self.y.as_ref() };
+                let guard = A_REF.lock().unwrap();
+                let y = &guard.as_ref().unwrap().y;
                 *y.a.lock().unwrap() = (*self.a.lock().unwrap()).take();
             }
 
@@ -356,17 +356,17 @@ fn malicious() {
     });
     let x = Gc::new(X {
         a: Mutex::new(None),
-        y: NonNull::from(y.as_ref()),
     });
-    let a = Gc::new(A { x, y });
-    *a.x.a.lock().unwrap() = Some(a.clone());
+    *A_REF.lock().unwrap() = Some(Gc::new(A { x, y }));
+    let new_a = A_REF.lock().unwrap().as_ref().unwrap().clone();
+    *A_REF.lock().unwrap().as_ref().unwrap().x.a.lock().unwrap() = Some(new_a);
 
     collect();
-    drop(a.clone());
+    drop(A_REF.lock().unwrap().as_ref().unwrap().clone());
     EVIL.store(1, Ordering::Relaxed);
     collect();
     assert_eq!(A_DROP_DETECT.load(Ordering::Relaxed), 0);
-    drop(a);
+    drop(A_REF.lock().unwrap().take());
     collect();
     assert_eq!(A_DROP_DETECT.load(Ordering::Relaxed), 1);
 }
