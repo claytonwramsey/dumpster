@@ -100,11 +100,6 @@ fn main() {
             "{}",
             single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon-rajan-cc", N_ITERS)
         );
-        println!(
-            "{}",
-            single_threaded::<shredder::Gc<ShredderMultiref>>("shredder", N_ITERS)
-        );
-
         for n_threads in 1..=available_parallelism().unwrap().get() {
             // println!("--- {n_threads} threads");
             dumpster::sync::set_collect_condition(dumpster::sync::default_collect_condition);
@@ -126,6 +121,18 @@ fn main() {
                     n_threads,
                 )
             );
+        }
+    }
+
+    for _ in 0..20 {
+        // run fewer tests of shredder because it takes forever
+
+        println!(
+            "{}",
+            single_threaded::<shredder::Gc<ShredderMultiref>>("shredder", N_ITERS)
+        );
+
+        for n_threads in 1..=available_parallelism().unwrap().get() {
             println!(
                 "{}",
                 multi_threaded::<shredder::Gc<ShredderSyncMultiref>>(
@@ -138,7 +145,7 @@ fn main() {
     for _ in 0..100 {
         println!("{}", single_threaded::<Rc<RcMultiref>>("Rc", N_ITERS));
         println!("{}", single_threaded::<Arc<ArcMultiref>>("Arc", N_ITERS));
-        for n_threads in 1..available_parallelism().unwrap().get() {
+        for n_threads in 1..=available_parallelism().unwrap().get() {
             println!(
                 "{}",
                 multi_threaded::<Arc<ArcMultiref>>("Arc", N_ITERS, n_threads)
