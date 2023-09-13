@@ -96,6 +96,8 @@ use self::collect::{
 pub struct Gc<T: Collectable + Send + Sync + ?Sized + 'static> {
     /// The pointer to the allocation.
     ptr: UnsafeCell<Nullable<GcBox<T>>>,
+    /// The tag information of this pointer, used for mutation detection when marking.
+    tag: AtomicUsize,
 }
 
 /// The tag of the current sweep operation.
@@ -244,6 +246,7 @@ where
                 generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
                 value,
             }))))),
+            tag: AtomicUsize::new(0),
         }
     }
 
@@ -406,6 +409,7 @@ where
         // mark_clean(box_ref); // causes performance drops
         Gc {
             ptr: UnsafeCell::new(unsafe { *self.ptr.get() }),
+            tag: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
         }
     }
 }
@@ -554,6 +558,7 @@ impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
         ).as_ref()
         };
         let current_tag = CURRENT_TAG.load(Ordering::Acquire);
+        self.tag.store(current_tag, Ordering::Release);
         box_ref.generation.store(current_tag, Ordering::Release);
         &box_ref.value
     }
@@ -587,6 +592,11 @@ where
 
 impl<T: Collectable + Send + Sync + ?Sized> Debug for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Gc({:?})", self.ptr,)
+        write!(
+            f,
+            "Gc({:?}, {})",
+            self.ptr,
+            self.tag.load(Ordering::Acquire)
+        )
     }
 }
