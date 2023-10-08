@@ -355,6 +355,7 @@ where
     /// [`Collectable`] object.
     ///
     /// # Examples
+    ///
     /// ```
     /// use dumpster::sync::Gc;
     /// let x = Gc::new("hello".to_owned());

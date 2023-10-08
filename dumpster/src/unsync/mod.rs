@@ -333,6 +333,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// [`Collectable`] object.
     ///
     /// # Examples
+    ///
     /// ```
     /// use dumpster::unsync::Gc;
     /// let x = Gc::new("hello".to_owned());
