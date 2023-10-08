@@ -160,3 +160,28 @@ fn parallel_loop() {
     assert_eq!(COUNT_3.load(Ordering::Relaxed), 1);
     assert_eq!(COUNT_4.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn unsync_as_ptr() {
+    let empty = Gc::new(Empty);
+    let empty_a = Gc::clone(&empty);
+    let empty_ptr = Gc::as_ptr(&empty);
+    assert_eq!(empty_ptr, Gc::as_ptr(&empty_a));
+
+    #[derive(Collectable)]
+    struct B(Gc<Empty>);
+
+    let b = B(Gc::clone(&empty));
+    assert_eq!(empty_ptr, Gc::as_ptr(&b.0));
+    let bb = Gc::new(B(Gc::clone(&empty)));
+    assert_eq!(empty_ptr, Gc::as_ptr(&bb.0));
+
+    let empty2 = Gc::new(Empty);
+    let empty2_ptr = Gc::as_ptr(&empty2);
+    assert_ne!(empty_ptr, empty2_ptr);
+    let b2 = Gc::new(B(Gc::clone(&empty2)));
+    assert_eq!(empty2_ptr, Gc::as_ptr(&b2.0));
+    assert_ne!(empty_ptr, Gc::as_ptr(&b2.0));
+    assert_ne!(Gc::as_ptr(&b.0), Gc::as_ptr(&b2.0));
+    assert_ne!(Gc::as_ptr(&b.0), empty2_ptr);
+}

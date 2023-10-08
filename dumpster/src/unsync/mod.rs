@@ -324,6 +324,28 @@ impl<T: Collectable + ?Sized> Gc<T> {
     pub fn try_clone(gc: &Gc<T>) -> Option<Gc<T>> {
         (!gc.ptr.get().is_null()).then(|| gc.clone())
     }
+
+    /// Provides a raw pointer to the data.
+    ///
+    /// Panics if `self` is a "dead" `Gc`,
+    /// which points to an already-deallocated object.
+    /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
+    /// [`Collectable`] object.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::unsync::Gc;
+    /// let x = Gc::new("hello".to_owned());
+    /// let y = Gc::clone(&x);
+    /// let x_ptr = Gc::as_ptr(&x);
+    /// assert_eq!(x_ptr, Gc::as_ptr(&x));
+    /// assert_eq!(unsafe { &*x_ptr }, "hello");
+    /// ```
+    pub fn as_ptr(gc: &Gc<T>) -> *const T {
+        let ptr = NonNull::as_ptr(gc.ptr.get().unwrap());
+        unsafe { addr_of_mut!((*ptr).value) }
+    }
 }
 
 impl<T: Collectable + ?Sized> Deref for Gc<T> {
