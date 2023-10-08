@@ -47,10 +47,9 @@ use std::{
     cell::UnsafeCell,
     fmt::Debug,
     ops::Deref,
-    ptr::{addr_of, drop_in_place, NonNull},
+    ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
-use std::ptr::addr_of_mut;
 
 use crate::{contains_gcs, ptr::Nullable, Collectable, Visitor};
 
