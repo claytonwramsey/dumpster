@@ -369,6 +369,26 @@ where
             addr_of_mut!((*ptr).value)
         }
     }
+
+    /// Determine whether two `Gc`s are equivalent by reference.
+    /// Returns `true` if both `this` and `other` point to the same value, in the same style as
+    /// [`std::ptr::eq`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::sync::Gc;
+    ///
+    /// let gc1 = Gc::new(0);
+    /// let gc2 = Gc::clone(&gc1); // points to same spot as `gc1`
+    /// let gc3 = Gc::new(0); // same value, but points to a different object than `gc1`
+    ///
+    /// assert!(Gc::ptr_eq(&gc1, &gc2));
+    /// assert!(!Gc::ptr_eq(&gc1, &gc3));
+    /// ```
+    pub fn ptr_eq(this: &Gc<T>, other: &Gc<T>) -> bool {
+        unsafe { *this.ptr.get() }.as_option() == unsafe { *other.ptr.get() }.as_option()
+    }
 }
 
 impl<T> Clone for Gc<T>
