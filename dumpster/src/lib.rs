@@ -337,6 +337,8 @@ pub use dumpster_derive::Collectable;
 /// - `Ok(false)`: The data structure contains no garbage-collected pointers.
 /// - `Err(())`: The data structure was accessed while we checked it for garbage-collected pointers.
 fn contains_gcs<T: Collectable + ?Sized>(x: &T) -> Result<bool, ()> {
+    /// A visitor structure used for determining whether some garbage-collected pointer contains a
+    /// `Gc` in its pointed-to value.
     struct ContainsGcs(bool);
 
     impl Visitor for ContainsGcs {

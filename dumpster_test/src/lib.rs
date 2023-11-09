@@ -162,14 +162,15 @@ fn parallel_loop() {
 }
 
 #[test]
+#[allow(clippy::similar_names)]
 fn unsync_as_ptr() {
+    #[derive(Collectable)]
+    struct B(Gc<Empty>);
+
     let empty = Gc::new(Empty);
     let empty_a = Gc::clone(&empty);
     let empty_ptr = Gc::as_ptr(&empty);
     assert_eq!(empty_ptr, Gc::as_ptr(&empty_a));
-
-    #[derive(Collectable)]
-    struct B(Gc<Empty>);
 
     let b = B(Gc::clone(&empty));
     assert_eq!(empty_ptr, Gc::as_ptr(&b.0));
