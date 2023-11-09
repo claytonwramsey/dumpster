@@ -536,6 +536,43 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
     }
 }
 
+impl<T> PartialEq<Gc<T>> for Gc<T>
+where
+    T: Collectable + ?Sized + PartialEq,
+{
+    /// Test for equality on two `Gc`s.
+    ///
+    /// Two `Gc`s are equal if their inner values are equal, even if they are stored in different
+    /// allocations.
+    /// Because `PartialEq` does not imply reflexivity, and there is no current path for trait
+    /// specialization, this function does not do a "fast-path" check for reference equality.
+    /// Therefore, if two `Gc`s point to the same allocation, the implementation of `eq` will still
+    /// require a direct call to `eq` on the values.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it is called from within the implementation of `std::ops::Drop`
+    /// of its owning value, since returning such a reference could cause a use-after-free.
+    /// It is not guaranteed to panic.
+    /// Additionally, if this `Gc` is moved out of an allocation during a `Drop` implementation, it
+    /// could later cause a panic.
+    /// For further details, refer to the main documentation for `Gc`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::unsync::Gc;
+    ///
+    /// let gc = Gc::new(6);
+    /// assert!(gc == Gc::new(6));
+    /// ```
+    fn eq(&self, other: &Gc<T>) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl<T> Eq for Gc<T> where T: Collectable + ?Sized + PartialEq {}
+
 impl CollectInfo {
     #[must_use]
     /// Get the number of times that a [`Gc`] has been dropped since the last time a collection
