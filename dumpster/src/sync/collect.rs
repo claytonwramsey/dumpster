@@ -544,7 +544,7 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
         .expect("allocation assumed to be unreachable but somehow was accessed");
     let layout = Layout::for_value(specified);
     drop_in_place(specified);
-    dealloc((specified as *mut GcBox<T>).cast(), layout);
+    dealloc(std::ptr::from_mut::<GcBox<T>>(specified).cast(), layout);
 }
 
 /// Function for handling dropping an allocation when its weak and strong reference count reach

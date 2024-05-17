@@ -33,7 +33,7 @@ use std::{
 /// Test a simple data structure
 fn simple() {
     static DROPPED: AtomicBool = AtomicBool::new(false);
-    struct Foo(u8);
+    struct Foo;
 
     impl Drop for Foo {
         fn drop(&mut self) {
@@ -47,7 +47,7 @@ fn simple() {
         }
     }
 
-    let gc1 = Gc::new(Foo(1));
+    let gc1 = Gc::new(Foo);
     let gc2 = Gc::clone(&gc1);
 
     assert!(!DROPPED.load(Ordering::Relaxed));
@@ -267,9 +267,9 @@ fn coerce_array() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic = "accessing a dead pointer must cause a panic"]
 fn escape_dead_pointer() {
-    thread_local! {static  ESCAPED: Mutex<Option<Gc<Escape>>> = Mutex::new(None);}
+    thread_local! {static  ESCAPED: Mutex<Option<Gc<Escape>>> = const { Mutex::new(None) };}
 
     struct Escape {
         x: u8,

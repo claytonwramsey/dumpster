@@ -614,7 +614,7 @@ fn root_canal() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic = "accessing a dead pointer must cause a panic"]
 fn escape_dead_pointer() {
     static ESCAPED: Mutex<Option<Gc<Escape>>> = Mutex::new(None);
 

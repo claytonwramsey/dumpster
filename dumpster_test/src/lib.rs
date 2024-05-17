@@ -32,6 +32,7 @@ use dumpster_derive::Collectable;
 struct Empty;
 
 #[derive(Collectable)]
+#[allow(dead_code)]
 struct UnitTuple();
 
 #[derive(Collectable)]

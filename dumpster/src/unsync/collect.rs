@@ -359,6 +359,6 @@ unsafe fn drop_assist<T: Collectable + ?Sized>(ptr: Erased, visitor: &mut DropAl
         let mut_spec = ptr.specify::<GcBox<T>>().as_mut();
         let layout = Layout::for_value(mut_spec);
         drop_in_place(mut_spec);
-        dealloc((mut_spec as *mut GcBox<T>).cast(), layout);
+        dealloc(std::ptr::from_mut::<GcBox<T>>(mut_spec).cast(), layout);
     }
 }
