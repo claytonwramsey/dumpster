@@ -267,7 +267,7 @@ fn coerce_array() {
 }
 
 #[test]
-#[should_panic = "accessing a dead pointer must cause a panic"]
+#[should_panic = "dereferencing Gc to already-collected object. This means a Gc escaped from a Drop implementation, likely implying a bug in your code."]
 fn escape_dead_pointer() {
     thread_local! {static  ESCAPED: Mutex<Option<Gc<Escape>>> = const { Mutex::new(None) };}
 

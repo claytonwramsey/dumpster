@@ -614,7 +614,7 @@ fn root_canal() {
 }
 
 #[test]
-#[should_panic = "accessing a dead pointer must cause a panic"]
+#[should_panic = "Attempting to dereference Gc to already-deallocated object.This is caused by accessing a Gc during a Drop implementation, likely implying a bug in your code."]
 fn escape_dead_pointer() {
     static ESCAPED: Mutex<Option<Gc<Escape>>> = Mutex::new(None);
 
