@@ -1,5 +1,11 @@
 # `dumpster` Changelog
 
+## 0.2.1
+
+### New features
+
+- Implement `Collectable` for `std::any::TypeId`.
+
 ## 0.2.0
 
 ### New features

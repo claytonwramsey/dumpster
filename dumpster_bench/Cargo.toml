@@ -11,7 +11,7 @@ keywords = ["dumpster", "garbage_collector", "benchmark"]
 categories = ["data-structures", "memory-management"]
 
 [dependencies]
-dumpster = {version = "0.2.0", path = "../dumpster", features = ["derive"]}
+dumpster = {version = "0.2.1", path = "../dumpster", features = ["derive"]}
 gc = "0.4.1"
 bacon_rajan_cc = "0.3"
 fastrand = "2.0.0"
