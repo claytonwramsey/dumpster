@@ -1,8 +1,8 @@
 [package]
 name = "dumpster"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 authors = ["Clayton Ramsey"]
 description = "A concurrent cycle-tracking garbage collector."
 repository = "https://github.com/claytonwramsey/dumpster"
@@ -18,7 +18,7 @@ derive = ["dep:dumpster_derive"]
 [dependencies]
 once_cell = "1.18.0"
 parking_lot = "0.12"
-dumpster_derive = {version = "0.1.2", path = "../dumpster_derive", optional = true}
+dumpster_derive = {version = "0.2.0", path = "../dumpster_derive", optional = true}
 
 [dev-dependencies]
 fastrand = "2.0.0"

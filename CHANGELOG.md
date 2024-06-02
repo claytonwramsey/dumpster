@@ -1,5 +1,18 @@
 # `dumpster` Changelog
 
+## 0.2.0
+
+### New features
+
+- Added `Gc::as_ptr`.
+- Added `Gc::ptr_eq`.
+- Implemented `PartialEq` and `Eq` for garbage collected pointers.
+
+### Other
+
+- Changed license from GNU GPLv3 or later to MPL 2.0.
+- Allocations which do not contain `Gc`s will simply be reference counted.
+
 ## 0.1.2
 
 ### New features

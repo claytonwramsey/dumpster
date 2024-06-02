@@ -1,8 +1,8 @@
 [package]
 name = "dumpster_derive"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 authors = ["Clayton Ramsey"]
 description = "Implementation of #[derive(Collectable)] for dumpster"
 repository = "https://github.com/claytonwramsey/dumpster"

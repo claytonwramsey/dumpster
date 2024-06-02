@@ -2,7 +2,7 @@
 name = "dumpster_test"
 version = "0.1.0"
 edition = "2021"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 authors = ["Clayton Ramsey"]
 description = "Tests for dumpster garbage collection crate"
 repository = "https://github.com/claytonwramsey/dumpster"
@@ -11,5 +11,5 @@ keywords = ["dumpster", "garbage_collector", "test"]
 categories = ["data-structures", "memory-management"]
 
 [dev-dependencies]
-dumpster = {version = "0.1.2", path = "../dumpster"}
-dumpster_derive = {version= "0.1.2", path = "../dumpster_derive"}
+dumpster = {version = "0.2.0", path = "../dumpster"}
+dumpster_derive = {version= "0.2.0", path = "../dumpster_derive"}

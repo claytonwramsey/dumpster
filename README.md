@@ -115,5 +115,5 @@ dumpster = { version = "0.1.2", features = ["coerce-unsized"]}
 
 ## License
 
-This code is licensed under the GNU GPLv3 any later version of the GPL at your choice.
+This code is licensed under the Mozilla Public License, version 2.0.
 For more information, refer to [LICENSE.md](LICENSE.md).
