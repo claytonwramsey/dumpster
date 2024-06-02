@@ -11,6 +11,7 @@
 #![allow(deprecated)]
 
 use std::{
+    any::TypeId,
     borrow::Cow,
     cell::{Cell, OnceCell, RefCell},
     collections::{
@@ -270,6 +271,8 @@ collectable_trivial_impl!(DefaultHasher);
 collectable_trivial_impl!(RandomState);
 collectable_trivial_impl!(Rc<str>);
 collectable_trivial_impl!(SipHasher);
+
+collectable_trivial_impl!(TypeId);
 
 /// Implement [`Collectable`] for a tuple.
 macro_rules! collectable_tuple {
