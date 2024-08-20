@@ -14,12 +14,13 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take, transmute},
     ptr::{drop_in_place, NonNull},
-    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
+        LazyLock,
+    },
 };
 
 use parking_lot::{Mutex, RwLock};
-
-use once_cell::sync::Lazy;
 
 use crate::{ptr::Erased, Collectable, Visitor};
 
@@ -102,7 +103,7 @@ enum Reachability {
 
 /// The global garbage truck.
 /// All [`TrashCans`] should eventually end up in here.
-static GARBAGE_TRUCK: Lazy<GarbageTruck> = Lazy::new(|| GarbageTruck {
+static GARBAGE_TRUCK: LazyLock<GarbageTruck> = LazyLock::new(|| GarbageTruck {
     contents: Mutex::new(HashMap::new()),
     collecting_lock: RwLock::new(()),
     n_gcs_dropped: AtomicUsize::new(0),
