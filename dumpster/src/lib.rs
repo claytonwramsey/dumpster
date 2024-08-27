@@ -35,7 +35,7 @@
 //!   garbage collection.
 //! - There are no restrictions on the reference structure within a garbage-collected allocation
 //!   (references may point in any way you like).
-//! - It's trivial to make a custom type collectable using the provided derive macros.
+//! - It's trivial to make a custom type Trace using the provided derive macros.
 //! - You can even store `?Sized` data in a garbage-collected pointer!
 //!
 //! # Module structure
@@ -48,7 +48,7 @@
 //! it is recommended to use `unsync`.
 //!
 //! The project root contains common definitions across both `sync` and `unsync`.
-//! Types which implement [`Collectable`] can immediately be used in `unsync`, but in order to use
+//! Types which implement [`Trace`] can immediately be used in `unsync`, but in order to use
 //! `sync`'s garbage collector, the types must also implement [`Sync`].
 //!
 //! # Examples
@@ -89,10 +89,10 @@
 //! It's trivial to use custom data structures with the provided derive macro.
 //!
 //! ```
-//! use dumpster::{unsync::Gc, Collectable};
+//! use dumpster::{unsync::Gc, Trace};
 //! use std::cell::RefCell;
 //!
-//! #[derive(Collectable)]
+//! #[derive(Trace)]
 //! struct Foo {
 //!     refs: RefCell<Vec<Gc<Foo>>>,
 //! }
@@ -114,7 +114,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = "0.2.1"
+//! dumpster = "1.0.0"
 //! ```
 //!
 //! # Optional features
@@ -122,14 +122,14 @@
 //! `dumpster` has two optional features: `derive` and `coerce-unsized`.
 //!
 //! `derive` is enabled by default.
-//! It enables the derive macro for `Collectable`, which makes it easy for users to implement their
-//! own collectable types.
+//! It enables the derive macro for `Trace`, which makes it easy for users to implement their
+//! own Trace types.
 //!
 //! ```
-//! use dumpster::{unsync::Gc, Collectable};
+//! use dumpster::{unsync::Gc, Trace};
 //! use std::cell::RefCell;
 //!
-//! #[derive(Collectable)] // no manual implementation required
+//! #[derive(Trace)] // no manual implementation required
 //! struct Foo(RefCell<Option<Gc<Foo>>>);
 //!
 //! let my_foo = Gc::new(Foo(RefCell::new(None)));
@@ -156,7 +156,7 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = { version = "0.1.2", features = ["coerce-unsized"]}
+//! dumpster = { version = "1.0.0", features = ["coerce-unsized"]}
 //! ```
 //!
 //! # License
@@ -180,31 +180,31 @@ mod ptr;
 pub mod sync;
 pub mod unsync;
 
-/// The trait that any garbage-collectable data must implement.
+/// The trait that any garbage-Trace data must implement.
 ///
-/// This trait should usually be implemented by using `#[derive(Collectable)]`, using the provided
+/// This trait should usually be implemented by using `#[derive(Trace)]`, using the provided
 /// macro.
-/// Only data structures using raw pointers or other magic should manually implement `Collectable`.
+/// Only data structures using raw pointers or other magic should manually implement `Trace`.
 ///
 /// # Safety
 ///
 /// If the implementation of this trait is incorrect, this will result in undefined behavior,
 /// typically double-frees or use-after-frees.
-/// This includes [`Collectable::accept`], even though it is a safe function, since its correctness
+/// This includes [`Trace::accept`], even though it is a safe function, since its correctness
 /// is required for safety.
 ///
 /// # Examples
 ///
-/// Implementing `Collectable` for a scalar type which contains no garbage-collected references
+/// Implementing `Trace` for a scalar type which contains no garbage-collected references
 /// is very easy.
 /// Accepting a visitor is simply a no-op.
 ///
 /// ```
-/// use dumpster::{Collectable, Visitor};
+/// use dumpster::{Trace, Visitor};
 ///
 /// struct Foo(u8);
 ///
-/// unsafe impl Collectable for Foo {
+/// unsafe impl Trace for Foo {
 ///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
 ///         Ok(())
 ///     }
@@ -215,11 +215,11 @@ pub mod unsync;
 /// fields in `accept`.
 ///
 /// ```
-/// use dumpster::{unsync::Gc, Collectable, Visitor};
+/// use dumpster::{unsync::Gc, Trace, Visitor};
 ///
 /// struct Bar(Gc<Bar>);
 ///
-/// unsafe impl Collectable for Bar {
+/// unsafe impl Trace for Bar {
 ///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
 ///         self.0.accept(visitor)
 ///     }
@@ -230,14 +230,14 @@ pub mod unsync;
 /// delegate to both fields in a consistent order:
 ///
 /// ```
-/// use dumpster::{unsync::Gc, Collectable, Visitor};
+/// use dumpster::{unsync::Gc, Trace, Visitor};
 ///
 /// struct Baz {
 ///     a: Gc<Baz>,
 ///     b: Gc<Baz>,
 /// }
 ///
-/// unsafe impl Collectable for Baz {
+/// unsafe impl Trace for Baz {
 ///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
 ///         self.a.accept(visitor)?;
 ///         self.b.accept(visitor)?;
@@ -245,7 +245,7 @@ pub mod unsync;
 ///     }
 /// }
 /// ```
-pub unsafe trait Collectable {
+pub unsafe trait Trace {
     /// Accept a visitor to this garbage-collected value.
     ///
     /// Implementors of this function need only delegate to all fields owned by this value which
@@ -268,9 +268,9 @@ pub unsafe trait Collectable {
 /// A visitor for a garbage collected value.
 ///
 /// This visitor allows us to hide details of the implementation of the garbage-collection procedure
-/// from implementors of [`Collectable`].
+/// from implementors of [`Trace`].
 ///
-/// When accepted by a `Collectable`, this visitor will be delegated down until it reaches a
+/// When accepted by a `Trace`, this visitor will be delegated down until it reaches a
 /// garbage-collected pointer.
 /// Then, the garbage-collected pointer will call one of `visit_sync` or `visit_unsync`, depending
 /// on which type of pointer it is.
@@ -283,7 +283,7 @@ pub trait Visitor {
     /// visitor.
     fn visit_sync<T>(&mut self, gc: &sync::Gc<T>)
     where
-        T: Collectable + Send + Sync + ?Sized;
+        T: Trace + Send + Sync + ?Sized;
 
     /// Visit a thread-local garbage-collected pointer.
     ///
@@ -291,10 +291,10 @@ pub trait Visitor {
     /// visitor.
     fn visit_unsync<T>(&mut self, gc: &unsync::Gc<T>)
     where
-        T: Collectable + ?Sized;
+        T: Trace + ?Sized;
 }
 
-// Re-export #[derive(Collectable)].
+// Re-export #[derive(Trace)].
 //
 // The reason re-exporting is not enabled by default is that disabling it would
 // be annoying for crates that provide handwritten impls or data formats. They
@@ -303,22 +303,22 @@ pub trait Visitor {
 extern crate dumpster_derive;
 
 #[cfg(feature = "derive")]
-/// The derive macro for implementing `Collectable`.
+/// The derive macro for implementing `Trace`.
 ///
 /// This enables users of `dumpster` to easily store custom types inside a `Gc`.
-/// To do so, simply annotate your type with `#[derive(Collectable)]`.
+/// To do so, simply annotate your type with `#[derive(Trace)]`.
 ///
 /// # Examples
 ///
 /// ```
-/// use dumpster::Collectable;
+/// use dumpster::Trace;
 ///
-/// #[derive(Collectable)]
+/// #[derive(Trace)]
 /// struct Foo {
 ///     bar: Option<Box<Foo>>,
 /// }
 /// ```
-pub use dumpster_derive::Collectable;
+pub use dumpster_derive::Trace;
 
 /// Determine whether some value contains a garbage-collected pointer.
 ///
@@ -326,7 +326,7 @@ pub use dumpster_derive::Collectable;
 /// - `Ok(true)`: The data structure contains a garbage-collected pointer.
 /// - `Ok(false)`: The data structure contains no garbage-collected pointers.
 /// - `Err(())`: The data structure was accessed while we checked it for garbage-collected pointers.
-fn contains_gcs<T: Collectable + ?Sized>(x: &T) -> Result<bool, ()> {
+fn contains_gcs<T: Trace + ?Sized>(x: &T) -> Result<bool, ()> {
     /// A visitor structure used for determining whether some garbage-collected pointer contains a
     /// `Gc` in its pointed-to value.
     struct ContainsGcs(bool);
@@ -334,14 +334,14 @@ fn contains_gcs<T: Collectable + ?Sized>(x: &T) -> Result<bool, ()> {
     impl Visitor for ContainsGcs {
         fn visit_sync<T>(&mut self, _: &sync::Gc<T>)
         where
-            T: Collectable + Send + Sync + ?Sized,
+            T: Trace + Send + Sync + ?Sized,
         {
             self.0 = true;
         }
 
         fn visit_unsync<T>(&mut self, _: &unsync::Gc<T>)
         where
-            T: Collectable + ?Sized,
+            T: Trace + ?Sized,
         {
             self.0 = true;
         }

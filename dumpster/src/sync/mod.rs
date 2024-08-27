@@ -41,7 +41,7 @@ use std::{
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
-use crate::{contains_gcs, ptr::Nullable, Collectable, Visitor};
+use crate::{contains_gcs, ptr::Nullable, Trace, Visitor};
 
 use self::collect::{
     collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
@@ -79,11 +79,11 @@ use self::collect::{
 /// object.
 /// To prevent undefined behavior, these `Gc`s are marked as dead during collection and rendered
 /// inaccessible.
-/// Dereferencing or cloning a `Gc` during the `Drop` implementation of a `Collectable` type could
+/// Dereferencing or cloning a `Gc` during the `Drop` implementation of a `Trace` type could
 /// result in the program panicking to keep the program from accessing memory after freeing it.
 /// If you're accessing a `Gc` during a `Drop` implementation, make sure to use the fallible
 /// operations [`Gc::try_deref`] and [`Gc::try_clone`].
-pub struct Gc<T: Collectable + Send + Sync + ?Sized + 'static> {
+pub struct Gc<T: Trace + Send + Sync + ?Sized + 'static> {
     /// The pointer to the allocation.
     ptr: UnsafeCell<Nullable<GcBox<T>>>,
     /// The tag information of this pointer, used for mutation detection when marking.
@@ -98,7 +98,7 @@ static CURRENT_TAG: AtomicUsize = AtomicUsize::new(0);
 /// The backing allocation for a [`Gc`].
 struct GcBox<T>
 where
-    T: Collectable + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized,
 {
     /// The "strong" count, which is the number of extant `Gc`s to this allocation.
     /// If the strong count is zero, a value contained in the allocation may be dropped, but the
@@ -116,8 +116,8 @@ where
     value: T,
 }
 
-unsafe impl<T> Send for Gc<T> where T: Collectable + Send + Sync + ?Sized {}
-unsafe impl<T> Sync for Gc<T> where T: Collectable + Send + Sync + ?Sized {}
+unsafe impl<T> Send for Gc<T> where T: Trace + Send + Sync + ?Sized {}
+unsafe impl<T> Sync for Gc<T> where T: Trace + Send + Sync + ?Sized {}
 
 /// Begin a collection operation of the allocations on the heap.
 ///
@@ -213,7 +213,7 @@ pub use collect::set_collect_condition;
 
 impl<T> Gc<T>
 where
-    T: Collectable + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized,
 {
     /// Construct a new garbage-collected value.
     ///
@@ -245,7 +245,7 @@ where
     /// This function will return `None` if `self` is a "dead" `Gc`, which points to an
     /// already-deallocated object.
     /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
-    /// [`Collectable`] object.
+    /// [`Trace`] object.
     ///
     /// For a version which panics instead of returning `None`, consider using [`Deref`].
     ///
@@ -264,10 +264,10 @@ where
     /// `Drop` implementation.
     ///
     /// ```
-    /// use dumpster::{sync::Gc, Collectable};
+    /// use dumpster::{sync::Gc, Trace};
     /// use std::sync::Mutex;
     ///
-    /// #[derive(Collectable)]
+    /// #[derive(Trace)]
     /// struct Cycle(Mutex<Option<Gc<Self>>>);
     ///
     /// impl Drop for Cycle {
@@ -295,7 +295,7 @@ where
     /// This function will return `None` if `self` is a "dead" `Gc`, which points to an
     /// already-deallocated object.
     /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
-    /// [`Collectable`] object.
+    /// [`Trace`] object.
     ///
     /// For a version which panics instead of returning `None`, consider using [`Clone`].
     ///
@@ -314,10 +314,10 @@ where
     /// `Drop` implementation.
     ///
     /// ```
-    /// use dumpster::{sync::Gc, Collectable};
+    /// use dumpster::{sync::Gc, Trace};
     /// use std::sync::Mutex;
     ///
-    /// #[derive(Collectable)]
+    /// #[derive(Trace)]
     /// struct Cycle(Mutex<Option<Gc<Self>>>);
     ///
     /// impl Drop for Cycle {
@@ -341,7 +341,7 @@ where
     /// Panics if `self` is a "dead" `Gc`,
     /// which points to an already-deallocated object.
     /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
-    /// [`Collectable`] object.
+    /// [`Trace`] object.
     ///
     /// # Examples
     ///
@@ -383,7 +383,7 @@ where
 
 impl<T> Clone for Gc<T>
 where
-    T: Collectable + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized,
 {
     /// Clone a garbage-collected reference.
     /// This does not clone the underlying data.
@@ -392,7 +392,7 @@ where
     ///
     /// This function will panic if the `Gc` being cloned points to a deallocated object.
     /// This is only possible if said `Gc` is accessed during the `Drop` implementation of a
-    /// `Collectable` value.
+    /// `Trace` value.
     ///
     /// For a fallible version, refer to [`Gc::try_clone`].
     ///
@@ -412,10 +412,10 @@ where
     /// The following example will fail, because cloning a `Gc` to a deallocated object is wrong.
     ///
     /// ```should_panic
-    /// use dumpster::{sync::Gc, Collectable};
+    /// use dumpster::{sync::Gc, Trace};
     /// use std::sync::Mutex;
     ///
-    /// #[derive(Collectable)]
+    /// #[derive(Trace)]
     /// struct Cycle(Mutex<Option<Gc<Self>>>);
     ///
     /// impl Drop for Cycle {
@@ -450,7 +450,7 @@ where
 
 impl<T> Drop for Gc<T>
 where
-    T: Collectable + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized,
 {
     fn drop(&mut self) {
         if currently_cleaning() {
@@ -531,14 +531,14 @@ impl CollectInfo {
     }
 }
 
-unsafe impl<T: Collectable + Send + Sync + ?Sized> Collectable for Gc<T> {
+unsafe impl<T: Trace + Send + Sync + ?Sized> Trace for Gc<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         visitor.visit_sync(self);
         Ok(())
     }
 }
 
-impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
+impl<T: Trace + Send + Sync + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     /// Dereference this pointer, creating a reference to the contained value `T`.
@@ -564,10 +564,10 @@ impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
     ///
     /// ```should_panic
     /// // This is wrong!
-    /// use dumpster::{sync::Gc, Collectable};
+    /// use dumpster::{sync::Gc, Trace};
     /// use std::sync::Mutex;
     ///
-    /// #[derive(Collectable)]
+    /// #[derive(Trace)]
     /// struct Bad {
     ///     s: String,
     ///     cycle: Mutex<Option<Gc<Bad>>>,
@@ -600,7 +600,7 @@ impl<T: Collectable + Send + Sync + ?Sized> Deref for Gc<T> {
 
 impl<T> PartialEq<Gc<T>> for Gc<T>
 where
-    T: Collectable + Send + Sync + ?Sized + PartialEq,
+    T: Trace + Send + Sync + ?Sized + PartialEq,
 {
     /// Test for equality on two `Gc`s.
     ///
@@ -631,21 +631,21 @@ where
     }
 }
 
-impl<T> Eq for Gc<T> where T: Collectable + Send + Sync + ?Sized + PartialEq {}
+impl<T> Eq for Gc<T> where T: Trace + Send + Sync + ?Sized + PartialEq {}
 
-impl<T: Collectable + Send + Sync + ?Sized> AsRef<T> for Gc<T> {
+impl<T: Trace + Send + Sync + ?Sized> AsRef<T> for Gc<T> {
     fn as_ref(&self) -> &T {
         self
     }
 }
 
-impl<T: Collectable + Send + Sync + ?Sized> Borrow<T> for Gc<T> {
+impl<T: Trace + Send + Sync + ?Sized> Borrow<T> for Gc<T> {
     fn borrow(&self) -> &T {
         self
     }
 }
 
-impl<T: Collectable + Send + Sync + ?Sized> std::fmt::Pointer for Gc<T> {
+impl<T: Trace + Send + Sync + ?Sized> std::fmt::Pointer for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Pointer::fmt(&addr_of!(**self), f)
     }
@@ -654,12 +654,12 @@ impl<T: Collectable + Send + Sync + ?Sized> std::fmt::Pointer for Gc<T> {
 #[cfg(feature = "coerce-unsized")]
 impl<T, U> std::ops::CoerceUnsized<Gc<U>> for Gc<T>
 where
-    T: std::marker::Unsize<U> + Collectable + Send + Sync + ?Sized,
-    U: Collectable + Send + Sync + ?Sized,
+    T: std::marker::Unsize<U> + Trace + Send + Sync + ?Sized,
+    U: Trace + Send + Sync + ?Sized,
 {
 }
 
-impl<T: Collectable + Send + Sync + ?Sized> Debug for Gc<T> {
+impl<T: Trace + Send + Sync + ?Sized> Debug for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

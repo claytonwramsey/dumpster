@@ -15,10 +15,10 @@
 //! # Examples
 //!
 //! ```
-//! use dumpster::{unsync::Gc, Collectable};
+//! use dumpster::{unsync::Gc, Trace};
 //! use std::cell::RefCell;
 //!
-//! #[derive(Collectable)]
+//! #[derive(Trace)]
 //! struct Foo {
 //!     refs: RefCell<Vec<Gc<Self>>>,
 //! }
@@ -41,7 +41,7 @@ use std::{
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
 };
 
-use crate::{contains_gcs, ptr::Nullable, Collectable, Visitor};
+use crate::{contains_gcs, ptr::Nullable, Trace, Visitor};
 
 use self::collect::{Dumpster, COLLECTING, DUMPSTER};
 
@@ -73,18 +73,18 @@ mod tests;
 /// object.
 /// To prevent undefined behavior, these `Gc`s are marked as dead during collection and rendered
 /// inaccessible.
-/// Dereferencing or cloning a `Gc` during the `Drop` implementation of a `Collectable` type could
+/// Dereferencing or cloning a `Gc` during the `Drop` implementation of a `Trace` type could
 /// result in the program panicking to keep the program from accessing memory after freeing it.
 /// If you're accessing a `Gc` during a `Drop` implementation, make sure to use the fallible
 /// operations [`Gc::try_deref`] and [`Gc::try_clone`].
-pub struct Gc<T: Collectable + ?Sized + 'static> {
+pub struct Gc<T: Trace + ?Sized + 'static> {
     /// A pointer to the heap allocation containing the data under concern.
     /// The pointee box should never be mutated.
     ///
     /// If `ptr` is `None`, then this is a dead `Gc`, meaning that the allocation it points to has
     /// been dropped.
     /// This can only happen observably if this `Gc` is accessed during the [`Drop`] implementation
-    /// of a [`Collectable`] type.
+    /// of a [`Trace`] type.
     ptr: Cell<Nullable<GcBox<T>>>,
 }
 
@@ -190,7 +190,7 @@ pub fn set_collect_condition(f: CollectCondition) {
 
 #[repr(C)]
 /// The underlying heap allocation for a [`Gc`].
-struct GcBox<T: Collectable + ?Sized> {
+struct GcBox<T: Trace + ?Sized> {
     /// The number of extant references to this garbage-collected data.
     /// If the stored reference count is zero, then this value is a "zombie" - in the process of
     /// being dropped - and should not be dropped again.
@@ -199,7 +199,7 @@ struct GcBox<T: Collectable + ?Sized> {
     value: T,
 }
 
-impl<T: Collectable + ?Sized> Gc<T> {
+impl<T: Trace + ?Sized> Gc<T> {
     /// Construct a new garbage-collected allocation, with `value` as its value.
     ///
     /// # Examples
@@ -228,7 +228,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// This function will return `None` if `self` is a "dead" `Gc`, which points to an
     /// already-deallocated object.
     /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
-    /// [`Collectable`] object.
+    /// [`Trace`] object.
     ///
     /// For a version which panics instead of returning `None`, consider using [`Deref`].
     ///
@@ -247,10 +247,10 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// `Drop` implementation.
     ///
     /// ```
-    /// use dumpster::{unsync::Gc, Collectable};
+    /// use dumpster::{unsync::Gc, Trace};
     /// use std::cell::OnceCell;
     ///
-    /// #[derive(Collectable)]
+    /// #[derive(Trace)]
     /// struct Cycle(OnceCell<Gc<Self>>);
     ///
     /// impl Drop for Cycle {
@@ -274,7 +274,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// This function will return `None` if `self` is a "dead" `Gc`, which points to an
     /// already-deallocated object.
     /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
-    /// [`Collectable`] object.
+    /// [`Trace`] object.
     ///
     /// For a version which panics instead of returning `None`, consider using [`Clone`].
     ///
@@ -293,10 +293,10 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// `Drop` implementation.
     ///
     /// ```
-    /// use dumpster::{unsync::Gc, Collectable};
+    /// use dumpster::{unsync::Gc, Trace};
     /// use std::cell::OnceCell;
     ///
-    /// #[derive(Collectable)]
+    /// #[derive(Trace)]
     /// struct Cycle(OnceCell<Gc<Self>>);
     ///
     /// impl Drop for Cycle {
@@ -320,7 +320,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     /// Panics if `self` is a "dead" `Gc`,
     /// which points to an already-deallocated object.
     /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
-    /// [`Collectable`] object.
+    /// [`Trace`] object.
     ///
     /// # Examples
     ///
@@ -358,7 +358,7 @@ impl<T: Collectable + ?Sized> Gc<T> {
     }
 }
 
-impl<T: Collectable + ?Sized> Deref for Gc<T> {
+impl<T: Trace + ?Sized> Deref for Gc<T> {
     type Target = T;
 
     /// Dereference this pointer, creating a reference to the contained value `T`.
@@ -386,10 +386,10 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
     ///
     /// ```should_panic
     /// // This is wrong!
-    /// use dumpster::{unsync::Gc, Collectable};
+    /// use dumpster::{unsync::Gc, Trace};
     /// use std::cell::RefCell;
     ///
-    /// #[derive(Collectable)]
+    /// #[derive(Trace)]
     /// struct Bad {
     ///     s: String,
     ///     cycle: RefCell<Option<Gc<Bad>>>,
@@ -418,7 +418,7 @@ impl<T: Collectable + ?Sized> Deref for Gc<T> {
     }
 }
 
-impl<T: Collectable + ?Sized> Clone for Gc<T> {
+impl<T: Trace + ?Sized> Clone for Gc<T> {
     #[allow(clippy::clone_on_copy)]
     /// Create a duplicate reference to the same data pointed to by `self`.
     /// This does not duplicate the data.
@@ -427,7 +427,7 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
     ///
     /// This function will panic if the `Gc` being cloned points to a deallocated object.
     /// This is only possible if said `Gc` is accessed during the `Drop` implementation of a
-    /// `Collectable` value.
+    /// `Trace` value.
     ///
     /// For a fallible version, refer to [`Gc::try_clone`].
     ///
@@ -447,10 +447,10 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
     /// The following example will fail, because cloning a `Gc` to a deallocated object is wrong.
     ///
     /// ```should_panic
-    /// use dumpster::{unsync::Gc, Collectable};
+    /// use dumpster::{unsync::Gc, Trace};
     /// use std::cell::OnceCell;
     ///
-    /// #[derive(Collectable)]
+    /// #[derive(Trace)]
     /// struct Cycle(OnceCell<Gc<Self>>);
     ///
     /// impl Drop for Cycle {
@@ -482,7 +482,7 @@ impl<T: Collectable + ?Sized> Clone for Gc<T> {
     }
 }
 
-impl<T: Collectable + ?Sized> Drop for Gc<T> {
+impl<T: Trace + ?Sized> Drop for Gc<T> {
     /// Destroy this garbage-collected pointer.
     ///
     /// If this is the last reference which can reach the pointed-to data, the allocation that it
@@ -528,7 +528,7 @@ impl<T: Collectable + ?Sized> Drop for Gc<T> {
 
 impl<T> PartialEq<Gc<T>> for Gc<T>
 where
-    T: Collectable + ?Sized + PartialEq,
+    T: Trace + ?Sized + PartialEq,
 {
     /// Test for equality on two `Gc`s.
     ///
@@ -561,7 +561,7 @@ where
     }
 }
 
-impl<T> Eq for Gc<T> where T: Collectable + ?Sized + PartialEq {}
+impl<T> Eq for Gc<T> where T: Trace + ?Sized + PartialEq {}
 
 impl CollectInfo {
     #[must_use]
@@ -604,32 +604,32 @@ impl CollectInfo {
     }
 }
 
-unsafe impl<T: Collectable + ?Sized> Collectable for Gc<T> {
+unsafe impl<T: Trace + ?Sized> Trace for Gc<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         visitor.visit_unsync(self);
         Ok(())
     }
 }
 
-impl<T: Collectable + ?Sized> AsRef<T> for Gc<T> {
+impl<T: Trace + ?Sized> AsRef<T> for Gc<T> {
     fn as_ref(&self) -> &T {
         self
     }
 }
 
-impl<T: Collectable + ?Sized> Borrow<T> for Gc<T> {
+impl<T: Trace + ?Sized> Borrow<T> for Gc<T> {
     fn borrow(&self) -> &T {
         self
     }
 }
 
-impl<T: Collectable + Default> Default for Gc<T> {
+impl<T: Trace + Default> Default for Gc<T> {
     fn default() -> Self {
         Gc::new(T::default())
     }
 }
 
-impl<T: Collectable + ?Sized> std::fmt::Pointer for Gc<T> {
+impl<T: Trace + ?Sized> std::fmt::Pointer for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Pointer::fmt(&addr_of!(**self), f)
     }
@@ -638,7 +638,7 @@ impl<T: Collectable + ?Sized> std::fmt::Pointer for Gc<T> {
 #[cfg(feature = "coerce-unsized")]
 impl<T, U> std::ops::CoerceUnsized<Gc<U>> for Gc<T>
 where
-    T: std::marker::Unsize<U> + Collectable + ?Sized,
-    U: Collectable + ?Sized,
+    T: std::marker::Unsize<U> + Trace + ?Sized,
+    U: Trace + ?Sized,
 {
 }

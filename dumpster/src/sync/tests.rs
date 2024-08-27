@@ -28,7 +28,7 @@ impl<'a> Drop for DropCount<'a> {
     }
 }
 
-unsafe impl Collectable for DropCount<'_> {
+unsafe impl Trace for DropCount<'_> {
     fn accept<V: crate::Visitor>(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
     }
@@ -40,7 +40,7 @@ struct MultiRef {
     count: DropCount<'static>,
 }
 
-unsafe impl Collectable for MultiRef {
+unsafe impl Trace for MultiRef {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
     }
@@ -76,7 +76,7 @@ fn self_referential() {
     struct Foo(Mutex<Option<Gc<Foo>>>);
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-    unsafe impl Collectable for Foo {
+    unsafe impl Trace for Foo {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
@@ -304,14 +304,14 @@ fn malicious() {
 
     unsafe impl Send for X {}
 
-    unsafe impl Collectable for A {
+    unsafe impl Trace for A {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.x.accept(visitor)?;
             self.y.accept(visitor)
         }
     }
 
-    unsafe impl Collectable for X {
+    unsafe impl Trace for X {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.a.accept(visitor)?;
 
@@ -326,7 +326,7 @@ fn malicious() {
         }
     }
 
-    unsafe impl Collectable for Y {
+    unsafe impl Trace for Y {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.a.accept(visitor)
         }
@@ -390,7 +390,7 @@ fn fuzz() {
         }
     }
 
-    unsafe impl Collectable for Alloc {
+    unsafe impl Trace for Alloc {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.refs.accept(visitor)
         }
@@ -500,13 +500,13 @@ fn root_canal() {
         a3: Mutex<Option<Gc<A>>>,
     }
 
-    unsafe impl Collectable for A {
+    unsafe impl Trace for A {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.b.accept(visitor)
         }
     }
 
-    unsafe impl Collectable for B {
+    unsafe impl Trace for B {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             let n_prior_visits = B_VISIT_COUNT.fetch_add(1, Ordering::Relaxed);
             self.a0.accept(visitor)?;
@@ -622,7 +622,7 @@ fn escape_dead_pointer() {
         }
     }
 
-    unsafe impl Collectable for Escape {
+    unsafe impl Trace for Escape {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.ptr.accept(visitor)
         }

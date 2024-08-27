@@ -19,7 +19,7 @@ use std::{
 use crate::{
     ptr::Erased,
     unsync::{default_collect_condition, CollectInfo, Gc},
-    Collectable, Visitor,
+    Trace, Visitor,
 };
 
 use super::{CollectCondition, GcBox};
@@ -58,7 +58,7 @@ struct AllocationId(pub NonNull<Cell<NonZeroUsize>>);
 
 impl<T> From<NonNull<GcBox<T>>> for AllocationId
 where
-    T: Collectable + ?Sized,
+    T: Trace + ?Sized,
 {
     /// Get an allocation ID from a pointer to an allocation.
     fn from(value: NonNull<GcBox<T>>) -> Self {
@@ -83,7 +83,7 @@ struct Cleanup {
 
 impl Cleanup {
     /// Construct a new cleanup for an allocation.
-    fn new<T: Collectable + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
+    fn new<T: Trace + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
         Cleanup {
             dfs_fn: apply_visitor::<T, Dfs>,
             mark_fn: apply_visitor::<T, Mark>,
@@ -98,7 +98,7 @@ impl Cleanup {
 /// # Safety
 ///
 /// `T` must be the same type that `ptr` was created with via [`ErasedPtr::new`].
-unsafe fn apply_visitor<T: Collectable + ?Sized, V: Visitor>(ptr: Erased, visitor: &mut V) {
+unsafe fn apply_visitor<T: Trace + ?Sized, V: Visitor>(ptr: Erased, visitor: &mut V) {
     let specified: NonNull<GcBox<T>> = ptr.specify();
     let _ = specified.as_ref().value.accept(visitor);
 }
@@ -164,7 +164,7 @@ impl Dumpster {
 
     /// Mark an allocation as "dirty," implying that it may need to be swept through later to find
     /// out if it has any references pointing to it.
-    pub fn mark_dirty<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
+    pub fn mark_dirty<T: Trace + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
         self.to_collect
             .borrow_mut()
             .entry(AllocationId::from(box_ptr))
@@ -173,7 +173,7 @@ impl Dumpster {
 
     /// Mark an allocation as "cleaned," implying that the allocation is about to be destroyed and
     /// therefore should not be cleaned up later.
-    pub fn mark_cleaned<T: Collectable + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
+    pub fn mark_cleaned<T: Trace + ?Sized>(&self, box_ptr: NonNull<GcBox<T>>) {
         self.to_collect
             .borrow_mut()
             .remove(&AllocationId::from(box_ptr));
@@ -235,7 +235,7 @@ struct Reachability {
 impl Visitor for Dfs {
     fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
-        T: Collectable + Send + Sync + ?Sized,
+        T: Trace + Send + Sync + ?Sized,
     {
         // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
         // immediately.
@@ -243,7 +243,7 @@ impl Visitor for Dfs {
 
     fn visit_unsync<T>(&mut self, gc: &Gc<T>)
     where
-        T: Collectable + ?Sized,
+        T: Trace + ?Sized,
     {
         let ptr = gc.ptr.get().unwrap();
         let next_id = AllocationId::from(ptr);
@@ -274,7 +274,7 @@ struct Mark {
 impl Visitor for Mark {
     fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
-        T: Collectable + Send + Sync + ?Sized,
+        T: Trace + Send + Sync + ?Sized,
     {
         // because `Gc` is `!Sync`, we know we won't find a `Gc` this way and can return
         // immediately.
@@ -282,7 +282,7 @@ impl Visitor for Mark {
 
     fn visit_unsync<T>(&mut self, gc: &Gc<T>)
     where
-        T: Collectable + ?Sized,
+        T: Trace + ?Sized,
     {
         let ptr = gc.ptr.get().unwrap();
         if self.visited.insert(AllocationId::from(ptr)) {
@@ -302,14 +302,14 @@ struct DropAlloc<'a> {
 impl Visitor for DropAlloc<'_> {
     fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
     where
-        T: Collectable + Send + Sync + ?Sized,
+        T: Trace + Send + Sync + ?Sized,
     {
         // do nothing
     }
 
     fn visit_unsync<T>(&mut self, gc: &Gc<T>)
     where
-        T: Collectable + ?Sized,
+        T: Trace + ?Sized,
     {
         let ptr = gc.ptr.get().unwrap();
         let id = AllocationId::from(ptr);
@@ -335,7 +335,7 @@ impl Visitor for DropAlloc<'_> {
 /// Decrement the outbound reference counts for any reachable allocations which this allocation can
 /// find.
 /// Also, drop the allocation when done.
-unsafe fn drop_assist<T: Collectable + ?Sized>(ptr: Erased, visitor: &mut DropAlloc<'_>) {
+unsafe fn drop_assist<T: Trace + ?Sized>(ptr: Erased, visitor: &mut DropAlloc<'_>) {
     if visitor
         .visited
         .insert(AllocationId::from(ptr.specify::<GcBox<T>>()))

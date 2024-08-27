@@ -17,22 +17,22 @@ use std::{
 };
 
 use dumpster::unsync::{collect, Gc};
-use dumpster_derive::Collectable;
+use dumpster_derive::Trace;
 
-#[derive(Collectable)]
+#[derive(Trace)]
 struct Empty;
 
-#[derive(Collectable)]
+#[derive(Trace)]
 #[allow(dead_code)]
 struct UnitTuple();
 
-#[derive(Collectable)]
+#[derive(Trace)]
 struct MultiRef {
     counter: &'static AtomicUsize,
     pointers: RefCell<Vec<Gc<MultiRef>>>,
 }
 
-#[derive(Collectable)]
+#[derive(Trace)]
 #[allow(unused)]
 enum Refs {
     None,
@@ -40,13 +40,13 @@ enum Refs {
     Many { refs: Vec<Gc<Refs>> },
 }
 
-#[derive(Collectable)]
+#[derive(Trace)]
 #[allow(unused)]
 enum A {
     None,
 }
 
-#[derive(Collectable)]
+#[derive(Trace)]
 #[allow(unused)]
 enum B {
     One(Gc<B>),
@@ -61,7 +61,7 @@ impl Drop for MultiRef {
 #[test]
 fn unit() {
     static DROP_COUNT: AtomicU8 = AtomicU8::new(0);
-    #[derive(Collectable)]
+    #[derive(Trace)]
     struct DropCount;
 
     impl Drop for DropCount {
@@ -156,7 +156,7 @@ fn parallel_loop() {
 #[test]
 #[allow(clippy::similar_names)]
 fn unsync_as_ptr() {
-    #[derive(Collectable)]
+    #[derive(Trace)]
     struct B(Gc<Empty>);
 
     let empty = Gc::new(Empty);

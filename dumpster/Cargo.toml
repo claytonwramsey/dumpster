@@ -1,6 +1,6 @@
 [package]
 name = "dumpster"
-version = "0.2.1"
+version = "1.0.0"
 edition = "2021"
 license = "MPL-2.0"
 authors = ["Clayton Ramsey"]
@@ -17,7 +17,7 @@ derive = ["dep:dumpster_derive"]
 
 [dependencies]
 parking_lot = "0.12"
-dumpster_derive = { version = "0.2.0", path = "../dumpster_derive", optional = true }
+dumpster_derive = { version = "1.0.0", path = "../dumpster_derive", optional = true }
 
 [dev-dependencies]
 fastrand = "2.0.0"

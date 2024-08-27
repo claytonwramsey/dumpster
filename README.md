@@ -7,14 +7,14 @@ It detects unreachable allocations and automatically frees them.
 
 In short, `dumpster` offers a great mix of usability, performance, and flexibility.
 
-- `dumpster`'s API is a drop-in replacement for `std`'s reference-counted shared allocations
-  (`Rc` and `Arc`).
-- It's very performant and has builtin implementations of both thread-local and concurrent
-  garbage collection.
-- There are no restrictions on the reference structure within a garbage-collected allocation
-  (references may point in any way you like).
-- It's trivial to make a custom type collectable using the provided derive macros.
-- You can even store `?Sized` data in a garbage-collected pointer!
+-   `dumpster`'s API is a drop-in replacement for `std`'s reference-counted shared allocations
+    (`Rc` and `Arc`).
+-   It's very performant and has builtin implementations of both thread-local and concurrent
+    garbage collection.
+-   There are no restrictions on the reference structure within a garbage-collected allocation
+    (references may point in any way you like).
+-   It's trivial to make a custom type Trace using the provided derive macros.
+-   You can even store `?Sized` data in a garbage-collected pointer!
 
 ## How it works
 
@@ -34,14 +34,14 @@ garbage collector in the module `unsync`, and one thread-safe garbage collector 
 `sync`.
 These garbage collectors can be safely mixed and matched.
 
-This library also comes with a derive macro for creating custom collectable types.
+This library also comes with a derive macro for creating custom Trace types.
 
 ## Examples
 
 ```rust
-use dumpster::{Collectable, unsync::Gc};
+use dumpster::{Trace, unsync::Gc};
 
-#[derive(Collectable)]
+#[derive(Trace)]
 struct Foo {
     ptr: RefCell<Option<Gc<Foo>>>,
 }
@@ -59,8 +59,8 @@ let foo = Gc::new(Foo {
 // If we had used `Rc` instead of `Gc`, this would have caused a memory leak.
 drop(foo);
 
-// Trigger a collection. 
-// This isn't necessary, but it guarantees that `foo` will be collected immediately (instead of 
+// Trigger a collection.
+// This isn't necessary, but it guarantees that `foo` will be collected immediately (instead of
 // later).
 dumpster::unsync::collect();
 ```
@@ -71,7 +71,7 @@ To install, simply add `dumpster` as a dependency to your project.
 
 ```toml
 [dependencies]
-dumpster = "0.2.1"
+dumpster = "1.0.0"
 ```
 
 ## Optional features
@@ -79,14 +79,14 @@ dumpster = "0.2.1"
 `dumpster` has two optional features: `derive` and `coerce-unsized`.
 
 `derive` is enabled by default.
-It enables the derive macro for `Collectable`, which makes it easy for users to implement their
-own collectable types.
+It enables the derive macro for `Trace`, which makes it easy for users to implement their
+own Trace types.
 
 ```rust
-use dumpster::{unsync::Gc, Collectable};
+use dumpster::{unsync::Gc, Trace};
 use std::cell::RefCell;
 
-#[derive(Collectable)] // no manual implementation required
+#[derive(Trace)] // no manual implementation required
 struct Foo(RefCell<Option<Gc<Foo>>>);
 
 let my_foo = Gc::new(Foo(RefCell::new(None)));
@@ -110,7 +110,7 @@ To use `coerce-unsized`, edit your installation to `Cargo.toml` to include the f
 
 ```toml
 [dependencies]
-dumpster = { version = "0.2.1", features = ["coerce-unsized"]}
+dumpster = { version = "1.0.0", features = ["coerce-unsized"]}
 ```
 
 ## License

@@ -1,14 +1,14 @@
 [package]
 name = "dumpster_derive"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 license = "MPL-2.0"
 authors = ["Clayton Ramsey"]
-description = "Implementation of #[derive(Collectable)] for dumpster"
+description = "Implementation of #[derive(Trace)] for dumpster"
 repository = "https://github.com/claytonwramsey/dumpster"
 readme = "../README.md"
 keywords = ["dumpster", "garbage_collector", "derive", "gc"]
-categories = [ "memory-management", "data-structures"]
+categories = ["memory-management", "data-structures"]
 
 [lib]
 proc-macro = true

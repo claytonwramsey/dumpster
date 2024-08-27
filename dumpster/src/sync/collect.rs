@@ -22,7 +22,7 @@ use std::{
 
 use parking_lot::{Mutex, RwLock};
 
-use crate::{ptr::Erased, Collectable, Visitor};
+use crate::{ptr::Erased, Trace, Visitor};
 
 use super::{default_collect_condition, CollectCondition, CollectInfo, Gc, GcBox, CURRENT_TAG};
 
@@ -168,7 +168,7 @@ pub fn notify_created_gc() {
 /// be cleaned up.
 pub(super) fn mark_dirty<T>(allocation: NonNull<GcBox<T>>)
 where
-    T: Collectable + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized,
 {
     let box_ref = unsafe { allocation.as_ref() };
     DUMPSTER.with(|dumpster| {
@@ -193,7 +193,7 @@ where
 /// need to be cleaned again.
 pub(super) fn mark_clean<T>(allocation: &GcBox<T>)
 where
-    T: Collectable + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized,
 {
     DUMPSTER.with(|dumpster| {
         if dumpster
@@ -344,7 +344,7 @@ impl GarbageTruck {
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-unsafe fn dfs<T: Collectable + Send + Sync + ?Sized>(
+unsafe fn dfs<T: Trace + Send + Sync + ?Sized>(
     ptr: Erased,
     ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
 ) {
@@ -396,7 +396,7 @@ struct Dfs<'a> {
 impl<'a> Visitor for Dfs<'a> {
     fn visit_sync<T>(&mut self, gc: &Gc<T>)
     where
-        T: Collectable + Send + Sync + ?Sized,
+        T: Trace + Send + Sync + ?Sized,
     {
         let ptr = unsafe { (*gc.ptr.get()).unwrap() };
         let box_ref = unsafe { ptr.as_ref() };
@@ -468,7 +468,7 @@ impl<'a> Visitor for Dfs<'a> {
 
     fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
     where
-        T: Collectable + ?Sized,
+        T: Trace + ?Sized,
     {
         unreachable!("sync Gc cannot own an unsync Gc");
     }
@@ -492,7 +492,7 @@ fn mark(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) {
 /// # Safety
 ///
 /// `ptr` must have been created from a pointer to a `GcBox<T>`.
-unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
+unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
     ptr: Erased,
     graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
@@ -506,7 +506,7 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
     impl Visitor for PrepareForDestruction<'_> {
         fn visit_sync<T>(&mut self, gc: &crate::sync::Gc<T>)
         where
-            T: Collectable + Send + Sync + ?Sized,
+            T: Trace + Send + Sync + ?Sized,
         {
             let id = AllocationId::from(unsafe { (*gc.ptr.get()).unwrap() });
             if matches!(self.graph[&id].reachability, Reachability::Reachable) {
@@ -522,7 +522,7 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
 
         fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
         where
-            T: Collectable + ?Sized,
+            T: Trace + ?Sized,
         {
             unreachable!("no unsync members of sync Gc possible!");
         }
@@ -544,7 +544,7 @@ unsafe fn destroy_erased<T: Collectable + Send + Sync + ?Sized>(
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-unsafe fn drop_weak_zero<T: Collectable + Send + Sync + ?Sized>(ptr: Erased) {
+unsafe fn drop_weak_zero<T: Trace + Send + Sync + ?Sized>(ptr: Erased) {
     let mut specified = ptr.specify::<GcBox<T>>();
     assert_eq!(specified.as_ref().weak.load(Ordering::Relaxed), 0);
     assert_eq!(specified.as_ref().strong.load(Ordering::Relaxed), 0);
@@ -559,7 +559,7 @@ unsafe impl Sync for AllocationId {}
 
 impl<T> From<&GcBox<T>> for AllocationId
 where
-    T: Collectable + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized,
 {
     fn from(value: &GcBox<T>) -> Self {
         AllocationId(NonNull::from(value).cast())
@@ -568,7 +568,7 @@ where
 
 impl<T> From<NonNull<GcBox<T>>> for AllocationId
 where
-    T: Collectable + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized,
 {
     fn from(value: NonNull<GcBox<T>>) -> Self {
         AllocationId(value.cast())

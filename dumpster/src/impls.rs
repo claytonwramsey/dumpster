@@ -6,7 +6,7 @@
     file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-//! Implementations of [`Collectable`] for common data types.
+//! Implementations of [`Trace`] for common data types.
 
 #![allow(deprecated)]
 
@@ -37,12 +37,12 @@ use std::{
     },
 };
 
-use crate::{Collectable, Visitor};
+use crate::{Trace, Visitor};
 
-/// Implement `Collectable` trivially for some parametric `?Sized` type.
+/// Implement `Trace` trivially for some parametric `?Sized` type.
 macro_rules! param_trivial_impl_unsized {
     ($x: ty) => {
-        unsafe impl<T: ?Sized> Collectable for $x {
+        unsafe impl<T: ?Sized> Trace for $x {
             #[inline]
             fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
                 Ok(())
@@ -56,21 +56,21 @@ param_trivial_impl_unsized!(RwLockReadGuard<'static, T>);
 param_trivial_impl_unsized!(&'static T);
 param_trivial_impl_unsized!(PhantomData<T>);
 
-unsafe impl<T: Collectable + ?Sized> Collectable for Box<T> {
+unsafe impl<T: Trace + ?Sized> Trace for Box<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         (**self).accept(visitor)
     }
 }
 
-unsafe impl<T> Collectable for BuildHasherDefault<T> {
+unsafe impl<T> Trace for BuildHasherDefault<T> {
     fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
     }
 }
 
-unsafe impl<'a, T: ToOwned> Collectable for Cow<'a, T>
+unsafe impl<'a, T: ToOwned> Trace for Cow<'a, T>
 where
-    T::Owned: Collectable,
+    T::Owned: Trace,
 {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         if let Cow::Owned(ref v) = self {
@@ -80,14 +80,14 @@ where
     }
 }
 
-unsafe impl<T: Collectable + ?Sized> Collectable for RefCell<T> {
+unsafe impl<T: Trace + ?Sized> Trace for RefCell<T> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_borrow().map_err(|_| ())?.accept(visitor)
     }
 }
 
-unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
+unsafe impl<T: Trace + ?Sized> Trace for Mutex<T> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_lock()
@@ -100,7 +100,7 @@ unsafe impl<T: Collectable + ?Sized> Collectable for Mutex<T> {
     }
 }
 
-unsafe impl<T: Collectable + ?Sized> Collectable for RwLock<T> {
+unsafe impl<T: Trace + ?Sized> Trace for RwLock<T> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_read()
@@ -113,7 +113,7 @@ unsafe impl<T: Collectable + ?Sized> Collectable for RwLock<T> {
     }
 }
 
-unsafe impl<T: Collectable> Collectable for Option<T> {
+unsafe impl<T: Trace> Trace for Option<T> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
@@ -123,7 +123,7 @@ unsafe impl<T: Collectable> Collectable for Option<T> {
     }
 }
 
-unsafe impl<T: Collectable, E: Collectable> Collectable for Result<T, E> {
+unsafe impl<T: Trace, E: Trace> Trace for Result<T, E> {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
@@ -133,24 +133,24 @@ unsafe impl<T: Collectable, E: Collectable> Collectable for Result<T, E> {
     }
 }
 
-unsafe impl<T: Copy + Collectable> Collectable for Cell<T> {
+unsafe impl<T: Copy + Trace> Trace for Cell<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().accept(visitor)
     }
 }
 
-unsafe impl<T: Collectable> Collectable for OnceCell<T> {
+unsafe impl<T: Trace> Trace for OnceCell<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().map_or(Ok(()), |x| x.accept(visitor))
     }
 }
 
-/// Implement [`Collectable`] for a collection data structure which has some method `iter()` that
+/// Implement [`Trace`] for a collection data structure which has some method `iter()` that
 /// iterates over all elements of the data structure and `iter_mut()` which does the same over
 /// mutable references.
-macro_rules! collectable_collection_impl {
+macro_rules! Trace_collection_impl {
     ($x: ty) => {
-        unsafe impl<T: Collectable> Collectable for $x {
+        unsafe impl<T: Trace> Trace for $x {
             #[inline]
             fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
                 for elem in self {
@@ -162,17 +162,15 @@ macro_rules! collectable_collection_impl {
     };
 }
 
-collectable_collection_impl!(Vec<T>);
-collectable_collection_impl!(VecDeque<T>);
-collectable_collection_impl!(LinkedList<T>);
-collectable_collection_impl!([T]);
-collectable_collection_impl!(HashSet<T>);
-collectable_collection_impl!(BinaryHeap<T>);
-collectable_collection_impl!(BTreeSet<T>);
+Trace_collection_impl!(Vec<T>);
+Trace_collection_impl!(VecDeque<T>);
+Trace_collection_impl!(LinkedList<T>);
+Trace_collection_impl!([T]);
+Trace_collection_impl!(HashSet<T>);
+Trace_collection_impl!(BinaryHeap<T>);
+Trace_collection_impl!(BTreeSet<T>);
 
-unsafe impl<K: Collectable, V: Collectable, S: BuildHasher + Collectable> Collectable
-    for HashMap<K, V, S>
-{
+unsafe impl<K: Trace, V: Trace, S: BuildHasher + Trace> Trace for HashMap<K, V, S> {
     fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
         for (k, v) in self {
             k.accept(visitor)?;
@@ -182,7 +180,7 @@ unsafe impl<K: Collectable, V: Collectable, S: BuildHasher + Collectable> Collec
     }
 }
 
-unsafe impl<K: Collectable, V: Collectable> Collectable for BTreeMap<K, V> {
+unsafe impl<K: Trace, V: Trace> Trace for BTreeMap<K, V> {
     fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
         for (k, v) in self {
             k.accept(visitor)?;
@@ -192,7 +190,7 @@ unsafe impl<K: Collectable, V: Collectable> Collectable for BTreeMap<K, V> {
     }
 }
 
-unsafe impl<T: Collectable, const N: usize> Collectable for [T; N] {
+unsafe impl<T: Trace, const N: usize> Trace for [T; N] {
     #[inline]
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         for elem in self {
@@ -202,11 +200,11 @@ unsafe impl<T: Collectable, const N: usize> Collectable for [T; N] {
     }
 }
 
-/// Implement [`Collectable`] for a trivially-collected type which contains no  [`Gc`]s in its
+/// Implement [`Trace`] for a trivially-collected type which contains no  [`Gc`]s in its
 /// fields.
-macro_rules! collectable_trivial_impl {
+macro_rules! Trace_trivial_impl {
     ($x: ty) => {
-        unsafe impl Collectable for $x {
+        unsafe impl Trace for $x {
             #[inline]
             fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
                 Ok(())
@@ -215,70 +213,70 @@ macro_rules! collectable_trivial_impl {
     };
 }
 
-collectable_trivial_impl!(());
+Trace_trivial_impl!(());
 
-collectable_trivial_impl!(u8);
-collectable_trivial_impl!(u16);
-collectable_trivial_impl!(u32);
-collectable_trivial_impl!(u64);
-collectable_trivial_impl!(u128);
-collectable_trivial_impl!(usize);
-collectable_trivial_impl!(i8);
-collectable_trivial_impl!(i16);
-collectable_trivial_impl!(i32);
-collectable_trivial_impl!(i64);
-collectable_trivial_impl!(i128);
-collectable_trivial_impl!(isize);
+Trace_trivial_impl!(u8);
+Trace_trivial_impl!(u16);
+Trace_trivial_impl!(u32);
+Trace_trivial_impl!(u64);
+Trace_trivial_impl!(u128);
+Trace_trivial_impl!(usize);
+Trace_trivial_impl!(i8);
+Trace_trivial_impl!(i16);
+Trace_trivial_impl!(i32);
+Trace_trivial_impl!(i64);
+Trace_trivial_impl!(i128);
+Trace_trivial_impl!(isize);
 
-collectable_trivial_impl!(bool);
-collectable_trivial_impl!(char);
+Trace_trivial_impl!(bool);
+Trace_trivial_impl!(char);
 
-collectable_trivial_impl!(f32);
-collectable_trivial_impl!(f64);
+Trace_trivial_impl!(f32);
+Trace_trivial_impl!(f64);
 
-collectable_trivial_impl!(AtomicU8);
-collectable_trivial_impl!(AtomicU16);
-collectable_trivial_impl!(AtomicU32);
-collectable_trivial_impl!(AtomicU64);
-collectable_trivial_impl!(AtomicUsize);
-collectable_trivial_impl!(AtomicI8);
-collectable_trivial_impl!(AtomicI16);
-collectable_trivial_impl!(AtomicI32);
-collectable_trivial_impl!(AtomicI64);
-collectable_trivial_impl!(AtomicIsize);
+Trace_trivial_impl!(AtomicU8);
+Trace_trivial_impl!(AtomicU16);
+Trace_trivial_impl!(AtomicU32);
+Trace_trivial_impl!(AtomicU64);
+Trace_trivial_impl!(AtomicUsize);
+Trace_trivial_impl!(AtomicI8);
+Trace_trivial_impl!(AtomicI16);
+Trace_trivial_impl!(AtomicI32);
+Trace_trivial_impl!(AtomicI64);
+Trace_trivial_impl!(AtomicIsize);
 
-collectable_trivial_impl!(NonZeroU8);
-collectable_trivial_impl!(NonZeroU16);
-collectable_trivial_impl!(NonZeroU32);
-collectable_trivial_impl!(NonZeroU64);
-collectable_trivial_impl!(NonZeroU128);
-collectable_trivial_impl!(NonZeroUsize);
-collectable_trivial_impl!(NonZeroI8);
-collectable_trivial_impl!(NonZeroI16);
-collectable_trivial_impl!(NonZeroI32);
-collectable_trivial_impl!(NonZeroI64);
-collectable_trivial_impl!(NonZeroI128);
-collectable_trivial_impl!(NonZeroIsize);
+Trace_trivial_impl!(NonZeroU8);
+Trace_trivial_impl!(NonZeroU16);
+Trace_trivial_impl!(NonZeroU32);
+Trace_trivial_impl!(NonZeroU64);
+Trace_trivial_impl!(NonZeroU128);
+Trace_trivial_impl!(NonZeroUsize);
+Trace_trivial_impl!(NonZeroI8);
+Trace_trivial_impl!(NonZeroI16);
+Trace_trivial_impl!(NonZeroI32);
+Trace_trivial_impl!(NonZeroI64);
+Trace_trivial_impl!(NonZeroI128);
+Trace_trivial_impl!(NonZeroIsize);
 
-collectable_trivial_impl!(String);
-collectable_trivial_impl!(str);
-collectable_trivial_impl!(PathBuf);
-collectable_trivial_impl!(Path);
-collectable_trivial_impl!(OsString);
-collectable_trivial_impl!(OsStr);
+Trace_trivial_impl!(String);
+Trace_trivial_impl!(str);
+Trace_trivial_impl!(PathBuf);
+Trace_trivial_impl!(Path);
+Trace_trivial_impl!(OsString);
+Trace_trivial_impl!(OsStr);
 
-collectable_trivial_impl!(DefaultHasher);
-collectable_trivial_impl!(RandomState);
-collectable_trivial_impl!(Rc<str>);
-collectable_trivial_impl!(SipHasher);
+Trace_trivial_impl!(DefaultHasher);
+Trace_trivial_impl!(RandomState);
+Trace_trivial_impl!(Rc<str>);
+Trace_trivial_impl!(SipHasher);
 
-collectable_trivial_impl!(TypeId);
+Trace_trivial_impl!(TypeId);
 
-/// Implement [`Collectable`] for a tuple.
-macro_rules! collectable_tuple {
+/// Implement [`Trace`] for a tuple.
+macro_rules! Trace_tuple {
     () => {}; // This case is handled above by the trivial case
     ($($args:ident),*) => {
-        unsafe impl<$($args: Collectable),*> Collectable for ($($args,)*) {
+        unsafe impl<$($args: Trace),*> Trace for ($($args,)*) {
             fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
                 #[allow(non_snake_case)]
                 let &($(ref $args,)*) = self;
@@ -289,53 +287,53 @@ macro_rules! collectable_tuple {
     }
 }
 
-collectable_tuple!();
-collectable_tuple!(A);
-collectable_tuple!(A, B);
-collectable_tuple!(A, B, C);
-collectable_tuple!(A, B, C, D);
-collectable_tuple!(A, B, C, D, E);
-collectable_tuple!(A, B, C, D, E, F);
-collectable_tuple!(A, B, C, D, E, F, G);
-collectable_tuple!(A, B, C, D, E, F, G, H);
-collectable_tuple!(A, B, C, D, E, F, G, H, I);
-collectable_tuple!(A, B, C, D, E, F, G, H, I, J);
+Trace_tuple!();
+Trace_tuple!(A);
+Trace_tuple!(A, B);
+Trace_tuple!(A, B, C);
+Trace_tuple!(A, B, C, D);
+Trace_tuple!(A, B, C, D, E);
+Trace_tuple!(A, B, C, D, E, F);
+Trace_tuple!(A, B, C, D, E, F, G);
+Trace_tuple!(A, B, C, D, E, F, G, H);
+Trace_tuple!(A, B, C, D, E, F, G, H, I);
+Trace_tuple!(A, B, C, D, E, F, G, H, I, J);
 
-/// Implement `Collectable` for one function type.
-macro_rules! collectable_fn {
+/// Implement `Trace` for one function type.
+macro_rules! Trace_fn {
     ($ty:ty $(,$args:ident)*) => {
-        unsafe impl<Ret $(,$args)*> Collectable for $ty {
+        unsafe impl<Ret $(,$args)*> Trace for $ty {
             fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> { Ok(()) }
         }
     }
 }
 
-/// Implement `Collectable` for all functions with a given set of args.
-macro_rules! collectable_fn_group {
+/// Implement `Trace` for all functions with a given set of args.
+macro_rules! Trace_fn_group {
     () => {
-        collectable_fn!(extern "Rust" fn () -> Ret);
-        collectable_fn!(extern "C" fn () -> Ret);
-        collectable_fn!(unsafe extern "Rust" fn () -> Ret);
-        collectable_fn!(unsafe extern "C" fn () -> Ret);
+        Trace_fn!(extern "Rust" fn () -> Ret);
+        Trace_fn!(extern "C" fn () -> Ret);
+        Trace_fn!(unsafe extern "Rust" fn () -> Ret);
+        Trace_fn!(unsafe extern "C" fn () -> Ret);
     };
     ($($args:ident),*) => {
-        collectable_fn!(extern "Rust" fn ($($args),*) -> Ret, $($args),*);
-        collectable_fn!(extern "C" fn ($($args),*) -> Ret, $($args),*);
-        collectable_fn!(extern "C" fn ($($args),*, ...) -> Ret, $($args),*);
-        collectable_fn!(unsafe extern "Rust" fn ($($args),*) -> Ret, $($args),*);
-        collectable_fn!(unsafe extern "C" fn ($($args),*) -> Ret, $($args),*);
-        collectable_fn!(unsafe extern "C" fn ($($args),*, ...) -> Ret, $($args),*);
+        Trace_fn!(extern "Rust" fn ($($args),*) -> Ret, $($args),*);
+        Trace_fn!(extern "C" fn ($($args),*) -> Ret, $($args),*);
+        Trace_fn!(extern "C" fn ($($args),*, ...) -> Ret, $($args),*);
+        Trace_fn!(unsafe extern "Rust" fn ($($args),*) -> Ret, $($args),*);
+        Trace_fn!(unsafe extern "C" fn ($($args),*) -> Ret, $($args),*);
+        Trace_fn!(unsafe extern "C" fn ($($args),*, ...) -> Ret, $($args),*);
     }
 }
 
-collectable_fn_group!();
-collectable_fn_group!(A);
-collectable_fn_group!(A, B);
-collectable_fn_group!(A, B, C);
-collectable_fn_group!(A, B, C, D);
-collectable_fn_group!(A, B, C, D, E);
-collectable_fn_group!(A, B, C, D, E, F);
-collectable_fn_group!(A, B, C, D, E, F, G);
-collectable_fn_group!(A, B, C, D, E, F, G, H);
-collectable_fn_group!(A, B, C, D, E, F, G, H, I);
-collectable_fn_group!(A, B, C, D, E, F, G, H, I, J);
+Trace_fn_group!();
+Trace_fn_group!(A);
+Trace_fn_group!(A, B);
+Trace_fn_group!(A, B, C);
+Trace_fn_group!(A, B, C, D);
+Trace_fn_group!(A, B, C, D, E);
+Trace_fn_group!(A, B, C, D, E, F);
+Trace_fn_group!(A, B, C, D, E, F, G);
+Trace_fn_group!(A, B, C, D, E, F, G, H);
+Trace_fn_group!(A, B, C, D, E, F, G, H, I);
+Trace_fn_group!(A, B, C, D, E, F, G, H, I, J);

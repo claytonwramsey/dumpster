@@ -18,8 +18,8 @@ use syn::{
     Generics, Ident, Index,
 };
 
-#[proc_macro_derive(Collectable)]
-pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+#[proc_macro_derive(Trace)]
+pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     // name of the type being implemented
@@ -32,7 +32,7 @@ pub fn derive_collectable(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     let do_visitor = delegate_methods(name, &input.data);
 
     let generated = quote! {
-        unsafe impl #impl_generics dumpster::Collectable for #name #ty_generics #where_clause {
+        unsafe impl #impl_generics dumpster::Trace for #name #ty_generics #where_clause {
             #[inline]
             fn accept<V: dumpster::Visitor>(&self, visitor: &mut V) -> std::result::Result<(), ()> {
                 #do_visitor
@@ -54,7 +54,7 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
 }
 
 #[allow(clippy::too_many_lines)]
-/// Generate method implementations for [`Collectable`] for some data type.
+/// Generate method implementations for [`Trace`] for some data type.
 fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
     match data {
         Data::Struct(data) => match data.fields {
@@ -62,7 +62,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                 let delegate_visit = f.named.iter().map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span() =>
-                        dumpster::Collectable::accept(
+                        dumpster::Trace::accept(
                             &self.#name,
                             visitor
                         )?;
@@ -75,7 +75,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                 let delegate_visit = f.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span() =>
-                        dumpster::Collectable::accept(
+                        dumpster::Trace::accept(
                             &self.#index,
                             visitor
                         )?;
@@ -110,14 +110,14 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                             }
 
                             execution_visit.extend(quote! {
-                                dumpster::Collectable::accept(
+                                dumpster::Trace::accept(
                                     #field_name,
                                     visitor
                                 )?;
                             });
 
                             execution_destroy.extend(quote! {
-                                dumpster::Collectable::destroy_gcs(
+                                dumpster::Trace::destroy_gcs(
                                     #field_name, destroyer
                                 );
                             });
@@ -144,14 +144,14 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                             }
 
                             execution_visit.extend(quote! {
-                                dumpster::Collectable::accept(
+                                dumpster::Trace::accept(
                                     #field_name,
                                     visitor
                                 )?;
                             });
 
                             execution_destroy.extend(quote! {
-                                dumpster::Collectable::destroy_gcs(#field_name, destroyer);
+                                dumpster::Trace::destroy_gcs(#field_name, destroyer);
                             });
                         }
 
@@ -170,7 +170,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
         }
         Data::Union(u) => {
             quote_spanned! {
-                u.union_token.span => compile_error!("`Collectable` must be manually implemented for unions");
+                u.union_token.span => compile_error!("`Trace` must be manually implemented for unions");
             }
         }
     }

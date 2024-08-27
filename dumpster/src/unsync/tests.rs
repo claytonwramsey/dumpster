@@ -6,7 +6,7 @@
     file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-//! Simple tests using manual implementations of [`Collectable`].
+//! Simple tests using manual implementations of [`Trace`].
 
 use crate::Visitor;
 
@@ -31,7 +31,7 @@ fn simple() {
         }
     }
 
-    unsafe impl Collectable for Foo {
+    unsafe impl Trace for Foo {
         fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
             Ok(())
         }
@@ -57,7 +57,7 @@ struct MultiRef {
     drop_count: &'static AtomicUsize,
 }
 
-unsafe impl Collectable for MultiRef {
+unsafe impl Trace for MultiRef {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
     }
@@ -74,7 +74,7 @@ fn self_referential() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
-    unsafe impl Collectable for Foo {
+    unsafe impl Trace for Foo {
         #[inline]
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
@@ -101,7 +101,7 @@ fn cyclic() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
-    unsafe impl Collectable for Foo {
+    unsafe impl Trace for Foo {
         #[inline]
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
@@ -277,7 +277,7 @@ fn escape_dead_pointer() {
         }
     }
 
-    unsafe impl Collectable for Escape {
+    unsafe impl Trace for Escape {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
             self.ptr.accept(visitor)
         }
