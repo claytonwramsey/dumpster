@@ -151,10 +151,12 @@ pub fn notify_dropped_gc() {
         }
     });
 
-    if (unsafe {
-        transmute::<_, CollectCondition>(GARBAGE_TRUCK.collect_condition.load(Ordering::Relaxed))
-    })(&CollectInfo { _private: () })
-    {
+    let collect_cond = unsafe {
+        transmute::<*mut (), CollectCondition>(
+            GARBAGE_TRUCK.collect_condition.load(Ordering::Relaxed),
+        )
+    };
+    if collect_cond(&CollectInfo { _private: () }) {
         GARBAGE_TRUCK.collect_all();
     }
 }
