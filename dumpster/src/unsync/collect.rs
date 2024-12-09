@@ -149,7 +149,7 @@ impl Dumpster {
                 reachable: &mark.visited,
             };
 
-            COLLECTING.with(|c| c.set(true));
+            COLLECTING.set(true);
             for cleanup in self
                 .to_collect
                 .borrow_mut()
@@ -158,7 +158,7 @@ impl Dumpster {
             {
                 (cleanup.drop_fn)(cleanup.ptr, &mut decrementer);
             }
-            COLLECTING.with(|c| c.set(false));
+            COLLECTING.set(false);
         }
     }
 

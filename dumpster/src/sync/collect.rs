@@ -152,6 +152,7 @@ pub fn notify_dropped_gc() {
     });
 
     let collect_cond = unsafe {
+        // SAFETY: we only ever store collection conditions in the collect-condition box
         transmute::<*mut (), CollectCondition>(
             GARBAGE_TRUCK.collect_condition.load(Ordering::Relaxed),
         )
@@ -168,25 +169,24 @@ pub fn notify_created_gc() {
 
 /// Mark an allocation as "dirty," implying that it may or may not be inaccessible and need to
 /// be cleaned up.
-pub(super) fn mark_dirty<T>(allocation: NonNull<GcBox<T>>)
+pub(super) fn mark_dirty<T>(allocation: &GcBox<T>)
 where
     T: Trace + Send + Sync + ?Sized,
 {
-    let box_ref = unsafe { allocation.as_ref() };
     DUMPSTER.with(|dumpster| {
         if dumpster
             .contents
             .borrow_mut()
             .insert(
-                AllocationId::from(box_ref),
+                AllocationId::from(allocation),
                 TrashCan {
-                    ptr: Erased::new(allocation),
+                    ptr: Erased::new(NonNull::from(allocation)),
                     dfs_fn: dfs::<T>,
                 },
             )
             .is_none()
         {
-            box_ref.weak.fetch_add(1, Ordering::Acquire);
+            allocation.weak.fetch_add(1, Ordering::Acquire);
         }
     });
 }
@@ -236,7 +236,7 @@ pub fn set_collect_condition(f: CollectCondition) {
 
 /// Determine whether this thread is currently cleaning.
 pub fn currently_cleaning() -> bool {
-    CLEANING.with(Cell::get)
+    CLEANING.get()
 }
 
 /// Get the number of `[Gc]`s dropped since the last collection.
@@ -258,8 +258,11 @@ impl Dumpster {
         for (id, can) in self.contents.borrow_mut().drain() {
             if guard.insert(id, can).is_some() {
                 unsafe {
-                    id.0.as_ref().weak.fetch_sub(1, Ordering::Release);
+                    // SAFETY: an allocation can only be in the dumpster if it still exists and its header is valid
+                    id.0.as_ref()
                 }
+                .weak
+                .fetch_sub(1, Ordering::Release);
             }
         }
     }
@@ -285,7 +288,12 @@ impl GarbageTruck {
         CURRENT_TAG.fetch_add(1, Ordering::Release);
 
         for (_, TrashCan { ptr, dfs_fn }) in to_collect {
-            unsafe { dfs_fn(ptr, &mut ref_graph) };
+            unsafe {
+                // SAFETY: `ptr` may only be in `to_collect` if it was a valid pointer
+                // and `dfs_fn` must have been created with the intent of referring to
+                // the erased type of `ptr`.
+                dfs_fn(ptr, &mut ref_graph);
+            }
         }
 
         let root_ids = ref_graph
@@ -293,7 +301,11 @@ impl GarbageTruck {
             .filter_map(|(&k, v)| match v.reachability {
                 Reachability::Reachable => Some(k),
                 Reachability::Unknown { n_unaccounted, .. } => (n_unaccounted > 0
-                    || unsafe { k.0.as_ref().weak.load(Ordering::Acquire) > 1 })
+                    || unsafe {
+                        // SAFETY: we found `k` in the reference graph,
+                        // so it must still be an extant allocation
+                        k.0.as_ref().weak.load(Ordering::Acquire) > 1
+                    })
                 .then_some(k),
             })
             .collect::<Vec<_>>();
@@ -301,13 +313,15 @@ impl GarbageTruck {
             mark(root_id, &mut ref_graph);
         }
 
-        CLEANING.with(|c| c.set(true));
+        CLEANING.set(true);
         // set of allocations which must be destroyed because we were the last weak pointer to it
         let mut weak_destroys = Vec::new();
         for (id, node) in &ref_graph {
             let header_ref = unsafe { id.0.as_ref() };
             match node.reachability {
                 Reachability::Unknown { destroy_fn, .. } => unsafe {
+                    // SAFETY: `destroy_fn` must have been created with `node.ptr` in mind,
+                    // and we have proven that no other references to `node.ptr` exist
                     destroy_fn(node.ptr, &ref_graph);
                 },
                 Reachability::Reachable => {
@@ -323,9 +337,14 @@ impl GarbageTruck {
                 }
             };
         }
-        CLEANING.with(|c| c.set(false));
+        CLEANING.set(false);
         for (drop_fn, ptr) in weak_destroys {
-            unsafe { drop_fn(ptr) };
+            unsafe {
+                // SAFETY: we have proven (via header_ref.weak = 1) that the cleaning
+                // process had the last reference to the allocation.
+                // `drop_fn` must have been created with the true value of `ptr` in mind.
+                drop_fn(ptr);
+            };
         }
         drop(collecting_guard);
     }
@@ -350,7 +369,10 @@ unsafe fn dfs<T: Trace + Send + Sync + ?Sized>(
     ptr: Erased,
     ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
 ) {
-    let box_ref = unsafe { ptr.specify::<GcBox<T>>().as_ref() };
+    let box_ref = unsafe {
+        // SAFETY: We require `ptr` to be a an erased pointer to `GcBox<T>`.
+        ptr.specify::<GcBox<T>>().as_ref()
+    };
     let starting_id = AllocationId::from(box_ref);
     let Entry::Vacant(v) = ref_graph.entry(starting_id) else {
         // the weak count was incremented by another DFS operation elsewhere.
@@ -400,8 +422,16 @@ impl<'a> Visitor for Dfs<'a> {
     where
         T: Trace + Send + Sync + ?Sized,
     {
-        let ptr = unsafe { (*gc.ptr.get()).unwrap() };
-        let box_ref = unsafe { ptr.as_ref() };
+        // must not use deref operators since we don't want to update the generation
+        let ptr = unsafe {
+            // SAFETY: This is the same as the deref implementation, but avoids
+            // incrementing the generation count.
+            (*gc.ptr.get()).unwrap()
+        };
+        let box_ref = unsafe {
+            // SAFETY: same as above.
+            ptr.as_ref()
+        };
         let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
         if gc.tag.swap(current_tag, Ordering::Relaxed) >= current_tag
             || box_ref.generation.load(Ordering::Acquire) >= current_tag
@@ -510,13 +540,19 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
         where
             T: Trace + Send + Sync + ?Sized,
         {
-            let id = AllocationId::from(unsafe { (*gc.ptr.get()).unwrap() });
+            let id = AllocationId::from(unsafe {
+                // SAFETY: This is the same as dereferencing the GC.
+                (*gc.ptr.get()).unwrap()
+            });
             if matches!(self.graph[&id].reachability, Reachability::Reachable) {
                 unsafe {
+                    // SAFETY: This is the same as dereferencing the GC.
                     id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
                 }
             } else {
                 unsafe {
+                    // SAFETY: The GC is unreachable,
+                    // so the GC will never be dereferenced again.
                     gc.ptr.get().write((*gc.ptr.get()).as_null());
                 }
             }

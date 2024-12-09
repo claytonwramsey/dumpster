@@ -481,7 +481,7 @@ where
             }
             _ => {
                 if contains_gcs(&box_ref.value).unwrap_or(true) {
-                    mark_dirty(ptr);
+                    mark_dirty(box_ref);
                 }
                 box_ref.weak.fetch_sub(1, Ordering::Release);
             }
