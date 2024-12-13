@@ -258,7 +258,8 @@ impl Dumpster {
         for (id, can) in self.contents.borrow_mut().drain() {
             if guard.insert(id, can).is_some() {
                 unsafe {
-                    // SAFETY: an allocation can only be in the dumpster if it still exists and its header is valid
+                    // SAFETY: an allocation can only be in the dumpster if it still exists and its
+                    // header is valid
                     id.0.as_ref()
                 }
                 .weak

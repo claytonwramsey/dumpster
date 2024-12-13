@@ -7,6 +7,8 @@
     file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
+#![expect(non_local_definitions)]
+
 use std::{
     rc::Rc,
     sync::{Arc, Mutex},

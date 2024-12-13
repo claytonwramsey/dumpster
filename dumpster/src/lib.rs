@@ -119,7 +119,7 @@
 //!
 //! # Optional features
 //!
-//! `dumpster` has two optional features: `derive` and `coerce-unsized`.
+//! ## `derive`
 //!
 //! `derive` is enabled by default.
 //! It enables the derive macro for `Trace`, which makes it easy for users to implement their
@@ -137,6 +137,13 @@
 //!
 //! drop(my_foo); // my_foo will be automatically cleaned up
 //! ```
+//!
+//! ## `either`
+//!
+//! The `either` feature adds support for the [`either`](https://crates.io/crates/either) crate,
+//! specifically by implementing [`Trace`] for [`either::Either`](https://docs.rs/either/1.13.0/either/enum.Either.html).
+//!
+//! ## `coerce-unsized`
 //!
 //! `coerce-unsized` is disabled by default.
 //! This enables the implementation of [`std::ops::CoerceUnsized`] for each garbage collector,
