@@ -11,33 +11,42 @@
 #![allow(deprecated)]
 
 use std::{
-    any::TypeId,
-    borrow::Cow,
-    cell::{Cell, OnceCell, RefCell},
-    collections::{
+    any::TypeId, borrow::Cow, cell::{Cell, OnceCell, RefCell}, collections::{
         hash_map::{DefaultHasher, RandomState},
         BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque,
-    },
-    ffi::{OsStr, OsString},
-    hash::{BuildHasher, BuildHasherDefault, SipHasher},
-    marker::PhantomData,
-    num::{
+    }, convert::Infallible, ffi::{OsStr, OsString}, hash::{BuildHasher, BuildHasherDefault, SipHasher}, marker::PhantomData, num::{
         NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize, NonZeroU128,
         NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize,
-    },
-    ops::Deref,
-    path::{Path, PathBuf},
-    rc::Rc,
-    sync::{
+    }, ops::Deref, path::{Path, PathBuf}, rc::Rc, sync::{
         atomic::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
             AtomicU64, AtomicU8, AtomicUsize,
         },
         Mutex, MutexGuard, RwLock, RwLockReadGuard, TryLockError,
-    },
+    }
 };
 
+
+
 use crate::{Trace, Visitor};
+
+unsafe impl Trace for Infallible{
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        match *self{
+
+        }
+    }
+}
+
+#[cfg(feature = "either")]
+unsafe impl<A: Trace,B: Trace> Trace for either::Either<A,B>{
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        match self{
+            either::Either::Left(a) => a.accept(visitor),
+            either::Either::Right(b) => b.accept(visitor),
+        }
+    }
+}
 
 /// Implement `Trace` trivially for some parametric `?Sized` type.
 macro_rules! param_trivial_impl_unsized {
