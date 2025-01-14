@@ -11,5 +11,5 @@ keywords = ["dumpster", "garbage_collector", "test"]
 categories = ["data-structures", "memory-management"]
 
 [dev-dependencies]
-dumpster = { version = "1.0.0", path = "../dumpster" }
-dumpster_derive = { version = "1.0.0", path = "../dumpster_derive" }
+dumpster = { version = "1.1.0", path = "../dumpster" }
+dumpster_derive = { version = "1.1.0", path = "../dumpster_derive" }

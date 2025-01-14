@@ -71,7 +71,7 @@ To install, simply add `dumpster` as a dependency to your project.
 
 ```toml
 [dependencies]
-dumpster = "1.0.0"
+dumpster = "1.1.0"
 ```
 
 ## Optional features
@@ -97,7 +97,7 @@ drop(my_foo); // my_foo will be automatically cleaned up
 
 ## `either`
 
-The `either` feature adds support for the [`either`](https://crates.io/crates/either) crate,
+`either` is disabled by default. It adds support for the [`either`](https://crates.io/crates/either) crate,
 specifically by implementing `Trace` for [`either::Either`](https://docs.rs/either/1.13.0/either/enum.Either.html).
 
 ## `coerce-unsized`
@@ -117,7 +117,7 @@ To use `coerce-unsized`, edit your installation to `Cargo.toml` to include the f
 
 ```toml
 [dependencies]
-dumpster = { version = "1.0.0", features = ["coerce-unsized"]}
+dumpster = { version = "1.1.0", features = ["coerce-unsized"]}
 ```
 
 ## License

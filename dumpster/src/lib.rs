@@ -114,7 +114,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = "1.0.0"
+//! dumpster = "1.1.0"
 //! ```
 //!
 //! # Optional features
@@ -140,7 +140,7 @@
 //!
 //! ## `either`
 //!
-//! The `either` feature adds support for the [`either`](https://crates.io/crates/either) crate,
+//! `either` is disabled by default. It adds support for the [`either`](https://crates.io/crates/either) crate,
 //! specifically by implementing [`Trace`] for [`either::Either`](https://docs.rs/either/1.13.0/either/enum.Either.html).
 //!
 //! ## `coerce-unsized`
@@ -163,7 +163,7 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = { version = "1.0.0", features = ["coerce-unsized"]}
+//! dumpster = { version = "1.1.0", features = ["coerce-unsized"]}
 //! ```
 //!
 //! # License

@@ -1,6 +1,6 @@
 [package]
 name = "dumpster"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 license = "MPL-2.0"
 authors = ["Clayton Ramsey"]
@@ -18,7 +18,7 @@ either = ["dep:either"]
 
 [dependencies]
 parking_lot = "0.12.3"
-dumpster_derive = { version = "1.0.0", path = "../dumpster_derive", optional = true }
+dumpster_derive = { version = "1.1.0", path = "../dumpster_derive", optional = true }
 either = { version = "1.13.0", optional = true }
 
 [dev-dependencies]

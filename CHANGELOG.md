@@ -1,5 +1,21 @@
 # `dumpster` Changelog
 
+## 1.1.0
+
+### New features
+
+-   Added support for [`either`](https://crates.io/crates/either).
+
+### Bug fixes
+
+-   Derive implementations no longer erroneously refer to `heapsize`.
+
+### Other changes
+
+-   Slight performance and code style improvements.
+-   Improved internal documentation on safety.
+-   Remove `strict-provenance` requirement as it is now stabilized.
+
 ## 1.0.0
 
 ### Breaking changes
