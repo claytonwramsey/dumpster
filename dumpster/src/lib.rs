@@ -179,7 +179,6 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 #![allow(clippy::multiple_crate_versions, clippy::result_unit_err)]
 #![cfg_attr(feature = "coerce-unsized", feature(coerce_unsized))]
 #![cfg_attr(feature = "coerce-unsized", feature(unsize))]
-#![cfg_attr(feature = "coerce-unsized", feature(strict_provenance))]
 
 mod impls;
 
