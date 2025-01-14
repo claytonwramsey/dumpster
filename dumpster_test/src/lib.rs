@@ -52,6 +52,12 @@ enum B {
     One(Gc<B>),
 }
 
+#[derive(Trace)]
+#[allow(unused)]
+struct Generic<T> {
+    value: T,
+}
+
 impl Drop for MultiRef {
     fn drop(&mut self) {
         self.counter.fetch_add(1, Ordering::Relaxed);

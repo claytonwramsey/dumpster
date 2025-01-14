@@ -32,9 +32,9 @@ pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let do_visitor = delegate_methods(name, &input.data);
 
     let generated = quote! {
-        unsafe impl #impl_generics dumpster::Trace for #name #ty_generics #where_clause {
+        unsafe impl #impl_generics ::dumpster::Trace for #name #ty_generics #where_clause {
             #[inline]
-            fn accept<V: dumpster::Visitor>(&self, visitor: &mut V) -> std::result::Result<(), ()> {
+            fn accept<V: ::dumpster::Visitor>(&self, visitor: &mut V) -> ::core::result::Result<(), ()> {
                 #do_visitor
             }
         }
@@ -47,7 +47,7 @@ pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 fn add_trait_bounds(mut generics: Generics) -> Generics {
     for param in &mut generics.params {
         if let GenericParam::Type(ref mut type_param) = *param {
-            type_param.bounds.push(parse_quote!(heapsize::HeapSize));
+            type_param.bounds.push(parse_quote!(::dumpster::Trace));
         }
     }
     generics
@@ -62,29 +62,29 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                 let delegate_visit = f.named.iter().map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span() =>
-                        dumpster::Trace::accept(
+                        ::dumpster::Trace::accept(
                             &self.#name,
                             visitor
                         )?;
                     }
                 });
 
-                quote! { #(#delegate_visit)* std::result::Result::Ok(()) }
+                quote! { #(#delegate_visit)* ::core::result::Result::Ok(()) }
             }
             Fields::Unnamed(ref f) => {
                 let delegate_visit = f.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span() =>
-                        dumpster::Trace::accept(
+                        ::dumpster::Trace::accept(
                             &self.#index,
                             visitor
                         )?;
                     }
                 });
 
-                quote! { #(#delegate_visit)* std::result::Result::Ok(()) }
+                quote! { #(#delegate_visit)* ::core::result::Result::Ok(()) }
             }
-            Fields::Unit => quote! { std::result::Result::Ok(()) },
+            Fields::Unit => quote! { ::core::result::Result::Ok(()) },
         },
         Data::Enum(e) => {
             let mut delegate_visit = TokenStream::new();
@@ -110,21 +110,21 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                             }
 
                             execution_visit.extend(quote! {
-                                dumpster::Trace::accept(
+                                ::dumpster::Trace::accept(
                                     #field_name,
                                     visitor
                                 )?;
                             });
 
                             execution_destroy.extend(quote! {
-                                dumpster::Trace::destroy_gcs(
+                                ::dumpster::Trace::destroy_gcs(
                                     #field_name, destroyer
                                 );
                             });
                         }
 
                         delegate_visit.extend(
-                            quote! {#name::#var_name{#binding} => {#execution_visit std::result::Result::Ok(())},},
+                            quote! {#name::#var_name{#binding} => {#execution_visit ::core::result::Result::Ok(())},},
                         );
                     }
                     Fields::Unnamed(u) => {
@@ -144,24 +144,24 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                             }
 
                             execution_visit.extend(quote! {
-                                dumpster::Trace::accept(
+                                ::dumpster::Trace::accept(
                                     #field_name,
                                     visitor
                                 )?;
                             });
 
                             execution_destroy.extend(quote! {
-                                dumpster::Trace::destroy_gcs(#field_name, destroyer);
+                                ::dumpster::Trace::destroy_gcs(#field_name, destroyer);
                             });
                         }
 
                         delegate_visit.extend(
-                            quote! {#name::#var_name(#binding) => {#execution_visit std::result::Result::Ok(())},},
+                            quote! {#name::#var_name(#binding) => {#execution_visit ::core::result::Result::Ok(())},},
                         );
                     }
                     Fields::Unit => {
                         delegate_visit
-                            .extend(quote! {#name::#var_name => std::result::Result::Ok(()),});
+                            .extend(quote! {#name::#var_name => ::core::result::Result::Ok(()),});
                     }
                 }
             }
