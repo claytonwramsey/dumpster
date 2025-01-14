@@ -32,8 +32,10 @@ jobs:
             - name: Build
               uses: actions-rs/cargo@v1
               with:
-                  command: build --all-features
+                  command: build
+                  args: --all-features
             - name: Run tests
               uses: actions-rs/cargo@v1
               with:
-                  command: test --all-features
+                  command: test
+                  args: --all-features
