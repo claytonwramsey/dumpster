@@ -7,14 +7,14 @@ It detects unreachable allocations and automatically frees them.
 
 In short, `dumpster` offers a great mix of usability, performance, and flexibility.
 
--   `dumpster`'s API is a drop-in replacement for `std`'s reference-counted shared allocations
-    (`Rc` and `Arc`).
--   It's very performant and has builtin implementations of both thread-local and concurrent
-    garbage collection.
--   There are no restrictions on the reference structure within a garbage-collected allocation
-    (references may point in any way you like).
--   It's trivial to make a custom type Trace using the provided derive macros.
--   You can even store `?Sized` data in a garbage-collected pointer!
+- `dumpster`'s API is a drop-in replacement for `std`'s reference-counted shared allocations
+  (`Rc` and `Arc`).
+- It's very performant and has builtin implementations of both thread-local and concurrent
+  garbage collection.
+- There are no restrictions on the reference structure within a garbage-collected allocation
+  (references may point in any way you like).
+- It's trivial to make a custom type Trace using the provided derive macros.
+- You can even store `?Sized` data in a garbage-collected pointer!
 
 ## How it works
 
@@ -85,13 +85,13 @@ own Trace types.
 ```rust
 use dumpster::{unsync::Gc, Trace};
 use std::cell::RefCell;
-//!
+
 #[derive(Trace)] // no manual implementation required
 struct Foo(RefCell<Option<Gc<Foo>>>);
-//!
+
 let my_foo = Gc::new(Foo(RefCell::new(None)));
 *my_foo.0.borrow_mut() = Some(my_foo.clone());
-//!
+
 drop(my_foo); // my_foo will be automatically cleaned up
 ```
 

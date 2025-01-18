@@ -34,7 +34,7 @@ use std::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
             AtomicU64, AtomicU8, AtomicUsize,
         },
-        Mutex, MutexGuard, RwLock, RwLockReadGuard, TryLockError,
+        Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, TryLockError,
     },
 };
 
@@ -157,6 +157,12 @@ unsafe impl<T: Copy + Trace> Trace for Cell<T> {
 }
 
 unsafe impl<T: Trace> Trace for OnceCell<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.get().map_or(Ok(()), |x| x.accept(visitor))
+    }
+}
+
+unsafe impl<T: Trace> Trace for OnceLock<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().map_or(Ok(()), |x| x.accept(visitor))
     }
