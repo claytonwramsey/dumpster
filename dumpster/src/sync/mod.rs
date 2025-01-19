@@ -417,7 +417,7 @@ where
     ///
     /// A `Gc` is dead if it is accessed while the value it points to has been destroyed; this only
     /// occurs if one attempts to interact with a `Gc` during a structure's [`Drop`] implementation.
-    /// However, this is not always guaranteed - sometime the garbage collector whill leave `Gc`s
+    /// However, this is not always guaranteed - sometime the garbage collector will leave `Gc`s
     /// alive in differing orders, so users should not rely on the destruction order of `Gc`s to
     /// determine whether it is dead.
     ///
@@ -439,7 +439,7 @@ where
     /// let gc1 = Gc::new(Cycle(OnceLock::new()));
     /// gc1.0.set(gc1.clone());
     /// # drop(gc1);
-    /// # dumpster::unsync::collect();
+    /// # dumpster::sync::collect();
     /// ```
     pub fn is_dead(&self) -> bool {
         unsafe { *self.ptr.get() }.is_null()
