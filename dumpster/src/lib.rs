@@ -150,14 +150,14 @@
 //! making it possible to use `Gc` with `!Sized` types conveniently.
 #![cfg_attr(
     feature = "coerce-unsized",
-    doc = r##"
+    doc = r#"
 ```
 // this only works with "coerce-unsized" enabled while compiling on nightly Rust
 use dumpster::unsync::Gc;
 
 let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 ```
-"##
+"#
 )]
 //! To use `coerce-unsized`, edit your installation to `Cargo.toml` to include the feature.
 //!

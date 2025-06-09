@@ -22,7 +22,7 @@ use super::*;
 
 struct DropCount<'a>(&'a AtomicUsize);
 
-impl<'a> Drop for DropCount<'a> {
+impl Drop for DropCount<'_> {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::Release);
     }

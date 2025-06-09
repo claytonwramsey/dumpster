@@ -336,7 +336,7 @@ impl GarbageTruck {
                         weak_destroys.push((node.weak_drop_fn, node.ptr));
                     }
                 }
-            };
+            }
         }
         CLEANING.set(false);
         for (drop_fn, ptr) in weak_destroys {
@@ -418,7 +418,7 @@ struct Dfs<'a> {
     current_id: AllocationId,
 }
 
-impl<'a> Visitor for Dfs<'a> {
+impl Visitor for Dfs<'_> {
     fn visit_sync<T>(&mut self, gc: &Gc<T>)
     where
         T: Trace + Send + Sync + ?Sized,
@@ -496,7 +496,7 @@ impl<'a> Visitor for Dfs<'a> {
                 // Restore current_id and carry on
                 swap(&mut new_id, &mut self.current_id);
             }
-        };
+        }
     }
 
     fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)

@@ -85,7 +85,7 @@ unsafe impl<T> Trace for BuildHasherDefault<T> {
     }
 }
 
-unsafe impl<'a, T: ToOwned> Trace for Cow<'a, T>
+unsafe impl<T: ToOwned> Trace for Cow<'_, T>
 where
     T::Owned: Trace,
 {
