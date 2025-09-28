@@ -169,7 +169,12 @@ pub fn notify_created_gc() {
 
 /// Mark an allocation as "dirty," implying that it may or may not be inaccessible and need to
 /// be cleaned up.
-pub(super) fn mark_dirty<T>(allocation: &GcBox<T>)
+///
+/// # Safety
+///
+/// When calling this method, you have to ensure that `allocation`
+/// is [convertible to a reference](core::ptr#pointer-to-reference-conversion).
+pub(super) unsafe fn mark_dirty<T>(allocation: NonNull<GcBox<T>>)
 where
     T: Trace + Send + Sync + ?Sized,
 {
@@ -180,13 +185,17 @@ where
             .insert(
                 AllocationId::from(allocation),
                 TrashCan {
-                    ptr: Erased::new(NonNull::from(allocation)),
+                    ptr: Erased::new(allocation),
                     dfs_fn: dfs::<T>,
                 },
             )
             .is_none()
         {
-            allocation.weak.fetch_add(1, Ordering::Acquire);
+            // SAFETY: the caller must guarantee that `allocation` meets all the
+            // requirements for a reference.
+            unsafe { allocation.as_ref() }
+                .weak
+                .fetch_add(1, Ordering::Acquire);
         }
     });
 }

@@ -11,7 +11,7 @@
 use std::{
     fmt,
     mem::{size_of, MaybeUninit},
-    ptr::{addr_of, addr_of_mut, copy_nonoverlapping, NonNull},
+    ptr::{addr_of, addr_of_mut, copy_nonoverlapping, null, NonNull},
 };
 
 #[repr(C)]
@@ -21,7 +21,10 @@ use std::{
 /// interpretation.
 /// We trust that all pointers (even to `?Sized` or `dyn` types) are 2 words or fewer in size.
 /// This is a hack! Like, a big hack!
-pub(crate) struct Erased([usize; 2]);
+pub(crate) struct Erased([*const u8; 2]);
+
+unsafe impl Send for Erased {}
+unsafe impl Sync for Erased {}
 
 impl Erased {
     /// Construct a new erased pointer to some data from a reference
@@ -32,7 +35,7 @@ impl Erased {
     /// `ErasedPtr`.
     /// To my knowledge, there are no pointer types with this property.
     pub fn new<T: ?Sized>(reference: NonNull<T>) -> Erased {
-        let mut ptr = Erased([0; 2]);
+        let mut ptr = Erased([null(); 2]);
         let ptr_size = size_of::<NonNull<T>>();
         // Extract out the pointer as raw memory
         assert!(
