@@ -172,18 +172,50 @@ impl<T: ?Sized> fmt::Debug for Nullable<T> {
 
 #[cfg(test)]
 mod tests {
+    use core::any::Any;
     use std::alloc::{dealloc, Layout};
 
     use super::*;
 
     #[test]
     fn erased_alloc() {
-        let orig_ptr = Box::leak(Box::new(7u8));
+        let orig_ptr: &mut u8 = Box::leak(Box::new(7));
         let erased_ptr = Erased::new(NonNull::from(orig_ptr));
 
         unsafe {
             let remade_ptr = erased_ptr.specify::<u8>();
+            assert_eq!(*remade_ptr.as_ref(), 7);
             dealloc(remade_ptr.as_ptr(), Layout::for_value(remade_ptr.as_ref()));
+        }
+    }
+
+    #[test]
+    fn erased_alloc_slice() {
+        let orig_ptr: &mut [u8] = Box::leak(Box::new([7, 8, 9]));
+        let erased_ptr = Erased::new(NonNull::from(orig_ptr));
+
+        unsafe {
+            let remade_ptr = erased_ptr.specify::<[u8]>();
+            assert_eq!(remade_ptr.as_ref(), [7, 8, 9]);
+            dealloc(
+                remade_ptr.as_ptr().cast(),
+                Layout::for_value(remade_ptr.as_ref()),
+            );
+        }
+    }
+
+    #[test]
+    fn erased_alloc_dyn() {
+        let orig_ptr: &mut dyn Any = Box::leak(Box::new(7u8));
+        let erased_ptr = Erased::new(NonNull::from(orig_ptr));
+
+        unsafe {
+            let remade_ptr = erased_ptr.specify::<dyn Any>();
+            assert_eq!(*remade_ptr.as_ref().downcast_ref::<u8>().unwrap(), 7);
+            dealloc(
+                remade_ptr.as_ptr().cast(),
+                Layout::for_value(remade_ptr.as_ref()),
+            );
         }
     }
 }
