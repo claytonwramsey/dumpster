@@ -1,5 +1,11 @@
 # `dumpster` Changelog
 
+## 1.1.1
+
+### Bug fixes
+
+-   Using `dumpster` no longer fails under Miri as we have changed our underlying pointer model.
+
 ## 1.1.0
 
 ### New features

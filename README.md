@@ -117,7 +117,7 @@ To use `coerce-unsized`, edit your installation to `Cargo.toml` to include the f
 
 ```toml
 [dependencies]
-dumpster = { version = "1.1.0", features = ["coerce-unsized"]}
+dumpster = { version = "1.1.1", features = ["coerce-unsized"]}
 ```
 
 ## License
