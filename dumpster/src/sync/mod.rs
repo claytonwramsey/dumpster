@@ -288,10 +288,7 @@ where
     /// # dumpster::sync::collect();
     /// ```
     pub fn try_deref(gc: &Gc<T>) -> Option<&T> {
-        #[allow(clippy::unnecessary_lazy_evaluations)]
-        unsafe {
-            (!(*gc.ptr.get()).is_null()).then(|| &**gc)
-        }
+        unsafe { (!(*gc.ptr.get()).is_null()).then(|| &**gc) }
     }
 
     /// Attempt to clone this `Gc`.

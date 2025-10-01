@@ -94,7 +94,6 @@ impl<T: ?Sized> Nullable<T> {
         Nullable(ptr.as_ptr())
     }
 
-    #[allow(clippy::unused_self)]
     /// Convert this pointer to a null pointer.
     pub fn as_null(self) -> Nullable<T> {
         Nullable(self.0.with_addr(0))

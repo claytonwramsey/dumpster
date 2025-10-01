@@ -166,7 +166,6 @@ pub fn default_collect_condition(info: &CollectInfo) -> bool {
     info.n_gcs_dropped_since_last_collect() > info.n_gcs_existing()
 }
 
-#[allow(clippy::missing_panics_doc)]
 /// Set the function which determines whether the garbage collector should be run.
 ///
 /// `f` will be periodically called by the garbage collector to determine whether it should perform
@@ -223,7 +222,6 @@ impl<T: Trace + ?Sized> Gc<T> {
         }
     }
 
-    #[allow(clippy::unnecessary_lazy_evaluations)]
     /// Attempt to dereference this `Gc`.
     ///
     /// This function will return `None` if `self` is a "dead" `Gc`, which points to an
@@ -534,7 +532,6 @@ impl<T: Trace + ?Sized> Deref for Gc<T> {
 }
 
 impl<T: Trace + ?Sized> Clone for Gc<T> {
-    #[allow(clippy::clone_on_copy)]
     /// Create a duplicate reference to the same data pointed to by `self`.
     /// This does not duplicate the data.
     ///

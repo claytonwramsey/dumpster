@@ -176,6 +176,7 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 #![warn(clippy::cargo)]
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
+#![warn(clippy::allow_attributes, reason = "prefer expect over allow")]
 #![allow(clippy::multiple_crate_versions, clippy::result_unit_err)]
 #![cfg_attr(feature = "coerce-unsized", feature(coerce_unsized))]
 #![cfg_attr(feature = "coerce-unsized", feature(unsize))]

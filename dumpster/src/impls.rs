@@ -556,6 +556,7 @@ macro_rules! Trace_tuple {
     ($($args:ident),*) => {
         unsafe impl<$($args: Trace),*> Trace for ($($args,)*) {
             fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+                #[expect(clippy::allow_attributes)]
                 #[allow(non_snake_case)]
                 let &($(ref $args,)*) = self;
                 $(($args).accept(visitor)?;)*

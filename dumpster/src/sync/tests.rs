@@ -36,7 +36,7 @@ unsafe impl Trace for DropCount<'_> {
 
 struct MultiRef {
     refs: Mutex<Vec<Gc<MultiRef>>>,
-    #[allow(unused)]
+    #[expect(unused)]
     count: DropCount<'static>,
 }
 
@@ -373,7 +373,7 @@ fn malicious() {
 
 #[test]
 #[cfg_attr(miri, ignore = "miri is too slow")]
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 fn fuzz() {
     const N: usize = 20_000;
     static DROP_DETECTORS: [AtomicUsize; N] = {

@@ -126,7 +126,6 @@ thread_local! {
     static CLEANING: Cell<bool> = const { Cell::new(false) };
 }
 
-#[allow(clippy::module_name_repetitions)]
 /// Collect all allocations in the garbage truck (but not necessarily the dumpster), then await
 /// completion of the collection.
 /// Ensures that all allocations dropped on the calling thread are cleaned up
@@ -218,7 +217,6 @@ where
     });
 }
 
-#[allow(clippy::missing_panics_doc)]
 /// Set the function which determines whether the garbage collector should be run.
 ///
 /// `f` will be periodically called by the garbage collector to determine whether it should perform
@@ -285,7 +283,6 @@ impl Dumpster {
 }
 
 impl GarbageTruck {
-    #[allow(clippy::module_name_repetitions)]
     /// Search through the set of existing allocations which have been marked inaccessible, and see
     /// if they are inaccessible.
     /// If so, drop those allocations.
