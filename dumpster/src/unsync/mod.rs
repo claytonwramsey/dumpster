@@ -36,6 +36,7 @@ use std::{
     alloc::{dealloc, Layout},
     borrow::Borrow,
     cell::Cell,
+    mem::ManuallyDrop,
     num::NonZeroUsize,
     ops::Deref,
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
@@ -189,8 +190,10 @@ pub fn set_collect_condition(f: CollectCondition) {
 }
 
 #[repr(C)]
+// This is only public to make the `unsync_coerce_gc` macro work.
+#[doc(hidden)]
 /// The underlying heap allocation for a [`Gc`].
-struct GcBox<T: Trace + ?Sized> {
+pub struct GcBox<T: Trace + ?Sized> {
     /// The number of extant references to this garbage-collected data.
     ref_count: Cell<NonZeroUsize>,
     /// The stored value inside this garbage-collected box.
@@ -417,6 +420,43 @@ impl<T: Trace + ?Sized> Gc<T> {
     pub fn is_dead(&self) -> bool {
         self.ptr.get().is_null()
     }
+
+    /// Exists solely for the [`unsync_coerce_gc`] macro.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn __private_into_ptr(this: Self) -> *const GcBox<T> {
+        let this = ManuallyDrop::new(this);
+        this.ptr.get().as_ptr()
+    }
+
+    /// Exists solely for the [`unsync_coerce_gc`] macro.
+    #[must_use]
+    #[doc(hidden)]
+    pub unsafe fn __private_from_ptr(ptr: *const GcBox<T>) -> Self {
+        Self {
+            ptr: Cell::new(Nullable::from_ptr(ptr.cast_mut())),
+        }
+    }
+}
+
+/// Allows coercing `T` of [`unsync::Gc<T>`](Gc).
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::{unsync::Gc, unsync_coerce_gc};
+///
+/// let gc1: Gc<[u8; 3]> = Gc::new([7, 8, 9]);
+/// let gc2: Gc<[u8]> = unsync_coerce_gc!(gc1);
+/// assert_eq!(&gc2[..], &[7, 8, 9]);
+/// ```
+#[macro_export]
+macro_rules! unsync_coerce_gc {
+    ($gc:expr) => {{
+        // Temporarily convert the `Gc` into a raw pointer to allow for coercion to occur.
+        let ptr: *const _ = $crate::unsync::Gc::__private_into_ptr($gc);
+        unsafe { $crate::unsync::Gc::__private_from_ptr(ptr) }
+    }};
 }
 
 impl<T: Trace + ?Sized> Deref for Gc<T> {

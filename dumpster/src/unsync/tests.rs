@@ -8,7 +8,7 @@
 
 //! Simple tests using manual implementations of [`Trace`].
 
-use crate::Visitor;
+use crate::{unsync_coerce_gc, Visitor};
 
 use super::*;
 use std::{
@@ -249,6 +249,17 @@ fn double_borrow() {
 fn coerce_array() {
     let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
     let gc2: Gc<[u8]> = gc1;
+    assert_eq!(gc2.len(), 3);
+    assert_eq!(
+        std::mem::size_of::<Gc<[u8]>>(),
+        2 * std::mem::size_of::<usize>()
+    );
+}
+
+#[test]
+fn coerce_array_using_macro() {
+    let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
+    let gc2: Gc<[u8]> = unsync_coerce_gc!(gc1);
     assert_eq!(gc2.len(), 3);
     assert_eq!(
         std::mem::size_of::<Gc<[u8]>>(),

@@ -36,6 +36,7 @@ use std::{
     borrow::Borrow,
     cell::UnsafeCell,
     fmt::Debug,
+    mem::ManuallyDrop,
     num::NonZeroUsize,
     ops::Deref,
     ptr::{addr_of, addr_of_mut, drop_in_place, NonNull},
@@ -96,8 +97,10 @@ pub struct Gc<T: Trace + Send + Sync + ?Sized + 'static> {
 static CURRENT_TAG: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
+// This is only public to make the `sync_coerce_gc` macro work.
+#[doc(hidden)]
 /// The backing allocation for a [`Gc`].
-struct GcBox<T>
+pub struct GcBox<T>
 where
     T: Trace + Send + Sync + ?Sized,
 {
@@ -444,6 +447,48 @@ where
     pub fn is_dead(&self) -> bool {
         unsafe { *self.ptr.get() }.is_null()
     }
+
+    /// Exists solely for the [`sync_coerce_gc`] macro.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn __private_into_ptr(this: Self) -> (*const GcBox<T>, usize) {
+        let this = ManuallyDrop::new(this);
+        let ptr = &raw const this.ptr;
+        let tag = &raw const this.tag;
+        let ptr = unsafe { ptr.read() }.into_inner().as_ptr();
+        let tag = unsafe { tag.read() }.into_inner();
+        (ptr, tag)
+    }
+
+    /// Exists solely for the [`sync_coerce_gc`] macro.
+    #[must_use]
+    #[doc(hidden)]
+    pub unsafe fn __private_from_ptr(ptr: *const GcBox<T>, tag: usize) -> Self {
+        Self {
+            ptr: UnsafeCell::new(Nullable::from_ptr(ptr.cast_mut())),
+            tag: AtomicUsize::new(tag),
+        }
+    }
+}
+
+/// Allows coercing `T` of [`sync::Gc<T>`](Gc).
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::{sync::Gc, sync_coerce_gc};
+///
+/// let gc1: Gc<[u8; 3]> = Gc::new([7, 8, 9]);
+/// let gc2: Gc<[u8]> = sync_coerce_gc!(gc1);
+/// assert_eq!(&gc2[..], &[7, 8, 9]);
+/// ```
+#[macro_export]
+macro_rules! sync_coerce_gc {
+    ($gc:expr) => {{
+        // Temporarily convert the `Gc` into a raw pointer to allow for coercion to occur.
+        let (ptr, tag): (*const _, usize) = $crate::sync::Gc::__private_into_ptr($gc);
+        unsafe { $crate::sync::Gc::__private_from_ptr(ptr, tag) }
+    }};
 }
 
 impl<T> Clone for Gc<T>
