@@ -441,6 +441,9 @@ impl<T: Trace + ?Sized> Gc<T> {
 
 /// Allows coercing `T` of [`unsync::Gc<T>`](Gc).
 ///
+/// This means that you can convert a `Gc` containing a strictly-sized type (such as `[T; N]`) into
+/// a `Gc` containing its unsized version (such as `[T]`), all without using nightly-only features.
+///
 /// # Examples
 ///
 /// ```
@@ -449,6 +452,17 @@ impl<T: Trace + ?Sized> Gc<T> {
 /// let gc1: Gc<[u8; 3]> = Gc::new([7, 8, 9]);
 /// let gc2: Gc<[u8]> = unsync_coerce_gc!(gc1);
 /// assert_eq!(&gc2[..], &[7, 8, 9]);
+/// ```
+///
+/// Note that although this macro allows for type conversion, it _cannot_ be used for converting
+/// between incompatible types.
+///
+/// ```compile_fail
+/// // This program is incorrect!
+/// use dumpster::{unsync::Gc, unsync_coerce_gc};
+///
+/// let gc1: Gc<u8> = Gc::new(1);
+/// let gc2: Gc<i8> = unsync_coerce_gc!(gc1);
 /// ```
 #[macro_export]
 macro_rules! unsync_coerce_gc {
