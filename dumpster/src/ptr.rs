@@ -83,12 +83,6 @@ impl fmt::Debug for Erased {
     }
 }
 
-#[cfg(not(feature = "coerce-unsized"))]
-/// A nullable pointer to an `?Sized` type.
-///
-/// We need this because it's actually impossible to create a null `*mut T` if `T` is `?Sized`.
-pub(crate) struct Nullable<T: ?Sized>(Option<NonNull<T>>);
-#[cfg(feature = "coerce-unsized")]
 /// A nullable pointer to an `?Sized` type.
 ///
 /// We need this because it's actually impossible to create a null `*mut T` if `T` is `?Sized`.
@@ -97,27 +91,13 @@ pub(crate) struct Nullable<T: ?Sized>(*mut T);
 impl<T: ?Sized> Nullable<T> {
     /// Create a new nullable pointer from a non-null pointer.
     pub fn new(ptr: NonNull<T>) -> Nullable<T> {
-        #[cfg(not(feature = "coerce-unsized"))]
-        {
-            Nullable(Some(ptr))
-        }
-        #[cfg(feature = "coerce-unsized")]
-        {
-            Nullable(ptr.as_ptr())
-        }
+        Nullable(ptr.as_ptr())
     }
 
     #[allow(clippy::unused_self)]
     /// Convert this pointer to a null pointer.
     pub fn as_null(self) -> Nullable<T> {
-        #[cfg(not(feature = "coerce-unsized"))]
-        {
-            Nullable(None)
-        }
-        #[cfg(feature = "coerce-unsized")]
-        {
-            Nullable(self.0.with_addr(0))
-        }
+        Nullable(self.0.with_addr(0))
     }
 
     /// Determine whether this pointer is null.
@@ -127,14 +107,17 @@ impl<T: ?Sized> Nullable<T> {
 
     /// Convert this pointer to an `Option<NonNull<T>>`.
     pub fn as_option(self) -> Option<NonNull<T>> {
-        #[cfg(not(feature = "coerce-unsized"))]
-        {
-            self.0
-        }
-        #[cfg(feature = "coerce-unsized")]
-        {
-            NonNull::new(self.0)
-        }
+        NonNull::new(self.0)
+    }
+
+    /// Convert this pointer to a `*mut T`.
+    pub fn as_ptr(self) -> *mut T {
+        self.0
+    }
+
+    /// Create a new nullable pointer from a pointer.
+    pub fn from_ptr(ptr: *mut T) -> Self {
+        Self(ptr)
     }
 
     /// Convert this pointer to a `NonNull<T>`, panicking if this pointer is null with message
