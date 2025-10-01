@@ -11,24 +11,17 @@
 #![allow(deprecated)]
 
 use std::{
-    any::TypeId,
     borrow::Cow,
     cell::{Cell, OnceCell, RefCell},
-    collections::{
-        hash_map::{DefaultHasher, RandomState},
-        BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque,
-    },
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
     convert::Infallible,
-    ffi::{OsStr, OsString},
-    hash::{BuildHasher, BuildHasherDefault, SipHasher},
+    hash::{BuildHasher, BuildHasherDefault},
     marker::PhantomData,
     num::{
         NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize, NonZeroU128,
         NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize,
     },
     ops::Deref,
-    path::{Path, PathBuf},
-    rc::Rc,
     sync::{
         atomic::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
@@ -72,6 +65,21 @@ param_trivial_impl_unsized!(MutexGuard<'static, T>);
 param_trivial_impl_unsized!(RwLockReadGuard<'static, T>);
 param_trivial_impl_unsized!(&'static T);
 param_trivial_impl_unsized!(PhantomData<T>);
+
+/// Implement `Trace` trivially for some parametric `Sized` type.
+macro_rules! param_trivial_impl_sized {
+    ($x: ty) => {
+        unsafe impl<T> Trace for $x {
+            #[inline]
+            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+                Ok(())
+            }
+        }
+    };
+}
+
+param_trivial_impl_sized!(std::future::Pending<T>);
+param_trivial_impl_sized!(std::mem::Discriminant<T>);
 
 unsafe impl<T: Trace + ?Sized> Trace for Box<T> {
     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
@@ -168,6 +176,133 @@ unsafe impl<T: Trace> Trace for OnceLock<T> {
     }
 }
 
+unsafe impl<T: Trace> Trace for std::cmp::Reverse<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.0.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace + ?Sized> Trace for std::io::BufReader<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.get_ref().accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace + std::io::Write + ?Sized> Trace for std::io::BufWriter<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.get_ref().accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace, U: Trace> Trace for std::io::Chain<T, U> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        let (t, u) = self.get_ref();
+        t.accept(visitor)?;
+        u.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::io::Cursor<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.get_ref().accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace + std::io::Write + ?Sized> Trace for std::io::LineWriter<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.get_ref().accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::io::Take<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.get_ref().accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::mem::ManuallyDrop<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        (**self).accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::num::Saturating<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.0.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::num::Wrapping<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.0.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::ops::Range<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.start.accept(visitor)?;
+        self.end.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::ops::RangeFrom<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.start.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::ops::RangeInclusive<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.start().accept(visitor)?;
+        self.end().accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::ops::RangeTo<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.end.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::ops::RangeToInclusive<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.end.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::ops::Bound<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        match self {
+            std::ops::Bound::Included(x) | std::ops::Bound::Excluded(x) => x.accept(visitor),
+            std::ops::Bound::Unbounded => Ok(()),
+        }
+    }
+}
+
+unsafe impl<B: Trace, C: Trace> Trace for std::ops::ControlFlow<B, C> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        match self {
+            std::ops::ControlFlow::Continue(c) => c.accept(visitor),
+            std::ops::ControlFlow::Break(b) => b.accept(visitor),
+        }
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::panic::AssertUnwindSafe<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        self.0.accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace> Trace for std::task::Poll<T> {
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        match self {
+            std::task::Poll::Ready(r) => r.accept(visitor),
+            std::task::Poll::Pending => Ok(()),
+        }
+    }
+}
+
 /// Implement [`Trace`] for a collection data structure which has some method `iter()` that
 /// iterates over all elements of the data structure and `iter_mut()` which does the same over
 /// mutable references.
@@ -192,6 +327,16 @@ Trace_collection_impl!([T]);
 Trace_collection_impl!(HashSet<T>);
 Trace_collection_impl!(BinaryHeap<T>);
 Trace_collection_impl!(BTreeSet<T>);
+
+unsafe impl<T: Trace> Trace for std::vec::IntoIter<T> {
+    #[inline]
+    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        for elem in self.as_slice() {
+            elem.accept(visitor)?;
+        }
+        Ok(())
+    }
+}
 
 unsafe impl<K: Trace, V: Trace, S: BuildHasher + Trace> Trace for HashMap<K, V, S> {
     fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
@@ -281,19 +426,129 @@ Trace_trivial_impl!(NonZeroI64);
 Trace_trivial_impl!(NonZeroI128);
 Trace_trivial_impl!(NonZeroIsize);
 
-Trace_trivial_impl!(String);
+Trace_trivial_impl!(std::alloc::Layout);
+Trace_trivial_impl!(std::alloc::LayoutError);
+Trace_trivial_impl!(std::alloc::System);
+
+Trace_trivial_impl!(std::any::TypeId);
+
+Trace_trivial_impl!(std::ascii::EscapeDefault);
+
+Trace_trivial_impl!(std::backtrace::Backtrace);
+Trace_trivial_impl!(std::backtrace::BacktraceStatus);
+
+Trace_trivial_impl!(std::cmp::Ordering);
+
+Trace_trivial_impl!(std::char::CharTryFromError);
+Trace_trivial_impl!(std::char::EscapeDebug);
+Trace_trivial_impl!(std::char::EscapeDefault);
+Trace_trivial_impl!(std::char::EscapeUnicode);
+Trace_trivial_impl!(std::char::ToLowercase);
+Trace_trivial_impl!(std::char::ToUppercase);
+
+Trace_trivial_impl!(std::env::Args);
+Trace_trivial_impl!(std::env::ArgsOs);
+Trace_trivial_impl!(std::env::JoinPathsError);
+Trace_trivial_impl!(std::env::Vars);
+Trace_trivial_impl!(std::env::VarsOs);
+Trace_trivial_impl!(std::env::VarError);
+
+Trace_trivial_impl!(std::ffi::CStr);
+Trace_trivial_impl!(std::ffi::CString);
+Trace_trivial_impl!(std::ffi::FromBytesUntilNulError);
+Trace_trivial_impl!(std::ffi::FromVecWithNulError);
+Trace_trivial_impl!(std::ffi::IntoStringError);
+Trace_trivial_impl!(std::ffi::NulError);
+Trace_trivial_impl!(std::ffi::OsStr);
+Trace_trivial_impl!(std::ffi::OsString);
+Trace_trivial_impl!(std::ffi::FromBytesWithNulError);
+Trace_trivial_impl!(std::ffi::c_void);
+
+Trace_trivial_impl!(std::fmt::Error);
+Trace_trivial_impl!(std::fmt::Alignment);
+
+Trace_trivial_impl!(std::fs::DirBuilder);
+Trace_trivial_impl!(std::fs::DirEntry);
+Trace_trivial_impl!(std::fs::File);
+Trace_trivial_impl!(std::fs::FileTimes);
+Trace_trivial_impl!(std::fs::FileType);
+Trace_trivial_impl!(std::fs::Metadata);
+Trace_trivial_impl!(std::fs::OpenOptions);
+Trace_trivial_impl!(std::fs::Permissions);
+Trace_trivial_impl!(std::fs::ReadDir);
+Trace_trivial_impl!(std::fs::TryLockError);
+
+Trace_trivial_impl!(std::hash::DefaultHasher);
+Trace_trivial_impl!(std::hash::RandomState);
+Trace_trivial_impl!(std::hash::SipHasher);
+
+Trace_trivial_impl!(std::io::Empty);
+Trace_trivial_impl!(std::io::Error);
+Trace_trivial_impl!(std::io::PipeReader);
+Trace_trivial_impl!(std::io::PipeWriter);
+Trace_trivial_impl!(std::io::Repeat);
+Trace_trivial_impl!(std::io::Sink);
+Trace_trivial_impl!(std::io::Stdin);
+Trace_trivial_impl!(std::io::Stdout);
+Trace_trivial_impl!(std::io::WriterPanicked);
+Trace_trivial_impl!(std::io::ErrorKind);
+Trace_trivial_impl!(std::io::SeekFrom);
+
+Trace_trivial_impl!(std::marker::PhantomPinned);
+
+Trace_trivial_impl!(std::net::AddrParseError);
+Trace_trivial_impl!(std::net::Ipv4Addr);
+Trace_trivial_impl!(std::net::Ipv6Addr);
+Trace_trivial_impl!(std::net::SocketAddrV4);
+Trace_trivial_impl!(std::net::SocketAddrV6);
+Trace_trivial_impl!(std::net::TcpListener);
+Trace_trivial_impl!(std::net::TcpStream);
+Trace_trivial_impl!(std::net::UdpSocket);
+Trace_trivial_impl!(std::net::IpAddr);
+Trace_trivial_impl!(std::net::Shutdown);
+Trace_trivial_impl!(std::net::SocketAddr);
+
+Trace_trivial_impl!(std::num::ParseFloatError);
+Trace_trivial_impl!(std::num::ParseIntError);
+Trace_trivial_impl!(std::num::TryFromIntError);
+Trace_trivial_impl!(std::num::FpCategory);
+Trace_trivial_impl!(std::num::IntErrorKind);
+
+Trace_trivial_impl!(std::ops::RangeFull);
+
+Trace_trivial_impl!(std::path::Path);
+Trace_trivial_impl!(std::path::PathBuf);
+Trace_trivial_impl!(std::path::StripPrefixError);
+
+Trace_trivial_impl!(std::process::Child);
+Trace_trivial_impl!(std::process::ChildStderr);
+Trace_trivial_impl!(std::process::ChildStdin);
+Trace_trivial_impl!(std::process::ChildStdout);
+Trace_trivial_impl!(std::process::Command);
+Trace_trivial_impl!(std::process::ExitCode);
+Trace_trivial_impl!(std::process::Output);
+Trace_trivial_impl!(std::process::Stdio);
+
+Trace_trivial_impl!(std::slice::GetDisjointMutError);
+
 Trace_trivial_impl!(str);
-Trace_trivial_impl!(PathBuf);
-Trace_trivial_impl!(Path);
-Trace_trivial_impl!(OsString);
-Trace_trivial_impl!(OsStr);
+Trace_trivial_impl!(std::rc::Rc<str>);
+Trace_trivial_impl!(std::sync::Arc<str>);
 
-Trace_trivial_impl!(DefaultHasher);
-Trace_trivial_impl!(RandomState);
-Trace_trivial_impl!(Rc<str>);
-Trace_trivial_impl!(SipHasher);
+Trace_trivial_impl!(std::string::FromUtf8Error);
+Trace_trivial_impl!(std::string::FromUtf16Error);
+Trace_trivial_impl!(std::string::String);
 
-Trace_trivial_impl!(TypeId);
+Trace_trivial_impl!(std::thread::AccessError);
+Trace_trivial_impl!(std::thread::Builder);
+Trace_trivial_impl!(std::thread::Thread);
+Trace_trivial_impl!(std::thread::ThreadId);
+
+Trace_trivial_impl!(std::time::Duration);
+Trace_trivial_impl!(std::time::Instant);
+Trace_trivial_impl!(std::time::SystemTime);
+Trace_trivial_impl!(std::time::SystemTimeError);
+Trace_trivial_impl!(std::time::TryFromFloatSecsError);
 
 /// Implement [`Trace`] for a tuple.
 macro_rules! Trace_tuple {
