@@ -36,7 +36,7 @@ struct GarbageTruck {
     /// This lock should be acquired for reads by threads running a collection and for writes by
     /// threads awaiting collection completion.
     collecting_lock: RwLock<()>,
-    /// The number of [`Gc`]s dropped since the last time [`Dumpster::collect_all()`] was called.
+    /// The number of [`Gc`]s dropped since the last time [`GarbageTruck::collect_all()`] was called.
     n_gcs_dropped: AtomicUsize,
     /// The number of [`Gc`]s currently existing (which have not had their internals replaced with
     /// `None`).
@@ -102,7 +102,7 @@ enum Reachability {
 }
 
 /// The global garbage truck.
-/// All [`TrashCans`] should eventually end up in here.
+/// All [`TrashCan`]s should eventually end up in here.
 static GARBAGE_TRUCK: LazyLock<GarbageTruck> = LazyLock::new(|| GarbageTruck {
     contents: Mutex::new(HashMap::new()),
     collecting_lock: RwLock::new(()),
@@ -257,7 +257,7 @@ pub fn n_gcs_existing() -> usize {
 }
 
 impl Dumpster {
-    /// Deliver all [`TrashCans`] contained by this dumpster to the garbage collect, removing them
+    /// Deliver all [`TrashCan`]s contained by this dumpster to the garbage collect, removing them
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
         self.n_drops.set(0);

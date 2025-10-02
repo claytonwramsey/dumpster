@@ -376,7 +376,7 @@ unsafe impl<T: Trace, const N: usize> Trace for [T; N] {
     }
 }
 
-/// Implement [`Trace`] for a trivially-collected type which contains no  [`Gc`]s in its
+/// Implement [`Trace`] for a trivially-collected type which contains no `Gc`s in its
 /// fields.
 macro_rules! Trace_trivial_impl {
     ($x: ty) => {

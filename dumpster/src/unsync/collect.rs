@@ -97,7 +97,7 @@ impl Cleanup {
 ///
 /// # Safety
 ///
-/// `T` must be the same type that `ptr` was created with via [`ErasedPtr::new`].
+/// `T` must be the same type that `ptr` was created with via [`Erased::new`].
 unsafe fn apply_visitor<T: Trace + ?Sized, V: Visitor>(ptr: Erased, visitor: &mut V) {
     let specified: NonNull<GcBox<T>> = ptr.specify();
     let _ = specified.as_ref().value.accept(visitor);

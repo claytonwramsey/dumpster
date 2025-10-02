@@ -60,7 +60,7 @@ impl Erased {
     /// # Safety
     ///
     /// This function must only be specified to the type that the pointer was constructed with
-    /// via [`ErasedPtr::new`].
+    /// via [`Erased::new`].
     pub unsafe fn specify<T: ?Sized>(self) -> NonNull<T> {
         let mut box_ref: MaybeUninit<NonNull<T>> = MaybeUninit::zeroed();
 
