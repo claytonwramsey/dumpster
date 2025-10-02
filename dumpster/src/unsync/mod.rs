@@ -869,7 +869,7 @@ mod from {
     }
 
     impl<T: Trace + Clone> From<&[T]> for Gc<[T]> {
-        /// Allocates a reference-counted slice and fills it by cloning `slice`'s items.
+        /// Allocates a garbage-collected slice and fills it by cloning `slice`'s items.
         ///
         /// # Example
         ///
@@ -1034,7 +1034,7 @@ mod from {
     }
 
     impl<T: Trace> From<Box<T>> for Gc<T> {
-        /// Move a boxed object to a new, reference counted, allocation.
+        /// Move a boxed object to a new, garbage collected, allocation.
         ///
         /// # Example
         ///
@@ -1105,7 +1105,7 @@ mod from {
         B: ToOwned + ?Sized,
         Gc<B>: From<&'a B> + From<B::Owned>,
     {
-        /// Creates a reference-counted pointer from a clone-on-write pointer by
+        /// Creates a garbage-collected pointer from a clone-on-write pointer by
         /// copying its content.
         ///
         /// # Example
