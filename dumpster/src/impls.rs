@@ -324,7 +324,6 @@ Trace_collection_impl!(Vec<T>);
 Trace_collection_impl!(VecDeque<T>);
 Trace_collection_impl!(LinkedList<T>);
 Trace_collection_impl!([T]);
-Trace_collection_impl!(HashSet<T>);
 Trace_collection_impl!(BinaryHeap<T>);
 Trace_collection_impl!(BTreeSet<T>);
 
@@ -343,6 +342,15 @@ unsafe impl<K: Trace, V: Trace, S: BuildHasher + Trace> Trace for HashMap<K, V, 
         for (k, v) in self {
             k.accept(visitor)?;
             v.accept(visitor)?;
+        }
+        self.hasher().accept(visitor)
+    }
+}
+
+unsafe impl<T: Trace, S: BuildHasher + Trace> Trace for HashSet<T, S> {
+    fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
+        for elem in self {
+            elem.accept(visitor)?;
         }
         self.hasher().accept(visitor)
     }
