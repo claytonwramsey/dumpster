@@ -873,7 +873,10 @@ impl<T: Trace + Send + Sync + ?Sized> Debug for Gc<T> {
 /// The original implementation was published under both the [MIT](https://mit-license.org/) and [Apache license](http://www.apache.org/licenses/LICENSE-2.0), version 2.0.
 /// Copies of the licenses are available at the linked addresses.
 mod from {
-    use super::*;
+    use super::{
+        dealloc, mem, notify_created_gc, ptr, slice, AtomicUsize, Cow, Gc, GcBox, Layout,
+        ManuallyDrop, Nullable, Trace, UnsafeCell,
+    };
 
     impl<T: Trace + Send + Sync> From<T> for Gc<T> {
         /// Converts a generic type `T` into an `Gc<T>`
