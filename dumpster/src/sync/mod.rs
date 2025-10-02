@@ -1072,9 +1072,9 @@ mod from {
         /// # Example
         ///
         /// ```
-        /// # use std::rc::Rc;
+        /// # use dumpster::sync::Gc;
         /// let original: Box<i32> = Box::new(1);
-        /// let shared: Rc<i32> = Rc::from(original);
+        /// let shared: Gc<i32> = Gc::from(original);
         /// assert_eq!(1, *shared);
         /// ```
         #[inline]
