@@ -470,6 +470,17 @@ impl<T: Trace + ?Sized> Gc<T> {
             .0
             .pad_to_align();
 
+        Self::allocate_for_layout_of_box(layout, mem_to_gc_box)
+    }
+
+    /// Allocates an `GcBox<T>` with the given layout.
+    ///
+    /// The function `mem_to_gc_box` is called with the data pointer
+    /// and must return back a pointer for the `GcBox<T>`.
+    unsafe fn allocate_for_layout_of_box(
+        layout: Layout,
+        mem_to_gc_box: impl FnOnce(*mut u8) -> *mut GcBox<T>,
+    ) -> *mut GcBox<T> {
         // SAFETY: layout has non-zero size because of the `ref_count` field
         let ptr = unsafe { std::alloc::alloc(layout) };
 
@@ -489,6 +500,7 @@ impl<T: Trace + ?Sized> Gc<T> {
 
 impl<T: Trace> Gc<[T]> {
     /// Allocates an `GcBox<[T]>` with the given length.
+    #[inline]
     fn allocate_for_slice(len: usize) -> *mut GcBox<[T]> {
         unsafe {
             Self::allocate_for_layout(Layout::array::<T>(len).unwrap(), |mem| {
@@ -895,21 +907,25 @@ mod from {
             }
 
             unsafe {
-                let layout = Layout::array::<T>(slice.len()).unwrap();
+                let value_layout = Layout::array::<T>(slice.len()).unwrap();
 
-                let ptr =
-                    Self::allocate_for_layout(Layout::array::<T>(slice.len()).unwrap(), |mem| {
-                        ptr::slice_from_raw_parts_mut(mem.cast::<T>(), slice.len())
-                            as *mut GcBox<[T]>
-                    });
+                let layout = Layout::new::<GcBox<()>>()
+                    .extend(value_layout)
+                    .unwrap()
+                    .0
+                    .pad_to_align();
+
+                let ptr = Self::allocate_for_layout_of_box(layout, |mem| {
+                    ptr::slice_from_raw_parts_mut(mem.cast::<T>(), slice.len()) as *mut GcBox<[T]>
+                });
 
                 // Pointer to first element
                 let elems = (&raw mut (*ptr).value).cast::<T>();
 
                 let mut guard = Guard {
                     mem: ptr.cast::<u8>(),
-                    elems,
                     layout,
+                    elems,
                     n_elems: 0,
                 };
 
