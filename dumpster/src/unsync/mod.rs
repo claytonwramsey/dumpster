@@ -520,10 +520,6 @@ impl<T: Trace + ?Sized> Deref for Gc<T> {
     /// });
     /// ```
     fn deref(&self) -> &Self::Target {
-        assert!(
-            !COLLECTING.with(Cell::get),
-            "dereferencing GC to already-collected object"
-        );
         unsafe {
             &self.ptr.get().expect("dereferencing Gc to already-collected object. \
             This means a Gc escaped from a Drop implementation, likely implying a bug in your code.").as_ref().value
