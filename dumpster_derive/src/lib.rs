@@ -95,7 +95,6 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                     Fields::Named(n) => {
                         let mut binding = TokenStream::new();
                         let mut execution_visit = TokenStream::new();
-                        let mut execution_destroy = TokenStream::new();
                         for (i, name) in n.named.iter().enumerate() {
                             let field_name = format_ident!("field{i}");
                             let field_ident = name.ident.as_ref().unwrap();
@@ -115,12 +114,6 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                                     visitor
                                 )?;
                             });
-
-                            execution_destroy.extend(quote! {
-                                ::dumpster::Trace::destroy_gcs(
-                                    #field_name, destroyer
-                                );
-                            });
                         }
 
                         delegate_visit.extend(
@@ -130,7 +123,6 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                     Fields::Unnamed(u) => {
                         let mut binding = TokenStream::new();
                         let mut execution_visit = TokenStream::new();
-                        let mut execution_destroy = TokenStream::new();
                         for (i, _) in u.unnamed.iter().enumerate() {
                             let field_name = format_ident!("field{i}");
                             if i == 0 {
@@ -148,10 +140,6 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                                     #field_name,
                                     visitor
                                 )?;
-                            });
-
-                            execution_destroy.extend(quote! {
-                                ::dumpster::Trace::destroy_gcs(#field_name, destroyer);
                             });
                         }
 
