@@ -685,6 +685,49 @@ fn from_slice() {
 }
 
 #[test]
+#[should_panic = "told you"]
+fn from_slice_panic() {
+    struct MayPanicOnClone {
+        value: String,
+        panic: bool,
+    }
+
+    impl Clone for MayPanicOnClone {
+        fn clone(&self) -> Self {
+            assert!(!self.panic, "told you");
+
+            Self {
+                value: self.value.clone(),
+                panic: self.panic,
+            }
+        }
+    }
+
+    unsafe impl Trace for MayPanicOnClone {
+        fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    let slice: &[MayPanicOnClone] = &[
+        MayPanicOnClone {
+            value: String::from("a"),
+            panic: false,
+        },
+        MayPanicOnClone {
+            value: String::from("b"),
+            panic: false,
+        },
+        MayPanicOnClone {
+            value: String::from("c"),
+            panic: true,
+        },
+    ];
+
+    let _: Gc<[MayPanicOnClone]> = Gc::from(slice);
+}
+
+#[test]
 fn from_vec() {
     let gc: Gc<[String]> = Gc::from(vec![String::from("hello"), String::from("world")]);
 
