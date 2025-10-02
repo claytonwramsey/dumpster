@@ -649,3 +649,54 @@ fn escape_dead_pointer() {
     collect();
     println!("{}", ESCAPED.lock().unwrap().as_ref().unwrap().x);
 }
+
+#[test]
+fn from_box() {
+    let gc: Gc<String> = Gc::from(Box::new(String::from("hello")));
+
+    // The `From<Box<T>>` implementation executes a different code path to
+    // construct the `Gc`.
+    //
+    // Here we ensure that the metadata is initialized to a valid state.
+    unsafe {
+        let gc_box = gc.ptr.get().read().unwrap().as_ref();
+        assert_eq!(gc_box.strong.load(Ordering::SeqCst), 1);
+        assert_eq!(gc_box.weak.load(Ordering::SeqCst), 0);
+    }
+
+    assert_eq!(&*gc, "hello");
+}
+
+#[test]
+fn from_slice() {
+    let gc: Gc<[String]> = Gc::from(&[String::from("hello"), String::from("world")][..]);
+
+    // The `From<&[T]>` implementation executes a different code path to
+    // construct the `Gc`.
+    //
+    // Here we ensure that the metadata is initialized to a valid state.
+    unsafe {
+        let gc_box = gc.ptr.get().read().unwrap().as_ref();
+        assert_eq!(gc_box.strong.load(Ordering::SeqCst), 1);
+        assert_eq!(gc_box.weak.load(Ordering::SeqCst), 0);
+    }
+
+    assert_eq!(&*gc, ["hello", "world"]);
+}
+
+#[test]
+fn from_vec() {
+    let gc: Gc<[String]> = Gc::from(vec![String::from("hello"), String::from("world")]);
+
+    // The `From<Vec<T>>` implementation executes a different code path to
+    // construct the `Gc`.
+    //
+    // Here we ensure that the metadata is initialized to a valid state.
+    unsafe {
+        let gc_box = gc.ptr.get().read().unwrap().as_ref();
+        assert_eq!(gc_box.strong.load(Ordering::SeqCst), 1);
+        assert_eq!(gc_box.weak.load(Ordering::SeqCst), 0);
+    }
+
+    assert_eq!(&*gc, ["hello", "world"]);
+}
