@@ -187,7 +187,7 @@ mod ptr;
 pub mod sync;
 pub mod unsync;
 
-/// The trait that any garbage-Trace data must implement.
+/// The trait that any garbage-collected data must implement.
 ///
 /// This trait should usually be implemented by using `#[derive(Trace)]`, using the provided
 /// macro.
