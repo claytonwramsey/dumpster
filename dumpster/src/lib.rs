@@ -358,3 +358,13 @@ fn contains_gcs<T: Trace + ?Sized>(x: &T) -> Result<bool, ()> {
     x.accept(&mut visit)?;
     Ok(visit.0)
 }
+
+/// Panics with a message that explains that the gc object has already been collected.
+#[cold]
+#[inline(never)]
+fn panic_deref_of_collected_object() -> ! {
+    panic!(
+        "Attempt to dereference Gc to already-collected object. \
+    This means a Gc escaped from a Drop implementation, likely implying a bug in your code.",
+    );
+}

@@ -389,3 +389,86 @@ fn from_vec() {
 
     assert_eq!(&*gc, ["hello", "world"]);
 }
+
+#[test]
+fn make_mut() {
+    let mut a = Gc::new(42);
+    let mut b = a.clone();
+    let mut c = b.clone();
+
+    assert_eq!(*Gc::make_mut(&mut a), 42);
+    assert_eq!(*Gc::make_mut(&mut b), 42);
+    assert_eq!(*Gc::make_mut(&mut c), 42);
+
+    *Gc::make_mut(&mut a) += 1;
+    *Gc::make_mut(&mut b) += 2;
+    *Gc::make_mut(&mut c) += 3;
+
+    assert_eq!(*a, 43);
+    assert_eq!(*b, 44);
+    assert_eq!(*c, 45);
+
+    // they should all be unique
+    assert_eq!(Gc::ref_count(&a).get(), 1);
+    assert_eq!(Gc::ref_count(&b).get(), 1);
+    assert_eq!(Gc::ref_count(&c).get(), 1);
+}
+
+#[test]
+fn make_mut_2() {
+    let mut a = Gc::new(42);
+    let b = a.clone();
+    let c = b.clone();
+
+    assert_eq!(*a, 42);
+    assert_eq!(*b, 42);
+    assert_eq!(*c, 42);
+
+    *Gc::make_mut(&mut a) += 1;
+
+    assert_eq!(*a, 43);
+    assert_eq!(*b, 42);
+    assert_eq!(*c, 42);
+
+    // a should be unique
+    // b and c should share their object
+    assert_eq!(Gc::ref_count(&a).get(), 1);
+    assert_eq!(Gc::ref_count(&b).get(), 2);
+    assert_eq!(Gc::ref_count(&c).get(), 2);
+}
+
+#[test]
+fn make_mut_of_object_in_dumpster() {
+    #[derive(Clone)]
+    struct Foo {
+        // just some gc pointer so foo lands in the dumpster
+        something: Gc<i32>,
+    }
+
+    unsafe impl Trace for Foo {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.something.accept(visitor)
+        }
+    }
+
+    let mut foo = Gc::new(Foo {
+        something: Gc::new(5),
+    });
+
+    drop(foo.clone());
+
+    // now foo is in the dumpster
+    // and its ref count is one
+    assert_eq!(foo.ref_count().get(), 1);
+
+    // we get a mut reference
+    let foo_mut = Gc::make_mut(&mut foo);
+
+    // now we collect garbage while we're also holding onto a mutable reference to foo
+    // if foo is still in the dumpster then the collection will dereference it and cause UB
+    collect();
+
+    // we need to do something with `foo_mut` here so the mutable borrow is actually held
+    // during collection
+    assert_eq!(*foo_mut.something, 5);
+}

@@ -44,7 +44,7 @@ use std::{
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
-use crate::{contains_gcs, ptr::Nullable, Trace, Visitor};
+use crate::{contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, Visitor};
 
 use self::collect::{
     collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
@@ -442,6 +442,7 @@ where
     /// # drop(gc1);
     /// # dumpster::sync::collect();
     /// ```
+    #[inline]
     pub fn is_dead(&self) -> bool {
         unsafe { *self.ptr.get() }.is_null()
     }
@@ -482,6 +483,61 @@ where
     #[doc(hidden)]
     pub unsafe fn __private_from_ptr(ptr: *const GcBox<T>, tag: usize) -> Self {
         Self::from_ptr(ptr, tag)
+    }
+}
+
+impl<T: Trace + Send + Sync + Clone> Gc<T> {
+    /// Makes a mutable reference to the given `Gc`.
+    ///
+    /// If there are other `Gc` pointers to the same allocation, then `make_mut` will
+    /// [`clone`] the inner value to a new allocation to ensure unique ownership. This is also
+    /// referred to as clone-on-write.
+    ///
+    /// [`clone`]: Clone::clone
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if the `Gc` whose reference count we are loading is "dead" (i.e.
+    /// generated through a `Drop` implementation). For further reference, take a look at
+    /// [`Gc::is_dead`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::unsync::Gc;
+    ///
+    /// let mut data = Gc::new(5);
+    ///
+    /// *Gc::make_mut(&mut data) += 1; // Won't clone anything
+    /// let mut other_data = Gc::clone(&data); // Won't clone inner data
+    /// *Gc::make_mut(&mut data) += 1; // Clones inner data
+    /// *Gc::make_mut(&mut data) += 1; // Won't clone anything
+    /// *Gc::make_mut(&mut other_data) *= 2; // Won't clone anything
+    ///
+    /// // Now `data` and `other_data` point to different allocations.
+    /// assert_eq!(*data, 8);
+    /// assert_eq!(*other_data, 12);
+    /// ```
+    #[inline]
+    pub fn make_mut(this: &mut Self) -> &mut T {
+        if this.is_dead() {
+            panic_deref_of_collected_object();
+        }
+
+        // SAFETY: we checked above that the object is alive (not null)
+        let box_ref = unsafe { this.ptr.get().read().unwrap_unchecked().as_ref() };
+
+        let strong = box_ref.strong.load(Ordering::Acquire);
+        let weak = box_ref.weak.load(Ordering::Acquire);
+
+        if strong != 1 || weak != 0 {
+            // We don't have unique access to the value so we need to clone it.
+            *this = Gc::new(box_ref.value.clone());
+        }
+
+        // SAFETY: we have exclusive access to this `GcBox` because we ensured
+        // that we hold the only reference to this allocation
+        unsafe { &mut (*this.ptr.get_mut().as_ptr()).value }
     }
 }
 

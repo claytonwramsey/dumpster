@@ -129,6 +129,15 @@ impl<T: ?Sized> Nullable<T> {
     pub fn unwrap(self) -> NonNull<T> {
         self.as_option().unwrap()
     }
+
+    /// Convert this pointer to a `NonNull<T>`.
+    ///
+    /// # Safety
+    ///
+    /// The pointer must not be null.
+    pub unsafe fn unwrap_unchecked(self) -> NonNull<T> {
+        self.as_option().unwrap_unchecked()
+    }
 }
 
 impl<T: ?Sized> Clone for Nullable<T> {
