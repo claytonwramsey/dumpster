@@ -21,9 +21,14 @@ jobs:
           - macOS-latest
         toolchain:
           - nightly
+          - stable
         cargo_flags:
           - "--all-features"
           - "--no-default-features"
+          - ""
+        exclude:
+          - cargo_flags: "--all-features"
+            toolchain: stable
 
     steps:
       - name: Checkout sources
