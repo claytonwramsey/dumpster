@@ -902,6 +902,12 @@ impl<T: Trace + Send + Sync + ?Sized> Borrow<T> for Gc<T> {
     }
 }
 
+impl<T: Trace + Send + Sync + Default> Default for Gc<T> {
+    fn default() -> Self {
+        Gc::new(T::default())
+    }
+}
+
 impl<T: Trace + Send + Sync + ?Sized> std::fmt::Pointer for Gc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Pointer::fmt(&addr_of!(**self), f)
