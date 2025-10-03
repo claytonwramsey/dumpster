@@ -536,7 +536,9 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
         }
 
         // SAFETY: we have exclusive access to this `GcBox` because we ensured
-        // that we hold the only reference to this allocation
+        // that we hold the only reference to this allocation.
+        // No other `Gc`s point to this allocation because the strong count is 1, and there are no
+        // loose pointers internal to the collector because the weak count is 0.
         unsafe { &mut (*this.ptr.get_mut().as_ptr()).value }
     }
 }

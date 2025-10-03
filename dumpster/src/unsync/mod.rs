@@ -506,8 +506,9 @@ impl<T: Trace + Clone> Gc<T> {
             *this = Gc::new(box_ref.value.clone());
         }
 
-        // SAFETY: we have exclusive access to this `GcBox`
-        // because we ensured that the ref count is 1
+        // SAFETY: we have exclusive access to this `GcBox` because we ensured
+        // that the ref count is 1 and that there are no loose pointers in the
+        // `to_collect` buffer of this thread's dumpster.
         unsafe { &mut (*this.ptr.get_mut().as_ptr()).value }
     }
 }
