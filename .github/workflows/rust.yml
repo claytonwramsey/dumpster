@@ -93,6 +93,7 @@ jobs:
           profile: minimal
           toolchain: ${{ matrix.toolchain }}
           override: true
+          components: miri
       - name: Cache
         id: cache-restore
         uses: actions/cache@v4
