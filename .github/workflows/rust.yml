@@ -79,6 +79,7 @@ jobs:
         cargo_flags:
           - "--all-features"
           - "--no-default-features"
+          - ""
         exclude:
           - cargo_flags: "--all-features"
             toolchain: stable
