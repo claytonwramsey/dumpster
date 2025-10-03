@@ -80,7 +80,6 @@ jobs:
           - macOS-latest
         toolchain:
           - nightly
-          - stable
         cargo_flags:
           - "--all-features"
           - "--no-default-features"
