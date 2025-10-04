@@ -12,7 +12,7 @@ use std::{
     ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex,
+        Mutex, OnceLock,
     },
 };
 
@@ -825,4 +825,36 @@ fn make_mut_of_object_in_dumpster() {
     // we need to do something with `foo_mut` here so the mutable borrow is actually held
     // during collection
     assert_eq!(*foo_mut.something, 5);
+}
+
+#[test]
+/// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
+fn leak_by_creation_in_drop() {
+    struct Foo(OnceLock<Gc<Self>>);
+    struct Bar(OnceLock<Gc<Self>>);
+
+    unsafe impl Trace for Foo {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    unsafe impl Trace for Bar {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            let gcbar = Gc::new(Bar(OnceLock::new()));
+            let _ = gcbar.0.set(gcbar.clone());
+            drop(gcbar);
+        }
+    }
+
+    let foo = Gc::new(Foo(OnceLock::new()));
+    let _ = foo.0.set(foo.clone());
+    drop(foo);
+    collect();
 }
