@@ -27,7 +27,7 @@ use super::{CollectCondition, GcBox};
 
 thread_local! {
     /// Whether the current thread is running a cleanup process.
-    pub(super) static COLLECTING: Cell<bool> = const { Cell::new(false) };
+    static COLLECTING: Cell<bool> = const { Cell::new(false) };
     /// The global collection of allocation information for this thread.
     pub(super) static DUMPSTER: Dumpster = Dumpster {
         to_collect: RefCell::new(HashMap::new()),
@@ -107,6 +107,9 @@ unsafe fn apply_visitor<T: Trace + ?Sized, V: Visitor>(ptr: Erased, visitor: &mu
 impl Dumpster {
     /// Collect all unreachable allocations that this dumpster is responsible for.
     pub fn collect_all(&self) {
+        if COLLECTING.get() {
+            return; // Do not double-collect.
+        }
         self.n_ref_drops.set(0);
 
         unsafe {
@@ -330,16 +333,17 @@ impl Visitor for DropAlloc<'_> {
         }
         let ptr = gc.ptr.get().unwrap();
         let id = AllocationId::from(ptr);
+        gc.kill();
         if self.reachable.contains(&id) {
             unsafe {
                 let cell_ref = &ptr.as_ref().ref_count;
-                cell_ref.set(NonZeroUsize::new(cell_ref.get().get() - 1).unwrap());
+                cell_ref.set(NonZeroUsize::new(cell_ref.get().get() - 1).expect(
+                    "reachable allocation cannot be rendered unreachable by deleting lost alloc",
+                ));
             }
             return;
         }
-        // gc points to a dead allocation
 
-        gc.kill();
         if self.visited.insert(id) {
             unsafe {
                 ptr.as_ref().value.accept(self).unwrap();

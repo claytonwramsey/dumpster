@@ -899,6 +899,7 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
             let box_ref = unsafe { ptr.as_ref() };
             match box_ref.ref_count.get() {
                 NonZeroUsize::MIN => {
+                    println!("drop an alloc due to ref count");
                     d.mark_cleaned(ptr);
                     unsafe {
                         // this was the last reference, drop unconditionally
@@ -915,6 +916,7 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
                         .set(NonZeroUsize::new(n.get() - 1).unwrap());
 
                     if contains_gcs(&box_ref.value).unwrap_or(true) {
+                        println!("marking ditry");
                         // remaining references could be a cycle - therefore, mark it as dirty
                         // so we can check later
                         d.mark_dirty(ptr);
