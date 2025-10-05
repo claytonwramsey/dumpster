@@ -517,10 +517,10 @@ fn leak_by_creation_in_drop() {
 }
 
 #[test]
-// #[cfg_attr(miri, ignore = "miri is too slow")]
+#[cfg_attr(miri, ignore = "miri is too slow")]
 #[expect(clippy::too_many_lines)]
-fn fuzz() {
-    const N: usize = 1000;
+fn unsync_fuzz() {
+    const N: usize = 100_000;
     static DROP_DETECTORS: [AtomicUsize; N] = {
         let mut detectors: [MaybeUninit<AtomicUsize>; N] =
             unsafe { transmute(MaybeUninit::<[AtomicUsize; N]>::uninit()) };
@@ -542,7 +542,8 @@ fn fuzz() {
 
     impl Drop for Alloc {
         fn drop(&mut self) {
-            DROP_DETECTORS[self.id].fetch_add(1, Ordering::Relaxed);
+            let n_drop = DROP_DETECTORS[self.id].fetch_add(1, Ordering::Relaxed);
+            assert_eq!(n_drop, 0, "must not double drop an allocation");
         }
     }
 
@@ -603,15 +604,6 @@ fn fuzz() {
             2 => {
                 let idx = fastrand::usize(0..gcs.len());
                 println!("remove gc {}", gcs[idx].id);
-                if gcs[idx].id == 87 {
-                    let mut graph = HashMap::new();
-                    graph.insert(9999, Vec::new());
-                    for alloc in &gcs {
-                        graph.get_mut(&9999).unwrap().push(alloc.id);
-                        dfs(alloc, &mut graph);
-                    }
-                    println!("{graph:#?}");
-                }
                 gcs.swap_remove(idx);
             }
             3 => {
