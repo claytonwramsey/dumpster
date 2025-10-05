@@ -46,7 +46,7 @@ use std::{
 
 use crate::{contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, Visitor};
 
-use self::collect::{Dumpster, COLLECTING, DUMPSTER};
+use self::collect::{Dumpster, DUMPSTER};
 
 mod collect;
 #[cfg(test)]
@@ -607,6 +607,11 @@ impl<T: Trace + ?Sized> Gc<T> {
     pub unsafe fn __private_from_ptr(ptr: *const GcBox<T>) -> Self {
         Self::from_ptr(ptr)
     }
+
+    /// Kill this `Gc`, replacing it with a dead `Gc`.
+    fn kill(&self) {
+        self.ptr.set(self.ptr.get().as_null());
+    }
 }
 
 impl<T: Trace + Clone> Gc<T> {
@@ -887,9 +892,6 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
     /// If this is the last reference which can reach the pointed-to data, the allocation that it
     /// points to will be destroyed.
     fn drop(&mut self) {
-        if COLLECTING.with(Cell::get) {
-            return;
-        }
         let Some(mut ptr) = self.ptr.get().as_option() else {
             return;
         };
