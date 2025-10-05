@@ -11,7 +11,7 @@ use std::{
     mem::{swap, take, transmute, MaybeUninit},
     ptr::NonNull,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex, OnceLock,
     },
 };
@@ -830,6 +830,7 @@ fn make_mut_of_object_in_dumpster() {
 #[test]
 /// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
 fn leak_by_creation_in_drop() {
+    static DID_BAR_DROP: AtomicBool = AtomicBool::new(false);
     struct Foo(OnceLock<Gc<Self>>);
     struct Bar(OnceLock<Gc<Self>>);
 
@@ -853,8 +854,19 @@ fn leak_by_creation_in_drop() {
         }
     }
 
+    impl Drop for Bar {
+        fn drop(&mut self) {
+            DID_BAR_DROP.store(true, Ordering::Relaxed);
+        }
+    }
+
     let foo = Gc::new(Foo(OnceLock::new()));
     let _ = foo.0.set(foo.clone());
     drop(foo);
-    collect();
+
+    collect(); // causes Bar to be created and then leaked
+
+    collect(); // cleans up Bar (eventually)
+
+    assert!(DID_BAR_DROP.load(Ordering::Relaxed));
 }

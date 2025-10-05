@@ -36,7 +36,8 @@ struct GarbageTruck {
     /// This lock should be acquired for reads by threads running a collection and for writes by
     /// threads awaiting collection completion.
     collecting_lock: RwLock<()>,
-    /// The number of [`Gc`]s dropped since the last time [`GarbageTruck::collect_all()`] was called.
+    /// The number of [`Gc`]s dropped since the last time [`GarbageTruck::collect_all()`] was
+    /// called.
     n_gcs_dropped: AtomicUsize,
     /// The number of [`Gc`]s currently existing (which have not had their internals replaced with
     /// `None`).
@@ -130,6 +131,9 @@ thread_local! {
 /// completion of the collection.
 /// Ensures that all allocations dropped on the calling thread are cleaned up
 pub fn collect_all_await() {
+    if CLEANING.get() {
+        return;
+    }
     DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
     GARBAGE_TRUCK.collect_all();
     drop(GARBAGE_TRUCK.collecting_lock.read());
@@ -177,6 +181,9 @@ pub(super) unsafe fn mark_dirty<T>(allocation: NonNull<GcBox<T>>)
 where
     T: Trace + Send + Sync + ?Sized,
 {
+    if CLEANING.get() {
+        println!("marking dirty while cleaning!");
+    }
     DUMPSTER.with(|dumpster| {
         if dumpster
             .contents
@@ -241,11 +248,6 @@ pub fn set_collect_condition(f: CollectCondition) {
         .store(f as *mut (), Ordering::Relaxed);
 }
 
-/// Determine whether this thread is currently cleaning.
-pub fn currently_cleaning() -> bool {
-    CLEANING.get()
-}
-
 /// Get the number of `[Gc]`s dropped since the last collection.
 pub fn n_gcs_dropped() -> usize {
     GARBAGE_TRUCK.n_gcs_dropped.load(Ordering::Relaxed)
@@ -260,6 +262,9 @@ impl Dumpster {
     /// Deliver all [`TrashCan`]s contained by this dumpster to the garbage collect, removing them
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
+        if CLEANING.get() {
+            return;
+        }
         self.n_drops.set(0);
         let mut guard = garbage_truck.contents.lock();
         for (id, can) in self.contents.borrow_mut().drain() {
@@ -287,6 +292,9 @@ impl GarbageTruck {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     fn collect_all(&self) {
+        if CLEANING.get() {
+            return;
+        }
         let collecting_guard = self.collecting_lock.write();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.contents.lock());
@@ -320,7 +328,6 @@ impl GarbageTruck {
             mark(root_id, &mut ref_graph);
         }
 
-        CLEANING.set(true);
         // set of allocations which must be destroyed because we were the last weak pointer to it
         let mut weak_destroys = Vec::new();
         for (id, node) in &ref_graph {
@@ -344,7 +351,6 @@ impl GarbageTruck {
                 }
             }
         }
-        CLEANING.set(false);
         for (drop_fn, ptr) in weak_destroys {
             unsafe {
                 // SAFETY: we have proven (via header_ref.weak = 1) that the cleaning
@@ -551,16 +557,17 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
                 // SAFETY: This is the same as dereferencing the GC.
                 (*gc.ptr.get()).unwrap()
             });
+            unsafe {
+                // SAFETY: The GC is unreachable,
+                // so the GC will never be dereferenced again.
+                let p = gc.ptr.get().as_mut().unwrap();
+                *p = p.as_null();
+            }
+
             if matches!(self.graph[&id].reachability, Reachability::Reachable) {
                 unsafe {
                     // SAFETY: This is the same as dereferencing the GC.
                     id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
-                }
-            } else {
-                unsafe {
-                    // SAFETY: The GC is unreachable,
-                    // so the GC will never be dereferenced again.
-                    gc.ptr.get().write((*gc.ptr.get()).as_null());
                 }
             }
         }

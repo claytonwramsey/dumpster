@@ -47,8 +47,8 @@ use std::{
 use crate::{contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, Visitor};
 
 use self::collect::{
-    collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
-    notify_created_gc, notify_dropped_gc,
+    collect_all_await, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing, notify_created_gc,
+    notify_dropped_gc,
 };
 
 /// A soft limit on the amount of references that may be made to a `Gc`.
@@ -675,9 +675,6 @@ where
     T: Trace + Send + Sync + ?Sized,
 {
     fn drop(&mut self) {
-        if currently_cleaning() {
-            return;
-        }
         let Some(mut ptr) = unsafe { *self.ptr.get() }.as_option() else {
             return;
         };
