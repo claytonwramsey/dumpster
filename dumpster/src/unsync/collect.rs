@@ -12,6 +12,7 @@ use std::{
     alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
     collections::{hash_map::Entry, HashMap, HashSet},
+    mem::take,
     num::NonZeroUsize,
     ptr::{drop_in_place, NonNull},
 };
@@ -150,15 +151,22 @@ impl Dumpster {
             };
 
             COLLECTING.set(true);
-            for cleanup in self
-                .to_collect
-                .borrow_mut()
+            // Do not hold mutable reference, as it is possible for a `Gc` to be marked dirty during
+            // collection by dropping.
+            let mut collectees = take(&mut *self.to_collect.borrow_mut());
+            for cleanup in collectees
                 .drain()
                 .filter_map(|(id, cleanup)| (!mark.visited.contains(&id)).then_some(cleanup))
             {
                 (cleanup.drop_fn)(cleanup.ptr, &mut decrementer);
             }
             COLLECTING.set(false);
+            assert!(collectees.is_empty());
+            let mut new_to_collect = self.to_collect.borrow_mut();
+            if new_to_collect.is_empty() {
+                // Reuse allocation from `collectees`
+                *new_to_collect = collectees;
+            }
         }
     }
 
@@ -320,7 +328,9 @@ impl Visitor for DropAlloc<'_> {
             }
             return;
         }
-        gc.ptr.set(gc.ptr.get().as_null());
+        // gc points to a dead allocation
+
+        gc.kill();
         if self.visited.insert(id) {
             unsafe {
                 ptr.as_ref().value.accept(self).unwrap();
@@ -336,17 +346,11 @@ impl Visitor for DropAlloc<'_> {
 /// find.
 /// Also, drop the allocation when done.
 unsafe fn drop_assist<T: Trace + ?Sized>(ptr: Erased, visitor: &mut DropAlloc<'_>) {
-    if visitor
-        .visited
-        .insert(AllocationId::from(ptr.specify::<GcBox<T>>()))
-    {
-        ptr.specify::<GcBox<T>>()
-            .as_ref()
-            .value
-            .accept(visitor)
-            .unwrap();
+    let mut spec = ptr.specify::<GcBox<T>>();
+    if visitor.visited.insert(AllocationId::from(spec)) {
+        spec.as_ref().value.accept(visitor).unwrap();
 
-        let mut_spec = ptr.specify::<GcBox<T>>().as_mut();
+        let mut_spec = spec.as_mut();
         let layout = Layout::for_value(mut_spec);
         drop_in_place(mut_spec);
         dealloc(std::ptr::from_mut::<GcBox<T>>(mut_spec).cast(), layout);
