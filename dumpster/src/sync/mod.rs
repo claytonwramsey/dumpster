@@ -933,311 +933,301 @@ impl<T: Trace + Send + Sync + ?Sized> Debug for Gc<T> {
     }
 }
 
-/// The code in the below module is derived from the implementations for [`std::sync::Arc`] found in the [Rust standard library](https://github.com/rust-lang/rust).
-/// The original implementation was published under both the [MIT](https://mit-license.org/) and [Apache license](http://www.apache.org/licenses/LICENSE-2.0), version 2.0.
-/// Copies of the licenses are available at the linked addresses.
-mod from {
-    use super::{
-        dealloc, mem, notify_created_gc, ptr, slice, AtomicUsize, Cow, Gc, GcBox, Layout,
-        ManuallyDrop, Nullable, Trace, UnsafeCell,
-    };
-
-    impl<T: Trace + Send + Sync> From<T> for Gc<T> {
-        /// Converts a generic type `T` into an `Gc<T>`
-        ///
-        /// The conversion allocates on the heap and moves `t`
-        /// from the stack into it.
-        ///
-        /// # Example
-        /// ```rust
-        /// # use dumpster::unsync::Gc;
-        /// let x = 5;
-        /// let rc = Gc::new(5);
-        ///
-        /// assert_eq!(Gc::from(x), rc);
-        /// ```
-        fn from(value: T) -> Self {
-            Gc::new(value)
-        }
+impl<T: Trace + Send + Sync> From<T> for Gc<T> {
+    /// Converts a generic type `T` into an `Gc<T>`
+    ///
+    /// The conversion allocates on the heap and moves `t`
+    /// from the stack into it.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use dumpster::unsync::Gc;
+    /// let x = 5;
+    /// let rc = Gc::new(5);
+    ///
+    /// assert_eq!(Gc::from(x), rc);
+    /// ```
+    fn from(value: T) -> Self {
+        Gc::new(value)
     }
+}
 
-    impl<T: Trace + Send + Sync, const N: usize> From<[T; N]> for Gc<[T]> {
-        /// Converts a [`[T; N]`](prim@array) into an `Gc<[T]>`.
-        ///
-        /// The conversion moves the array into a newly allocated `Gc`.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::unsync::Gc;
-        /// let original: [i32; 3] = [1, 2, 3];
-        /// let shared: Gc<[i32]> = Gc::from(original);
-        /// assert_eq!(&[1, 2, 3], &shared[..]);
-        /// ```
-        #[inline]
-        fn from(v: [T; N]) -> Gc<[T]> {
-            sync_coerce_gc!(Gc::<[T; N]>::from(v))
-        }
+impl<T: Trace + Send + Sync, const N: usize> From<[T; N]> for Gc<[T]> {
+    /// Converts a [`[T; N]`](prim@array) into an `Gc<[T]>`.
+    ///
+    /// The conversion moves the array into a newly allocated `Gc`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::unsync::Gc;
+    /// let original: [i32; 3] = [1, 2, 3];
+    /// let shared: Gc<[i32]> = Gc::from(original);
+    /// assert_eq!(&[1, 2, 3], &shared[..]);
+    /// ```
+    #[inline]
+    fn from(v: [T; N]) -> Gc<[T]> {
+        sync_coerce_gc!(Gc::<[T; N]>::from(v))
     }
+}
 
-    impl<T: Trace + Send + Sync + Clone> From<&[T]> for Gc<[T]> {
-        /// Allocates a garbage-collected slice and fills it by cloning `slice`'s items.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::unsync::Gc;
-        /// let original: &[i32] = &[1, 2, 3];
-        /// let shared: Gc<[i32]> = Gc::from(original);
-        /// assert_eq!(&[1, 2, 3], &shared[..]);
-        /// ```
-        #[inline]
-        fn from(slice: &[T]) -> Gc<[T]> {
-            // Panic guard while cloning T elements.
-            // In the event of a panic, elements that have been written
-            // into the new GcBox will be dropped, then the memory freed.
-            struct Guard<T> {
-                /// pointer to `GcBox` to deallocate on panic
-                mem: *mut u8,
-                /// layout of the `GcBox` to deallocate on panic
-                layout: Layout,
-                /// pointer to the `GcBox`'s value
-                elems: *mut T,
-                /// the number of elements cloned so far
-                n_elems: usize,
-            }
+impl<T: Trace + Send + Sync + Clone> From<&[T]> for Gc<[T]> {
+    /// Allocates a garbage-collected slice and fills it by cloning `slice`'s items.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::unsync::Gc;
+    /// let original: &[i32] = &[1, 2, 3];
+    /// let shared: Gc<[i32]> = Gc::from(original);
+    /// assert_eq!(&[1, 2, 3], &shared[..]);
+    /// ```
+    #[inline]
+    fn from(slice: &[T]) -> Gc<[T]> {
+        // Panic guard while cloning T elements.
+        // In the event of a panic, elements that have been written
+        // into the new GcBox will be dropped, then the memory freed.
+        struct Guard<T> {
+            /// pointer to `GcBox` to deallocate on panic
+            mem: *mut u8,
+            /// layout of the `GcBox` to deallocate on panic
+            layout: Layout,
+            /// pointer to the `GcBox`'s value
+            elems: *mut T,
+            /// the number of elements cloned so far
+            n_elems: usize,
+        }
 
-            impl<T> Drop for Guard<T> {
-                fn drop(&mut self) {
-                    unsafe {
-                        let slice = slice::from_raw_parts_mut(self.elems, self.n_elems);
-                        ptr::drop_in_place(slice);
+        impl<T> Drop for Guard<T> {
+            fn drop(&mut self) {
+                unsafe {
+                    let slice = slice::from_raw_parts_mut(self.elems, self.n_elems);
+                    ptr::drop_in_place(slice);
 
-                        dealloc(self.mem, self.layout);
-                    }
-                }
-            }
-
-            unsafe {
-                let value_layout = Layout::array::<T>(slice.len()).unwrap();
-
-                let layout = Layout::new::<GcBox<()>>()
-                    .extend(value_layout)
-                    .unwrap()
-                    .0
-                    .pad_to_align();
-
-                let ptr = Self::allocate_for_layout_of_box(layout, |mem| {
-                    ptr::slice_from_raw_parts_mut(mem.cast::<T>(), slice.len()) as *mut GcBox<[T]>
-                });
-
-                // Pointer to first element
-                let elems = (&raw mut (*ptr).value).cast::<T>();
-
-                let mut guard = Guard {
-                    mem: ptr.cast::<u8>(),
-                    layout,
-                    elems,
-                    n_elems: 0,
-                };
-
-                for (i, item) in slice.iter().enumerate() {
-                    ptr::write(elems.add(i), item.clone());
-                    guard.n_elems += 1;
-                }
-
-                // All clear. Forget the guard so it doesn't free the new GcBox.
-                mem::forget(guard);
-
-                notify_created_gc();
-
-                Self {
-                    ptr: UnsafeCell::new(Nullable::from_ptr(ptr)),
-                    tag: AtomicUsize::new(0),
+                    dealloc(self.mem, self.layout);
                 }
             }
         }
-    }
 
-    impl<T: Trace + Send + Sync + Clone> From<&mut [T]> for Gc<[T]> {
-        /// Allocates a garbage-collected slice and fills it by cloning `v`'s items.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::unsync::Gc;
-        /// let mut original = [1, 2, 3];
-        /// let original: &mut [i32] = &mut original;
-        /// let shared: Gc<[i32]> = Gc::from(original);
-        /// assert_eq!(&[1, 2, 3], &shared[..]);
-        /// ```
-        #[inline]
-        fn from(value: &mut [T]) -> Self {
-            Gc::from(&*value)
-        }
-    }
+        unsafe {
+            let value_layout = Layout::array::<T>(slice.len()).unwrap();
 
-    impl From<&str> for Gc<str> {
-        /// Allocates a garbage-collected string slice and copies `v` into it.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::unsync::Gc;
-        /// let shared: Gc<str> = Gc::from("statue");
-        /// assert_eq!("statue", &shared[..]);
-        /// ```
-        #[inline]
-        fn from(v: &str) -> Self {
-            let bytes = Gc::<[u8]>::from(v.as_bytes());
-            let (ptr, tag) = Gc::into_ptr(bytes);
-            unsafe { Gc::from_ptr(ptr as *const GcBox<str>, tag) }
-        }
-    }
+            let layout = Layout::new::<GcBox<()>>()
+                .extend(value_layout)
+                .unwrap()
+                .0
+                .pad_to_align();
 
-    impl From<&mut str> for Gc<str> {
-        /// Allocates a garbage-collected string slice and copies `v` into it.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::unsync::Gc;
-        /// let mut original = String::from("statue");
-        /// let original: &mut str = &mut original;
-        /// let shared: Gc<str> = Gc::from(original);
-        /// assert_eq!("statue", &shared[..]);
-        /// ```
-        #[inline]
-        fn from(v: &mut str) -> Self {
-            Gc::from(&*v)
-        }
-    }
+            let ptr = Self::allocate_for_layout_of_box(layout, |mem| {
+                ptr::slice_from_raw_parts_mut(mem.cast::<T>(), slice.len()) as *mut GcBox<[T]>
+            });
 
-    impl From<Gc<str>> for Gc<[u8]> {
-        /// Converts a garbage-collected string slice into a byte slice.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::unsync::Gc;
-        /// let string: Gc<str> = Gc::from("eggplant");
-        /// let bytes: Gc<[u8]> = Gc::from(string);
-        /// assert_eq!("eggplant".as_bytes(), bytes.as_ref());
-        /// ```
-        #[inline]
-        fn from(value: Gc<str>) -> Self {
-            let (ptr, tag) = Gc::into_ptr(value);
-            unsafe { Gc::from_ptr(ptr as *const GcBox<[u8]>, tag) }
-        }
-    }
+            // Pointer to first element
+            let elems = (&raw mut (*ptr).value).cast::<T>();
 
-    impl From<String> for Gc<str> {
-        /// Allocates a garbage-collected string slice and copies `v` into it.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::unsync::Gc;
-        /// let original: String = "statue".to_owned();
-        /// let shared: Gc<str> = Gc::from(original);
-        /// assert_eq!("statue", &shared[..]);
-        /// ```
-        #[inline]
-        fn from(value: String) -> Self {
-            Self::from(&value[..])
-        }
-    }
+            let mut guard = Guard {
+                mem: ptr.cast::<u8>(),
+                layout,
+                elems,
+                n_elems: 0,
+            };
 
-    impl<T: Trace + Send + Sync> From<Box<T>> for Gc<T> {
-        /// Move a boxed object to a new, garbage collected, allocation.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::sync::Gc;
-        /// let original: Box<i32> = Box::new(1);
-        /// let shared: Gc<i32> = Gc::from(original);
-        /// assert_eq!(1, *shared);
-        /// ```
-        #[inline]
-        fn from(src: Box<T>) -> Self {
-            unsafe {
-                let layout = Layout::for_value(&*src);
-                let gc_ptr = Gc::allocate_for_layout(layout, <*mut u8>::cast::<GcBox<T>>);
+            for (i, item) in slice.iter().enumerate() {
+                ptr::write(elems.add(i), item.clone());
+                guard.n_elems += 1;
+            }
 
-                // Copy value as bytes
-                ptr::copy_nonoverlapping(
-                    (&raw const *src).cast::<u8>(),
-                    (&raw mut (*gc_ptr).value).cast::<u8>(),
-                    layout.size(),
-                );
+            // All clear. Forget the guard so it doesn't free the new GcBox.
+            mem::forget(guard);
 
-                // Free the allocation without dropping its contents
-                let bptr = Box::into_raw(src);
-                let src = Box::from_raw(bptr.cast::<mem::ManuallyDrop<T>>());
-                drop(src);
+            notify_created_gc();
 
-                notify_created_gc();
-                Self::from_ptr(gc_ptr, 0)
+            Self {
+                ptr: UnsafeCell::new(Nullable::from_ptr(ptr)),
+                tag: AtomicUsize::new(0),
             }
         }
     }
+}
 
-    impl<T: Trace + Send + Sync> From<Vec<T>> for Gc<[T]> {
-        /// Allocates a garbage-collected slice and moves `vec`'s items into it.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use dumpster::unsync::Gc;
-        /// let unique: Vec<i32> = vec![1, 2, 3];
-        /// let shared: Gc<[i32]> = Gc::from(unique);
-        /// assert_eq!(&[1, 2, 3], &shared[..]);
-        /// ```
-        #[inline]
-        fn from(vec: Vec<T>) -> Self {
-            let mut vec = ManuallyDrop::new(vec);
-            let vec_cap = vec.capacity();
-            let vec_len = vec.len();
-            let vec_ptr = vec.as_mut_ptr();
+impl<T: Trace + Send + Sync + Clone> From<&mut [T]> for Gc<[T]> {
+    /// Allocates a garbage-collected slice and fills it by cloning `v`'s items.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::unsync::Gc;
+    /// let mut original = [1, 2, 3];
+    /// let original: &mut [i32] = &mut original;
+    /// let shared: Gc<[i32]> = Gc::from(original);
+    /// assert_eq!(&[1, 2, 3], &shared[..]);
+    /// ```
+    #[inline]
+    fn from(value: &mut [T]) -> Self {
+        Gc::from(&*value)
+    }
+}
 
-            let gc_ptr = Self::allocate_for_slice(vec_len);
+impl From<&str> for Gc<str> {
+    /// Allocates a garbage-collected string slice and copies `v` into it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::unsync::Gc;
+    /// let shared: Gc<str> = Gc::from("statue");
+    /// assert_eq!("statue", &shared[..]);
+    /// ```
+    #[inline]
+    fn from(v: &str) -> Self {
+        let bytes = Gc::<[u8]>::from(v.as_bytes());
+        let (ptr, tag) = Gc::into_ptr(bytes);
+        unsafe { Gc::from_ptr(ptr as *const GcBox<str>, tag) }
+    }
+}
 
-            unsafe {
-                let dst_ptr = (&raw mut (*gc_ptr).value).cast::<T>();
-                ptr::copy_nonoverlapping(vec_ptr, dst_ptr, vec_len);
+impl From<&mut str> for Gc<str> {
+    /// Allocates a garbage-collected string slice and copies `v` into it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::unsync::Gc;
+    /// let mut original = String::from("statue");
+    /// let original: &mut str = &mut original;
+    /// let shared: Gc<str> = Gc::from(original);
+    /// assert_eq!("statue", &shared[..]);
+    /// ```
+    #[inline]
+    fn from(v: &mut str) -> Self {
+        Gc::from(&*v)
+    }
+}
 
-                let _ = Vec::from_raw_parts(vec_ptr, 0, vec_cap);
+impl From<Gc<str>> for Gc<[u8]> {
+    /// Converts a garbage-collected string slice into a byte slice.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::unsync::Gc;
+    /// let string: Gc<str> = Gc::from("eggplant");
+    /// let bytes: Gc<[u8]> = Gc::from(string);
+    /// assert_eq!("eggplant".as_bytes(), bytes.as_ref());
+    /// ```
+    #[inline]
+    fn from(value: Gc<str>) -> Self {
+        let (ptr, tag) = Gc::into_ptr(value);
+        unsafe { Gc::from_ptr(ptr as *const GcBox<[u8]>, tag) }
+    }
+}
 
-                notify_created_gc();
-                Self::from_ptr(gc_ptr, 0)
-            }
+impl From<String> for Gc<str> {
+    /// Allocates a garbage-collected string slice and copies `v` into it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::unsync::Gc;
+    /// let original: String = "statue".to_owned();
+    /// let shared: Gc<str> = Gc::from(original);
+    /// assert_eq!("statue", &shared[..]);
+    /// ```
+    #[inline]
+    fn from(value: String) -> Self {
+        Self::from(&value[..])
+    }
+}
+
+impl<T: Trace + Send + Sync> From<Box<T>> for Gc<T> {
+    /// Move a boxed object to a new, garbage collected, allocation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::sync::Gc;
+    /// let original: Box<i32> = Box::new(1);
+    /// let shared: Gc<i32> = Gc::from(original);
+    /// assert_eq!(1, *shared);
+    /// ```
+    #[inline]
+    fn from(src: Box<T>) -> Self {
+        unsafe {
+            let layout = Layout::for_value(&*src);
+            let gc_ptr = Gc::allocate_for_layout(layout, <*mut u8>::cast::<GcBox<T>>);
+
+            // Copy value as bytes
+            ptr::copy_nonoverlapping(
+                (&raw const *src).cast::<u8>(),
+                (&raw mut (*gc_ptr).value).cast::<u8>(),
+                layout.size(),
+            );
+
+            // Free the allocation without dropping its contents
+            let bptr = Box::into_raw(src);
+            let src = Box::from_raw(bptr.cast::<mem::ManuallyDrop<T>>());
+            drop(src);
+
+            notify_created_gc();
+            Self::from_ptr(gc_ptr, 0)
         }
     }
+}
 
-    impl<'a, B: Trace + Send + Sync> From<Cow<'a, B>> for Gc<B>
-    where
-        B: ToOwned + ?Sized,
-        Gc<B>: From<&'a B> + From<B::Owned>,
-    {
-        /// Creates a garbage-collected pointer from a clone-on-write pointer by
-        /// copying its content.
-        ///
-        /// # Example
-        ///
-        /// ```rust
-        /// # use dumpster::unsync::Gc;
-        /// # use std::borrow::Cow;
-        /// let cow: Cow<'_, str> = Cow::Borrowed("eggplant");
-        /// let shared: Gc<str> = Gc::from(cow);
-        /// assert_eq!("eggplant", &shared[..]);
-        /// ```
-        #[inline]
-        fn from(cow: Cow<'a, B>) -> Gc<B> {
-            match cow {
-                Cow::Borrowed(s) => Gc::from(s),
-                Cow::Owned(s) => Gc::from(s),
-            }
+impl<T: Trace + Send + Sync> From<Vec<T>> for Gc<[T]> {
+    /// Allocates a garbage-collected slice and moves `vec`'s items into it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use dumpster::unsync::Gc;
+    /// let unique: Vec<i32> = vec![1, 2, 3];
+    /// let shared: Gc<[i32]> = Gc::from(unique);
+    /// assert_eq!(&[1, 2, 3], &shared[..]);
+    /// ```
+    #[inline]
+    fn from(vec: Vec<T>) -> Self {
+        let mut vec = ManuallyDrop::new(vec);
+        let vec_cap = vec.capacity();
+        let vec_len = vec.len();
+        let vec_ptr = vec.as_mut_ptr();
+
+        let gc_ptr = Self::allocate_for_slice(vec_len);
+
+        unsafe {
+            let dst_ptr = (&raw mut (*gc_ptr).value).cast::<T>();
+            ptr::copy_nonoverlapping(vec_ptr, dst_ptr, vec_len);
+
+            let _ = Vec::from_raw_parts(vec_ptr, 0, vec_cap);
+
+            notify_created_gc();
+            Self::from_ptr(gc_ptr, 0)
+        }
+    }
+}
+
+impl<'a, B: Trace + Send + Sync> From<Cow<'a, B>> for Gc<B>
+where
+    B: ToOwned + ?Sized,
+    Gc<B>: From<&'a B> + From<B::Owned>,
+{
+    /// Creates a garbage-collected pointer from a clone-on-write pointer by
+    /// copying its content.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use dumpster::unsync::Gc;
+    /// # use std::borrow::Cow;
+    /// let cow: Cow<'_, str> = Cow::Borrowed("eggplant");
+    /// let shared: Gc<str> = Gc::from(cow);
+    /// assert_eq!("eggplant", &shared[..]);
+    /// ```
+    #[inline]
+    fn from(cow: Cow<'a, B>) -> Gc<B> {
+        match cow {
+            Cow::Borrowed(s) => Gc::from(s),
+            Cow::Owned(s) => Gc::from(s),
         }
     }
 }

@@ -124,3 +124,7 @@ dumpster = { version = "1.1.1", features = ["coerce-unsized"]}
 
 This code is licensed under the Mozilla Public License, version 2.0.
 For more information, refer to [LICENSE.md](LICENSE.md).
+
+This project includes portions of code derived from the Rust standard library,
+which is dual-licensed under the MIT and Apache 2.0 licenses.
+Copyright (c) The Rust Project Developers.
