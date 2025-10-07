@@ -304,10 +304,7 @@ fn escape_dead_pointer() {
     *(*esc).ptr.lock().unwrap() = Some(esc.clone());
     drop(esc);
     collect();
-    println!(
-        "{}",
-        ESCAPED.with(|e| e.lock().unwrap().as_ref().unwrap().x)
-    );
+    let _x = ESCAPED.with(|e| e.lock().unwrap().as_ref().unwrap().x);
 }
 
 #[test]
@@ -584,7 +581,7 @@ fn unsync_fuzz() {
         }
         match fastrand::u8(0..4) {
             0 => {
-                println!("add gc {next_detector}");
+                // println!("add gc {next_detector}");
                 gcs.push(Gc::new(Alloc {
                     refs: Mutex::new(Vec::new()),
                     id: next_detector,
@@ -595,7 +592,7 @@ fn unsync_fuzz() {
                 if gcs.len() > 1 {
                     let from = fastrand::usize(0..gcs.len());
                     let to = fastrand::usize(0..gcs.len());
-                    println!("add ref {} -> {}", gcs[from].id, gcs[to].id);
+                    // println!("add ref {} -> {}", gcs[from].id, gcs[to].id);
                     let new_gc = gcs[to].clone();
                     let mut guard = gcs[from].refs.lock().unwrap();
                     guard.push(new_gc);
@@ -603,7 +600,7 @@ fn unsync_fuzz() {
             }
             2 => {
                 let idx = fastrand::usize(0..gcs.len());
-                println!("remove gc {}", gcs[idx].id);
+                // println!("remove gc {}", gcs[idx].id);
                 gcs.swap_remove(idx);
             }
             3 => {
@@ -611,7 +608,7 @@ fn unsync_fuzz() {
                 let mut guard = gcs[from].refs.lock().unwrap();
                 if !guard.is_empty() {
                     let to = fastrand::usize(0..guard.len());
-                    println!("drop ref {} -> {}", gcs[from].id, guard[to].id);
+                    // println!("drop ref {} -> {}", gcs[from].id, guard[to].id);
                     guard.swap_remove(to);
                 }
             }
@@ -625,16 +622,16 @@ fn unsync_fuzz() {
         graph.get_mut(&9999).unwrap().push(alloc.id);
         dfs(alloc, &mut graph);
     }
-    println!("{graph:#?}");
+    // println!("{graph:#?}");
 
     drop(gcs);
     collect();
 
     let mut n_missing = 0;
-    for (id, count) in DROP_DETECTORS[..next_detector].iter().enumerate() {
+    for count in &DROP_DETECTORS[..next_detector] {
         let num = count.load(Ordering::Relaxed);
         if num != 1 {
-            println!("expected 1 for id {id} but got {num}");
+            // println!("expected 1 for id {id} but got {num}");
             n_missing += 1;
         }
     }
