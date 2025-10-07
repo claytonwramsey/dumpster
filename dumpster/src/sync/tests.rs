@@ -830,6 +830,7 @@ fn make_mut_of_object_in_dumpster() {
 }
 
 #[test]
+#[ignore]
 /// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
 fn sync_leak_by_creation_in_drop() {
     static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -860,6 +861,7 @@ fn sync_leak_by_creation_in_drop() {
 
     impl Drop for Bar {
         fn drop(&mut self) {
+            println!("drop Bar");
             BAR_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -879,7 +881,49 @@ fn sync_leak_by_creation_in_drop() {
 
 #[test]
 fn try_leak_cycle_drop_many_times() {
-    for _ in 0..10 {
-        sync_leak_by_creation_in_drop();
+    static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    struct Foo(OnceLock<Gc<Self>>);
+    struct Bar(OnceLock<Gc<Self>>);
+    for i in 0..1000 {
+        unsafe impl Trace for Foo {
+            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+                self.0.accept(visitor)
+            }
+        }
+
+        unsafe impl Trace for Bar {
+            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+                self.0.accept(visitor)
+            }
+        }
+
+        impl Drop for Foo {
+            fn drop(&mut self) {
+                println!("calling drop for foo");
+                let gcbar = Gc::new(Bar(OnceLock::new()));
+                let _ = gcbar.0.set(gcbar.clone());
+                drop(gcbar);
+                println!("drop for foo done");
+            }
+        }
+
+        impl Drop for Bar {
+            fn drop(&mut self) {
+                println!("drop Bar");
+                BAR_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let foo = Gc::new(Foo(OnceLock::new()));
+        let _ = foo.0.set(foo.clone());
+        drop(foo);
+
+        collect(); // synchronizes with other threads and ends its collection period
+        collect(); // causes Bar to be created and then leaked
+        collect(); // cleans up Bar (eventually)
+
+        assert!(super::collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
+
+        assert_eq!(BAR_DROP_COUNT.load(Ordering::Relaxed), i + 1);
     }
 }

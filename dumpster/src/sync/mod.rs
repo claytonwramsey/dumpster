@@ -675,15 +675,14 @@ where
     T: Trace + Send + Sync + ?Sized,
 {
     fn drop(&mut self) {
-        let is_bar = std::any::type_name::<T>()
-            == "dumpster::sync::tests::sync_leak_by_creation_in_drop::Bar";
-        if is_bar {
-            println!("{}: call gc drop... ", std::any::type_name::<T>());
-        }
-
         let Some(mut ptr) = unsafe { *self.ptr.get() }.as_option() else {
             return;
         };
+        let is_bar = std::any::type_name::<T>()
+            == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar";
+        if is_bar {
+            println!("{}: call gc drop... ", std::any::type_name::<T>());
+        }
         let box_ref = unsafe { ptr.as_ref() };
         box_ref.weak.fetch_add(1, Ordering::AcqRel); // ensures that this allocation wasn't freed
                                                      // while we weren't looking

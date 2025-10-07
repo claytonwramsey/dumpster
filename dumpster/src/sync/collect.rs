@@ -77,7 +77,7 @@ struct AllocationInfo {
     ptr: Erased,
     /// Function for dropping the allocation when its weak and strong count hits zero.
     /// Should have the same behavior as dropping a Gc normally to a reference count of zero.
-    weak_drop_fn: unsafe fn(Erased),
+    weak_drop_fn: unsafe fn(Erased, &HashMap<AllocationId, AllocationInfo>),
     /// Information about this allocation's reachability.
     reachability: Reachability,
 }
@@ -176,13 +176,13 @@ pub fn notify_created_gc() {
 /// is [convertible to a reference](core::ptr#pointer-to-reference-conversion).
 pub(super) unsafe fn mark_dirty<T>(allocation: NonNull<GcBox<T>>)
 where
-    T: Trace + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized + 'static,
 {
     DUMPSTER.with(|dumpster| {
         let mut contents = dumpster.contents.borrow_mut();
         if let Entry::Vacant(v) = contents.entry(AllocationId::from(allocation)) {
             if std::any::type_name::<T>()
-                == "dumpster::sync::tests::sync_leak_by_creation_in_drop::Bar"
+                == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar"
             {
                 println!("bar has been added to the dumpster");
             }
@@ -255,6 +255,10 @@ impl Dumpster {
     /// Deliver all [`TrashCan`]s contained by this dumpster to the garbage collect, removing them
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
+        let just_one = self.contents.borrow().len() == 1;
+        if just_one {
+            println!("deliver just one element to the garbage truck");
+        }
         self.n_drops.set(0);
         let mut guard = garbage_truck.contents.lock();
         for (id, can) in self.contents.borrow_mut().drain() {
@@ -282,9 +286,11 @@ impl GarbageTruck {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     fn collect_all(&self) {
+        // IMPORTANT: take contents before acquiring the collecting guard so we ensure that
+        // everything from before we start collecting gets picked up
+        let to_collect = take(&mut *self.contents.lock());
         let collecting_guard = self.collecting_lock.write();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
-        let to_collect = take(&mut *self.contents.lock());
         let mut ref_graph = HashMap::with_capacity(to_collect.len());
 
         CURRENT_TAG.fetch_add(1, Ordering::Release);
@@ -343,7 +349,7 @@ impl GarbageTruck {
                 // SAFETY: we have proven (via header_ref.weak = 1) that the cleaning
                 // process had the last reference to the allocation.
                 // `drop_fn` must have been created with the true value of `ptr` in mind.
-                drop_fn(ptr);
+                drop_fn(ptr, &ref_graph);
             };
         }
         drop(collecting_guard);
@@ -365,12 +371,12 @@ impl GarbageTruck {
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-unsafe fn dfs<T: Trace + Send + Sync + ?Sized>(
+unsafe fn dfs<T: Trace + Send + Sync + ?Sized + 'static>(
     ptr: Erased,
     ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
 ) {
     let is_bar =
-        std::any::type_name::<T>() == "dumpster::sync::tests::sync_leak_by_creation_in_drop::Bar";
+        std::any::type_name::<T>() == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar";
     if is_bar {
         println!("visited Bar in dfs");
     }
@@ -439,6 +445,11 @@ impl Visitor for Dfs<'_> {
     where
         T: Trace + Send + Sync + ?Sized,
     {
+        let is_bar = std::any::type_name::<T>()
+            == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar";
+        if is_bar {
+            println!("visitor struct found a bar gc");
+        }
         // must not use deref operators since we don't want to update the generation
         let ptr = unsafe {
             // SAFETY: This is the same as the deref implementation, but avoids
@@ -453,6 +464,11 @@ impl Visitor for Dfs<'_> {
         if gc.tag.swap(current_tag, Ordering::Relaxed) >= current_tag
             || box_ref.generation.load(Ordering::Acquire) >= current_tag
         {
+            if is_bar {
+                println!(
+                    "bar pointer was tagged with the current tag, so it was reached by client code"
+                );
+            }
             // This pointer was already tagged by this sweep, so it must have been moved by
             mark(self.current_id, self.ref_graph);
             return;
@@ -468,6 +484,9 @@ impl Visitor for Dfs<'_> {
             .unwrap()
             .reachability
         else {
+            if is_bar {
+                println!("bar was proven reachable beforehand");
+            }
             // this node has been proven reachable by something higher up. No need to keep building
             // its ref graph
             return;
@@ -481,6 +500,9 @@ impl Visitor for Dfs<'_> {
                     ..
                 } => {
                     *n_unaccounted -= 1;
+                    if is_bar {
+                        println!("bar's unaccounted count is now {}", *n_unaccounted);
+                    }
                 }
                 Reachability::Reachable => (),
             },
@@ -536,6 +558,46 @@ fn mark(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) {
     }
 }
 
+/// A visitor for decrementing the reference count of pointees.
+struct PrepareForDestruction<'a> {
+    /// The reference graph.
+    /// Must have been populated with reachability already.
+    graph: &'a HashMap<AllocationId, AllocationInfo>,
+}
+
+impl Visitor for PrepareForDestruction<'_> {
+    fn visit_sync<T>(&mut self, gc: &crate::sync::Gc<T>)
+    where
+        T: Trace + Send + Sync + ?Sized,
+    {
+        let id = AllocationId::from(unsafe {
+            // SAFETY: This is the same as dereferencing the GC.
+            (*gc.ptr.get()).unwrap()
+        });
+        unsafe {
+            // SAFETY: The GC is unreachable,
+            // so the GC will never be dereferenced again.
+            let p = gc.ptr.get().as_mut().unwrap();
+            *p = p.as_null();
+        }
+
+        if matches!(self.graph[&id].reachability, Reachability::Reachable) {
+            unsafe {
+                // SAFETY: the associated pointee is reachable, so the allocation here must
+                // still exist and be valid.
+                id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
+            }
+        }
+    }
+
+    fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
+    where
+        T: Trace + ?Sized,
+    {
+        unreachable!("no unsync members of sync Gc possible!");
+    }
+}
+
 /// Destroy an allocation, obliterating its GCs, dropping it, and deallocating it.
 ///
 /// # Safety
@@ -545,45 +607,11 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
     ptr: Erased,
     graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
-    /// A visitor for decrementing the reference count of pointees.
-    struct PrepareForDestruction<'a> {
-        /// The reference graph.
-        /// Must have been populated with reachability already.
-        graph: &'a HashMap<AllocationId, AllocationInfo>,
+    let is_bar =
+        std::any::type_name::<T>() == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar";
+    if is_bar {
+        println!("drop Bar due to ordinary destruction");
     }
-
-    impl Visitor for PrepareForDestruction<'_> {
-        fn visit_sync<T>(&mut self, gc: &crate::sync::Gc<T>)
-        where
-            T: Trace + Send + Sync + ?Sized,
-        {
-            let id = AllocationId::from(unsafe {
-                // SAFETY: This is the same as dereferencing the GC.
-                (*gc.ptr.get()).unwrap()
-            });
-            unsafe {
-                // SAFETY: The GC is unreachable,
-                // so the GC will never be dereferenced again.
-                let p = gc.ptr.get().as_mut().unwrap();
-                *p = p.as_null();
-            }
-
-            if matches!(self.graph[&id].reachability, Reachability::Reachable) {
-                unsafe {
-                    // SAFETY: This is the same as dereferencing the GC.
-                    id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
-                }
-            }
-        }
-
-        fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
-        where
-            T: Trace + ?Sized,
-        {
-            unreachable!("no unsync members of sync Gc possible!");
-        }
-    }
-
     let specified = ptr.specify::<GcBox<T>>().as_mut();
     specified
         .value
@@ -600,12 +628,24 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
 /// # Safety
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
-unsafe fn drop_weak_zero<T: Trace + Send + Sync + ?Sized>(ptr: Erased) {
+unsafe fn drop_weak_zero<T: Trace + Send + Sync + ?Sized + 'static>(
+    ptr: Erased,
+    graph: &HashMap<AllocationId, AllocationInfo>,
+) {
+    let is_bar =
+        std::any::type_name::<T>() == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar";
+    if is_bar {
+        println!("drop Bar because weak count hit zero");
+    }
     let mut specified = ptr.specify::<GcBox<T>>();
     assert_eq!(specified.as_ref().weak.load(Ordering::Relaxed), 0);
     assert_eq!(specified.as_ref().strong.load(Ordering::Relaxed), 0);
 
     let layout = Layout::for_value(specified.as_ref());
+    let prepare_res = specified
+        .as_ref()
+        .accept(&mut PrepareForDestruction { graph });
+    assert!(prepare_res.is_ok());
     drop_in_place(specified.as_mut());
     dealloc(specified.as_ptr().cast(), layout);
 }
