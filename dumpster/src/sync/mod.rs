@@ -51,6 +51,14 @@ use self::collect::{
     notify_created_gc, notify_dropped_gc,
 };
 
+/// A soft limit on the amount of references that may be made to a `Gc`.
+///
+/// Going above this limit will abort your program (although not
+/// necessarily) at _exactly_ `MAX_REFCOUNT + 1` references.
+///
+/// See comment in `Gc::clone`.
+const MAX_STRONG_COUNT: usize = (isize::MAX) as usize;
+
 /// A thread-safe garbage-collected pointer.
 ///
 /// This pointer can be duplicated and then shared across threads.
@@ -630,13 +638,31 @@ where
             (*self.ptr.get()).expect("attempt to clone Gc to already-deallocated object. \
             This means a Gc was accessed during a Drop implementation, likely implying a bug in your code.").as_ref()
         };
+
         // increment strong count before generation to ensure cleanup never underestimates ref count
-        box_ref.strong.fetch_add(1, Ordering::Acquire);
+        let old_strong = box_ref.strong.fetch_add(1, Ordering::Acquire);
+
+        // We need to guard against massive refcounts in case someone is `mem::forget`ing
+        // Gcs. If we don't do this the count can overflow and users will use-after free. This
+        // branch will never be taken in any realistic program. We abort because such a program is
+        // incredibly degenerate, and we don't care to support it.
+        //
+        // This check is not 100% water-proof: we error when the refcount grows beyond `isize::MAX`.
+        // But we do that check *after* having done the increment, so there is a chance here that
+        // the worst already happened and we actually do overflow the `usize` counter. However, that
+        // requires the counter to grow from `isize::MAX` to `usize::MAX` between the increment
+        // above and the `abort` below, which seems exceedingly unlikely.
+        if old_strong > MAX_STRONG_COUNT {
+            std::process::abort();
+        }
+
         box_ref
             .generation
             .store(CURRENT_TAG.load(Ordering::Acquire), Ordering::Release);
+
         notify_created_gc();
         // mark_clean(box_ref); // causes performance drops
+
         Gc {
             ptr: UnsafeCell::new(unsafe { *self.ptr.get() }),
             tag: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
