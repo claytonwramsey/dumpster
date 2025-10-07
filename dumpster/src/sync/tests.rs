@@ -243,7 +243,6 @@ fn open_drop() {
 }
 
 #[test]
-#[ignore]
 #[cfg_attr(miri, ignore = "miri is too slow")]
 fn eventually_collect() {
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
@@ -829,7 +828,6 @@ fn make_mut_of_object_in_dumpster() {
 }
 
 #[test]
-#[ignore]
 /// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
 fn sync_leak_by_creation_in_drop() {
     static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
