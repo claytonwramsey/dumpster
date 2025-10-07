@@ -181,6 +181,11 @@ where
     DUMPSTER.with(|dumpster| {
         let mut contents = dumpster.contents.borrow_mut();
         if let Entry::Vacant(v) = contents.entry(AllocationId::from(allocation)) {
+            if std::any::type_name::<T>()
+                == "dumpster::sync::tests::sync_leak_by_creation_in_drop::Bar"
+            {
+                println!("bar has been added to the dumpster");
+            }
             v.insert(TrashCan {
                 ptr: Erased::new(allocation),
                 dfs_fn: dfs::<T>,
@@ -364,18 +369,32 @@ unsafe fn dfs<T: Trace + Send + Sync + ?Sized>(
     ptr: Erased,
     ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
 ) {
+    let is_bar =
+        std::any::type_name::<T>() == "dumpster::sync::tests::sync_leak_by_creation_in_drop::Bar";
+    if is_bar {
+        println!("visited Bar in dfs");
+    }
     let box_ref = unsafe {
         // SAFETY: We require `ptr` to be a an erased pointer to `GcBox<T>`.
         ptr.specify::<GcBox<T>>().as_ref()
     };
     let starting_id = AllocationId::from(box_ref);
     let Entry::Vacant(v) = ref_graph.entry(starting_id) else {
+        if is_bar {
+            println!("bar had an empty entry in the ref graph");
+        }
         // the weak count was incremented by another DFS operation elsewhere.
         // Decrement it to have only one from us.
         box_ref.weak.fetch_sub(1, Ordering::Release);
         return;
     };
     let strong_count = box_ref.strong.load(Ordering::Acquire);
+    if is_bar {
+        println!(
+            "bar had a strong count of {strong_count} and a weak count of {}",
+            box_ref.weak.load(Ordering::Relaxed)
+        );
+    }
     v.insert(AllocationInfo {
         ptr,
         weak_drop_fn: drop_weak_zero::<T>,
@@ -395,6 +414,9 @@ unsafe fn dfs<T: Trace + Send + Sync + ?Sized>(
         .is_err()
         || box_ref.generation.load(Ordering::Acquire) >= CURRENT_TAG.load(Ordering::Relaxed)
     {
+        if is_bar {
+            println!("bar was marked as accessible during dfs");
+        }
         // box_ref.value was accessed while we worked
         // mark this allocation as reachable
         mark(starting_id, ref_graph);

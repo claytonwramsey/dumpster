@@ -675,6 +675,12 @@ where
     T: Trace + Send + Sync + ?Sized,
 {
     fn drop(&mut self) {
+        let is_bar = std::any::type_name::<T>()
+            == "dumpster::sync::tests::sync_leak_by_creation_in_drop::Bar";
+        if is_bar {
+            println!("{}: call gc drop... ", std::any::type_name::<T>());
+        }
+
         let Some(mut ptr) = unsafe { *self.ptr.get() }.as_option() else {
             return;
         };
@@ -684,9 +690,18 @@ where
         box_ref
             .generation
             .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Release);
+        if is_bar {
+            println!(
+                "starting strong count was {}",
+                box_ref.strong.load(Ordering::Relaxed)
+            );
+        }
         match box_ref.strong.fetch_sub(1, Ordering::AcqRel) {
             0 => unreachable!("strong cannot reach zero while a Gc to it exists"),
             1 => {
+                if is_bar {
+                    println!("allocation has only one strong ref");
+                }
                 mark_clean(box_ref);
                 if box_ref.weak.fetch_sub(1, Ordering::Release) == 1 {
                     // destroyed the last weak reference! we can safely deallocate this
@@ -699,7 +714,13 @@ where
                 }
             }
             _ => {
+                if is_bar {
+                    println!("allocation has multiple strong refs");
+                }
                 if contains_gcs(&box_ref.value).unwrap_or(true) {
+                    if is_bar {
+                        println!("bar contains gcs");
+                    }
                     // SAFETY: `ptr` is convertible to a reference
                     // We don't use `box_ref` here because that pointer
                     // only has `SharedReadOnly` permissions under the stacked borrows model

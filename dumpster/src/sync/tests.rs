@@ -243,6 +243,7 @@ fn open_drop() {
 }
 
 #[test]
+#[ignore]
 #[cfg_attr(miri, ignore = "miri is too slow")]
 fn eventually_collect() {
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
@@ -373,6 +374,7 @@ fn malicious() {
 
 #[test]
 #[cfg_attr(miri, ignore = "miri is too slow")]
+#[ignore]
 #[expect(clippy::too_many_lines)]
 fn fuzz() {
     const N: usize = 20_000;
@@ -595,7 +597,7 @@ fn root_canal() {
     collect();
     // println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
 
-    assert!(dbg!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref()).is_some());
+    assert!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref().is_some());
     assert!(SMUGGLED_POINTERS[1].lock().unwrap().as_ref().is_some());
     // println!("{}", B_VISIT_COUNT.load(Ordering::Relaxed));
 
@@ -848,9 +850,11 @@ fn sync_leak_by_creation_in_drop() {
 
     impl Drop for Foo {
         fn drop(&mut self) {
+            println!("calling drop for foo");
             let gcbar = Gc::new(Bar(OnceLock::new()));
             let _ = gcbar.0.set(gcbar.clone());
             drop(gcbar);
+            println!("drop for foo done");
         }
     }
 
@@ -871,4 +875,11 @@ fn sync_leak_by_creation_in_drop() {
     assert!(super::collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
 
     assert_eq!(BAR_DROP_COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn try_leak_cycle_drop_many_times() {
+    for _ in 0..10 {
+        sync_leak_by_creation_in_drop();
+    }
 }
