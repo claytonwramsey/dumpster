@@ -374,7 +374,6 @@ fn malicious() {
 
 #[test]
 #[cfg_attr(miri, ignore = "miri is too slow")]
-#[ignore]
 #[expect(clippy::too_many_lines)]
 fn fuzz() {
     const N: usize = 20_000;
@@ -880,11 +879,12 @@ fn sync_leak_by_creation_in_drop() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "miri is too slow")]
 fn try_leak_cycle_drop_many_times() {
     static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
     struct Foo(OnceLock<Gc<Self>>);
     struct Bar(OnceLock<Gc<Self>>);
-    for i in 0..1000 {
+    for i in 0..10_000 {
         unsafe impl Trace for Foo {
             fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
                 self.0.accept(visitor)
