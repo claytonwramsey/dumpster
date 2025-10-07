@@ -27,7 +27,7 @@
 //! // contents of the Gc are automatically freed
 //! ```
 
-mod collect;
+pub(crate) mod collect;
 #[cfg(test)]
 mod tests;
 

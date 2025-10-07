@@ -49,20 +49,20 @@ struct GarbageTruck {
 }
 
 /// A structure containing the global information for the garbage collector.
-struct Dumpster {
+pub(super) struct Dumpster {
     /// A lookup table for the allocations which may need to be cleaned up later.
-    contents: RefCell<HashMap<AllocationId, TrashCan>>,
+    pub(super) contents: RefCell<HashMap<AllocationId, TrashCan>>,
     /// The number of times an allocation on this thread has been dropped.
     n_drops: Cell<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 /// A unique identifier for an allocation.
-struct AllocationId(NonNull<GcBox<()>>);
+pub(super) struct AllocationId(NonNull<GcBox<()>>);
 
 #[derive(Debug)]
 /// The information which describes an allocation that may need to be cleaned up later.
-struct TrashCan {
+pub(super) struct TrashCan {
     /// A pointer to the allocation to be cleaned up.
     ptr: Erased,
     /// The function which can be used to build a reference graph.
@@ -116,7 +116,7 @@ thread_local! {
     /// The dumpster for this thread.
     /// Allocations which are "dirty" will be transferred to this dumpster before being moved into
     /// the garbage truck for final collection.
-    static DUMPSTER: Dumpster = Dumpster {
+    pub(super) static DUMPSTER: Dumpster = Dumpster {
         contents: RefCell::new(HashMap::new()),
         n_drops: Cell::new(0),
     };
@@ -131,9 +131,6 @@ thread_local! {
 /// completion of the collection.
 /// Ensures that all allocations dropped on the calling thread are cleaned up
 pub fn collect_all_await() {
-    if CLEANING.get() {
-        return;
-    }
     DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
     GARBAGE_TRUCK.collect_all();
     drop(GARBAGE_TRUCK.collecting_lock.read());
@@ -160,7 +157,7 @@ pub fn notify_dropped_gc() {
             GARBAGE_TRUCK.collect_condition.load(Ordering::Relaxed),
         )
     };
-    if collect_cond(&CollectInfo { _private: () }) {
+    if collect_cond(&CollectInfo { _private: () }) && !CLEANING.get() {
         GARBAGE_TRUCK.collect_all();
     }
 }
@@ -181,22 +178,13 @@ pub(super) unsafe fn mark_dirty<T>(allocation: NonNull<GcBox<T>>)
 where
     T: Trace + Send + Sync + ?Sized,
 {
-    if CLEANING.get() {
-        println!("marking dirty while cleaning!");
-    }
     DUMPSTER.with(|dumpster| {
-        if dumpster
-            .contents
-            .borrow_mut()
-            .insert(
-                AllocationId::from(allocation),
-                TrashCan {
-                    ptr: Erased::new(allocation),
-                    dfs_fn: dfs::<T>,
-                },
-            )
-            .is_none()
-        {
+        let mut contents = dumpster.contents.borrow_mut();
+        if let Entry::Vacant(v) = contents.entry(AllocationId::from(allocation)) {
+            v.insert(TrashCan {
+                ptr: Erased::new(allocation),
+                dfs_fn: dfs::<T>,
+            });
             // SAFETY: the caller must guarantee that `allocation` meets all the
             // requirements for a reference.
             unsafe { allocation.as_ref() }
@@ -262,9 +250,6 @@ impl Dumpster {
     /// Deliver all [`TrashCan`]s contained by this dumpster to the garbage collect, removing them
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
-        if CLEANING.get() {
-            return;
-        }
         self.n_drops.set(0);
         let mut guard = garbage_truck.contents.lock();
         for (id, can) in self.contents.borrow_mut().drain() {
@@ -292,9 +277,6 @@ impl GarbageTruck {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     fn collect_all(&self) {
-        if CLEANING.get() {
-            return;
-        }
         let collecting_guard = self.collecting_lock.write();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let to_collect = take(&mut *self.contents.lock());
@@ -302,7 +284,7 @@ impl GarbageTruck {
 
         CURRENT_TAG.fetch_add(1, Ordering::Release);
 
-        for (_, TrashCan { ptr, dfs_fn }) in to_collect {
+        for TrashCan { ptr, dfs_fn } in to_collect.into_values() {
             unsafe {
                 // SAFETY: `ptr` may only be in `to_collect` if it was a valid pointer
                 // and `dfs_fn` must have been created with the intent of referring to
