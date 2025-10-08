@@ -53,7 +53,10 @@ pub(crate) use loom::sync::atomic::{fence, AtomicUsize, Ordering};
 #[cfg(not(loom))]
 pub(crate) use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
-use crate::{contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, Visitor};
+use crate::{
+    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, sync::collect::TrashCan, Trace,
+    Visitor,
+};
 
 use self::collect::{
     collect_all_await, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing, notify_created_gc,

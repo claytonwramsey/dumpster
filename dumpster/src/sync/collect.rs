@@ -10,6 +10,7 @@
 
 use std::{
     alloc::{dealloc, Layout},
+    backtrace::Backtrace,
     cell::{Cell, RefCell},
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take, transmute},
@@ -220,11 +221,12 @@ where
     DUMPSTER.with(|dumpster| {
         let mut contents = dumpster.contents.borrow_mut();
         if let Entry::Vacant(v) = contents.entry(AllocationId::from(allocation)) {
-            log!(T, "has been added to the dumpster");
-            v.insert(TrashCan {
+            let can = TrashCan {
                 ptr: Erased::new(allocation),
                 dfs_fn: dfs::<T>,
-            });
+            };
+            log!(T, "trash can {can:?} added to dumpster");
+            v.insert(can);
             // SAFETY: the caller must guarantee that `allocation` meets all the
             // requirements for a reference.
             unsafe { allocation.as_ref() }
@@ -238,8 +240,9 @@ where
 /// need to be cleaned again.
 pub(super) fn mark_clean<T>(allocation: &GcBox<T>)
 where
-    T: Trace + Send + Sync + ?Sized,
+    T: Trace + Send + Sync + ?Sized + 'static,
 {
+    log!(T, "marked clean");
     DUMPSTER.with(|dumpster| {
         if dumpster
             .contents
@@ -250,6 +253,14 @@ where
             allocation.weak.fetch_sub(1, Ordering::Release);
         }
     });
+}
+
+#[cfg(loom)]
+/// Deliver all [`TrashCan`]s from this thread's dumpster into the garbage truck.
+///
+/// This function is available to handle a flaw in `loom`, since we cannot use `Drop` to force a delivery upon thread death when running using `loom`.
+pub(super) fn deliver_dumpster() {
+    DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
 }
 
 /// Set the function which determines whether the garbage collector should be run.
@@ -290,14 +301,14 @@ impl Dumpster {
     /// Deliver all [`TrashCan`]s contained by this dumpster to the garbage collect, removing them
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
-        println!(
-            "delivering {} elements to the garbage truck",
-            self.contents.borrow().len()
-        );
-        self.n_drops.set(0);
         let mut guard = garbage_truck.contents.lock();
+        let n_elems = self.contents.borrow().len();
+        println!("delivering {n_elems} elements to the garbage truck");
+        self.n_drops.set(0);
         for (id, can) in self.contents.borrow_mut().drain() {
+            println!("deliver {can:?}...");
             if guard.insert(id, can).is_some() {
+                println!("was already in the dumpster");
                 unsafe {
                     // SAFETY: an allocation can only be in the dumpster if it still exists and its
                     // header is valid
@@ -307,6 +318,7 @@ impl Dumpster {
                 .fetch_sub(1, Ordering::Release);
             }
         }
+        println!("done delivering {n_elems} cans");
     }
 
     /// Determine whether this dumpster is full (and therefore should have its contents delivered to
@@ -323,6 +335,10 @@ impl GarbageTruck {
     fn collect_all(&self) {
         let collecting_guard = self.collecting_lock.write();
         let to_collect = take(&mut *self.contents.lock());
+        println!(
+            "collection has begun with {} possibly-unreachable allocations",
+            to_collect.len()
+        );
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let mut ref_graph = HashMap::with_capacity(to_collect.len());
 
@@ -702,5 +718,11 @@ impl Drop for Dumpster {
 impl Drop for GarbageTruck {
     fn drop(&mut self) {
         GARBAGE_TRUCK.collect_all();
+    }
+}
+
+impl Drop for TrashCan {
+    fn drop(&mut self) {
+        println!("trash can {self:?} has been dropped");
     }
 }

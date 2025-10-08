@@ -193,6 +193,7 @@ fn loom_sync_leak_by_creation_in_drop() {
         join_handles.push(loom::thread::spawn(|| {
             println!("===== collect from 1");
             collect();
+            crate::sync::collect::deliver_dumpster();
         }));
 
         for join_handle in join_handles {
