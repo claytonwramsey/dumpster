@@ -14,17 +14,32 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take, transmute},
     ptr::{drop_in_place, NonNull},
-    sync::{
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
-        LazyLock,
-    },
 };
 
+#[cfg(loom)]
+pub(crate) use loom::{
+    lazy_static,
+    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
+    thread_local,
+};
+
+#[cfg(loom)]
+use super::loom_ext::{Mutex, RwLock};
+
+#[cfg(not(loom))]
+pub(crate) use std::sync::{
+    atomic::{AtomicPtr, AtomicUsize, Ordering},
+    LazyLock,
+};
+
+#[cfg(not(loom))]
 use parking_lot::{Mutex, RwLock};
 
 use crate::{ptr::Erased, Trace, Visitor};
 
-use super::{default_collect_condition, CollectCondition, CollectInfo, Gc, GcBox, CURRENT_TAG};
+use super::{
+    default_collect_condition, log, CollectCondition, CollectInfo, Gc, GcBox, CURRENT_TAG,
+};
 
 /// The garbage truck, which is a global data structure containing information about allocations
 /// which might need to be collected.
@@ -104,6 +119,7 @@ enum Reachability {
 
 /// The global garbage truck.
 /// All [`TrashCan`]s should eventually end up in here.
+#[cfg(not(loom))]
 static GARBAGE_TRUCK: LazyLock<GarbageTruck> = LazyLock::new(|| GarbageTruck {
     contents: Mutex::new(HashMap::new()),
     collecting_lock: RwLock::new(()),
@@ -112,6 +128,18 @@ static GARBAGE_TRUCK: LazyLock<GarbageTruck> = LazyLock::new(|| GarbageTruck {
     collect_condition: AtomicPtr::new(default_collect_condition as *mut ()),
 });
 
+#[cfg(loom)]
+lazy_static! {
+    static ref GARBAGE_TRUCK: GarbageTruck = GarbageTruck {
+        contents: Mutex::new(HashMap::new()),
+        collecting_lock: RwLock::new(()),
+        n_gcs_dropped: AtomicUsize::new(0),
+        n_gcs_existing: AtomicUsize::new(0),
+        collect_condition: AtomicPtr::new(default_collect_condition as *mut ()),
+    };
+}
+
+#[cfg(not(loom))]
 thread_local! {
     /// The dumpster for this thread.
     /// Allocations which are "dirty" will be transferred to this dumpster before being moved into
@@ -127,10 +155,21 @@ thread_local! {
     static CLEANING: Cell<bool> = const { Cell::new(false) };
 }
 
+#[cfg(loom)]
+thread_local! {
+    pub(super) static DUMPSTER: Dumpster = Dumpster {
+        contents: RefCell::new(HashMap::new()),
+        n_drops: Cell::new(0),
+    };
+
+    static CLEANING: Cell<bool> = Cell::new(false);
+}
+
 /// Collect all allocations in the garbage truck (but not necessarily the dumpster), then await
 /// completion of the collection.
 /// Ensures that all allocations dropped on the calling thread are cleaned up
 pub fn collect_all_await() {
+    println!("starting collection");
     DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
     GARBAGE_TRUCK.collect_all();
     drop(GARBAGE_TRUCK.collecting_lock.read());
@@ -157,7 +196,7 @@ pub fn notify_dropped_gc() {
             GARBAGE_TRUCK.collect_condition.load(Ordering::Relaxed),
         )
     };
-    if collect_cond(&CollectInfo { _private: () }) && !CLEANING.get() {
+    if collect_cond(&CollectInfo { _private: () }) && !CLEANING.with(Cell::get) {
         GARBAGE_TRUCK.collect_all();
     }
 }
@@ -181,11 +220,7 @@ where
     DUMPSTER.with(|dumpster| {
         let mut contents = dumpster.contents.borrow_mut();
         if let Entry::Vacant(v) = contents.entry(AllocationId::from(allocation)) {
-            if std::any::type_name::<T>()
-                == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar"
-            {
-                println!("bar has been added to the dumpster");
-            }
+            log!(T, "has been added to the dumpster");
             v.insert(TrashCan {
                 ptr: Erased::new(allocation),
                 dfs_fn: dfs::<T>,
@@ -255,10 +290,10 @@ impl Dumpster {
     /// Deliver all [`TrashCan`]s contained by this dumpster to the garbage collect, removing them
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
-        let just_one = self.contents.borrow().len() == 1;
-        if just_one {
-            println!("deliver just one element to the garbage truck");
-        }
+        println!(
+            "delivering {} elements to the garbage truck",
+            self.contents.borrow().len()
+        );
         self.n_drops.set(0);
         let mut guard = garbage_truck.contents.lock();
         for (id, can) in self.contents.borrow_mut().drain() {
@@ -375,32 +410,25 @@ unsafe fn dfs<T: Trace + Send + Sync + ?Sized + 'static>(
     ptr: Erased,
     ref_graph: &mut HashMap<AllocationId, AllocationInfo>,
 ) {
-    let is_bar =
-        std::any::type_name::<T>() == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar";
-    if is_bar {
-        println!("visited Bar in dfs");
-    }
+    log!(T, "visited in dfs");
     let box_ref = unsafe {
         // SAFETY: We require `ptr` to be a an erased pointer to `GcBox<T>`.
         ptr.specify::<GcBox<T>>().as_ref()
     };
     let starting_id = AllocationId::from(box_ref);
     let Entry::Vacant(v) = ref_graph.entry(starting_id) else {
-        if is_bar {
-            println!("bar had an empty entry in the ref graph");
-        }
+        log!(T, "had an empty ref graph entry");
         // the weak count was incremented by another DFS operation elsewhere.
         // Decrement it to have only one from us.
         box_ref.weak.fetch_sub(1, Ordering::Release);
         return;
     };
     let strong_count = box_ref.strong.load(Ordering::Acquire);
-    if is_bar {
-        println!(
-            "bar had a strong count of {strong_count} and a weak count of {}",
-            box_ref.weak.load(Ordering::Relaxed)
-        );
-    }
+    log!(
+        T,
+        "had a strong count of {strong_count} and a weak count of {}",
+        box_ref.weak.load(Ordering::Relaxed)
+    );
     v.insert(AllocationInfo {
         ptr,
         weak_drop_fn: drop_weak_zero::<T>,
@@ -420,9 +448,7 @@ unsafe fn dfs<T: Trace + Send + Sync + ?Sized + 'static>(
         .is_err()
         || box_ref.generation.load(Ordering::Acquire) >= CURRENT_TAG.load(Ordering::Relaxed)
     {
-        if is_bar {
-            println!("bar was marked as accessible during dfs");
-        }
+        log!(T, "was marked as accessible during dfs");
         // box_ref.value was accessed while we worked
         // mark this allocation as reachable
         mark(starting_id, ref_graph);
@@ -445,11 +471,7 @@ impl Visitor for Dfs<'_> {
     where
         T: Trace + Send + Sync + ?Sized,
     {
-        let is_bar = std::any::type_name::<T>()
-            == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar";
-        if is_bar {
-            println!("visitor struct found a bar gc");
-        }
+        log!(T, "visitor found gc");
         // must not use deref operators since we don't want to update the generation
         let ptr = unsafe {
             // SAFETY: This is the same as the deref implementation, but avoids
@@ -464,11 +486,10 @@ impl Visitor for Dfs<'_> {
         if gc.tag.swap(current_tag, Ordering::Relaxed) >= current_tag
             || box_ref.generation.load(Ordering::Acquire) >= current_tag
         {
-            if is_bar {
-                println!(
-                    "bar pointer was tagged with the current tag, so it was reached by client code"
-                );
-            }
+            log!(
+                T,
+                "pointer was tagged with the current tag, so it was reached by client code"
+            );
             // This pointer was already tagged by this sweep, so it must have been moved by
             mark(self.current_id, self.ref_graph);
             return;
@@ -484,9 +505,7 @@ impl Visitor for Dfs<'_> {
             .unwrap()
             .reachability
         else {
-            if is_bar {
-                println!("bar was proven reachable beforehand");
-            }
+            log!(T, "was proven reachable beforehand");
             // this node has been proven reachable by something higher up. No need to keep building
             // its ref graph
             return;
@@ -500,9 +519,7 @@ impl Visitor for Dfs<'_> {
                     ..
                 } => {
                     *n_unaccounted -= 1;
-                    if is_bar {
-                        println!("bar's unaccounted count is now {}", *n_unaccounted);
-                    }
+                    log!(T, "unaccounted count is now {}", *n_unaccounted);
                 }
                 Reachability::Reachable => (),
             },
@@ -671,6 +688,9 @@ where
     }
 }
 
+// loom requires lazy static, which doesn't like us accessing other
+// lazy statics in the drop impl of one
+#[cfg(not(loom))]
 impl Drop for Dumpster {
     fn drop(&mut self) {
         self.deliver_to(&GARBAGE_TRUCK);
@@ -678,6 +698,9 @@ impl Drop for Dumpster {
     }
 }
 
+// loom requires lazy static, which doesn't like us accessing other
+// lazy statics in the drop impl of one
+#[cfg(not(loom))]
 impl Drop for GarbageTruck {
     fn drop(&mut self) {
         GARBAGE_TRUCK.collect_all();
