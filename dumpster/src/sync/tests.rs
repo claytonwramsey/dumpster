@@ -901,6 +901,8 @@ fn try_leak_cycle_drop_many_times() {
                 let gcbar = Gc::new(Bar(OnceLock::new()));
                 let _ = gcbar.0.set(gcbar.clone());
                 drop(gcbar);
+                // MUST be included for the test to succeed (in case Foo is collected on separate thread)
+                crate::sync::collect::deliver_dumpster();
                 println!("drop for foo done");
             }
         }

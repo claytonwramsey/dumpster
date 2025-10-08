@@ -152,6 +152,9 @@ fn loom_sync_leak_by_creation_in_drop() {
             let gcbar = Gc::new(Bar(OnceLock::new(), self.1));
             let _ = gcbar.0.set(gcbar.clone());
             drop(gcbar);
+
+            // MUST be included for the test to succeed (in case Foo is collected on separate thread)
+            crate::sync::collect::deliver_dumpster();
             println!("drop for foo done");
         }
     }
@@ -193,7 +196,6 @@ fn loom_sync_leak_by_creation_in_drop() {
         join_handles.push(loom::thread::spawn(|| {
             println!("===== collect from 1");
             collect();
-            crate::sync::collect::deliver_dumpster();
         }));
 
         for join_handle in join_handles {

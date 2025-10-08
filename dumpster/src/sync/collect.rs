@@ -255,10 +255,9 @@ where
     });
 }
 
-#[cfg(loom)]
 /// Deliver all [`TrashCan`]s from this thread's dumpster into the garbage truck.
 ///
-/// This function is available to handle a flaw in `loom`, since we cannot use `Drop` to force a delivery upon thread death when running using `loom`.
+/// This function is available to to support testing, but currently is not part of the public API.
 pub(super) fn deliver_dumpster() {
     DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
 }
@@ -302,10 +301,11 @@ impl Dumpster {
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
         let mut guard = garbage_truck.contents.lock();
-        let n_elems = self.contents.borrow().len();
+        let mut contents = self.contents.borrow_mut();
+        let n_elems = contents.len();
         println!("delivering {n_elems} elements to the garbage truck");
         self.n_drops.set(0);
-        for (id, can) in self.contents.borrow_mut().drain() {
+        for (id, can) in contents.drain() {
             println!("deliver {can:?}...");
             if guard.insert(id, can).is_some() {
                 println!("was already in the dumpster");
