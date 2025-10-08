@@ -174,8 +174,11 @@ fn loom_sync_leak_by_creation_in_drop() {
                 let _ = foo.0.set(foo.clone());
                 drop(foo);
 
+                println!("===== collect from {i} number 1");
                 collect(); // synchronizes with other threads and ends its collection period
+                println!("===== collect from {i} number 2");
                 collect(); // causes Bar to be created and then leaked
+                println!("===== collect from {i} number 3");
                 collect(); // cleans up Bar (eventually)
 
                 assert!(collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
