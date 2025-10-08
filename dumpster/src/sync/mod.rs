@@ -28,6 +28,10 @@
 //! ```
 
 pub(crate) mod collect;
+#[cfg(loom)]
+mod loom_ext;
+#[cfg(all(loom, test))]
+mod loom_tests;
 #[cfg(test)]
 mod tests;
 
@@ -41,8 +45,13 @@ use std::{
     ops::Deref,
     ptr::{self, addr_of, addr_of_mut, drop_in_place, NonNull},
     slice,
-    sync::atomic::{fence, AtomicUsize, Ordering},
 };
+
+#[cfg(loom)]
+pub(crate) use loom::sync::atomic::{fence, AtomicUsize, Ordering};
+
+#[cfg(not(loom))]
+pub(crate) use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use crate::{contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, Visitor};
 
@@ -103,7 +112,14 @@ pub struct Gc<T: Trace + Send + Sync + ?Sized + 'static> {
 
 /// The tag of the current sweep operation.
 /// All new allocations are minted with the current tag.
+#[cfg(not(loom))]
 static CURRENT_TAG: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(loom)]
+loom::lazy_static! {
+    /// The global data for the default garbage collector.
+    static ref CURRENT_TAG: AtomicUsize = AtomicUsize::new(0);
+}
 
 #[repr(C)]
 // This is only public to make the `sync_coerce_gc` macro work.
@@ -670,6 +686,27 @@ where
     }
 }
 
+/// ...
+fn log_impl<T: ?Sized + 'static>(args: std::fmt::Arguments) {
+    let name = std::any::type_name::<T>();
+    let short_name = name.rfind(':').map_or(name, |colon| &name[colon + 1..]);
+
+    // if short_name != "Bar" {
+    //     return;
+    // }
+
+    println!("{short_name}: {args}");
+}
+
+/// ...
+macro_rules! log {
+    ($ty:ty, $($tt:tt)*) => {
+        $crate::sync::log_impl::<$ty>(format_args!($($tt)*))
+    };
+}
+
+use log;
+
 impl<T> Drop for Gc<T>
 where
     T: Trace + Send + Sync + ?Sized,
@@ -678,29 +715,22 @@ where
         let Some(mut ptr) = unsafe { *self.ptr.get() }.as_option() else {
             return;
         };
-        let is_bar = std::any::type_name::<T>()
-            == "dumpster::sync::tests::try_leak_cycle_drop_many_times::Bar";
-        if is_bar {
-            println!("{}: call gc drop... ", std::any::type_name::<T>());
-        }
+        log!(T, "call gc drop... ");
         let box_ref = unsafe { ptr.as_ref() };
         box_ref.weak.fetch_add(1, Ordering::AcqRel); // ensures that this allocation wasn't freed
                                                      // while we weren't looking
         box_ref
             .generation
             .store(CURRENT_TAG.load(Ordering::Relaxed), Ordering::Release);
-        if is_bar {
-            println!(
-                "starting strong count was {}",
-                box_ref.strong.load(Ordering::Relaxed)
-            );
-        }
+        log!(
+            T,
+            "starting strong count was {}",
+            box_ref.strong.load(Ordering::Relaxed)
+        );
         match box_ref.strong.fetch_sub(1, Ordering::AcqRel) {
             0 => unreachable!("strong cannot reach zero while a Gc to it exists"),
             1 => {
-                if is_bar {
-                    println!("allocation has only one strong ref");
-                }
+                log!(T, "allocation has only one strong ref");
                 mark_clean(box_ref);
                 if box_ref.weak.fetch_sub(1, Ordering::Release) == 1 {
                     // destroyed the last weak reference! we can safely deallocate this
@@ -713,13 +743,9 @@ where
                 }
             }
             _ => {
-                if is_bar {
-                    println!("allocation has multiple strong refs");
-                }
+                log!(T, "allocation has multiple strong refs");
                 if contains_gcs(&box_ref.value).unwrap_or(true) {
-                    if is_bar {
-                        println!("bar contains gcs");
-                    }
+                    log!(T, "contains gcs");
                     // SAFETY: `ptr` is convertible to a reference
                     // We don't use `box_ref` here because that pointer
                     // only has `SharedReadOnly` permissions under the stacked borrows model
