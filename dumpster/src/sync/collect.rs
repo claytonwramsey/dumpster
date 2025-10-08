@@ -321,10 +321,8 @@ impl GarbageTruck {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     fn collect_all(&self) {
-        // IMPORTANT: take contents before acquiring the collecting guard so we ensure that
-        // everything from before we start collecting gets picked up
-        let to_collect = take(&mut *self.contents.lock());
         let collecting_guard = self.collecting_lock.write();
+        let to_collect = take(&mut *self.contents.lock());
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
         let mut ref_graph = HashMap::with_capacity(to_collect.len());
 

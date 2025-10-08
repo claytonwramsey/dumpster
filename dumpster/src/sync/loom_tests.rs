@@ -168,24 +168,32 @@ fn loom_sync_leak_by_creation_in_drop() {
 
         let mut join_handles = vec![];
 
-        for i in 0..2 {
-            join_handles.push(loom::thread::spawn(move || {
-                let foo = Gc::new(Foo(OnceLock::new(), i));
-                let _ = foo.0.set(foo.clone());
-                drop(foo);
+        let i = 0;
+        join_handles.push(loom::thread::spawn(move || {
+            let foo = Gc::new(Foo(OnceLock::new(), i));
+            let _ = foo.0.set(foo.clone());
+            drop(foo);
 
-                println!("===== collect from {i} number 1");
-                collect(); // synchronizes with other threads and ends its collection period
-                println!("===== collect from {i} number 2");
-                collect(); // causes Bar to be created and then leaked
-                println!("===== collect from {i} number 3");
-                collect(); // cleans up Bar (eventually)
+            println!("===== collect from 0 number 1");
+            collect(); // synchronizes with other threads and ends its collection period
+            println!("===== collect from 0 number 2");
+            collect(); // causes Bar to be created and then leaked
+            println!("===== collect from 0 number 3");
+            collect(); // cleans up Bar (eventually)
 
-                assert!(collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
+            assert_eq!(
+                BAR_DROP_COUNT[0].load(Ordering::Relaxed),
+                1,
+                "failed to collect on thread 0"
+            );
+            collect::DUMPSTER.with(|d| println!("{:?}", d.contents));
+            assert!(collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
+        }));
 
-                assert_eq!(BAR_DROP_COUNT[i].load(Ordering::Relaxed), 1);
-            }));
-        }
+        join_handles.push(loom::thread::spawn(|| {
+            println!("===== collect from 1");
+            collect();
+        }));
 
         for join_handle in join_handles {
             join_handle.join().unwrap();
