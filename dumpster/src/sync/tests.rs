@@ -867,7 +867,6 @@ fn sync_leak_by_creation_in_drop() {
     let _ = foo.0.set(foo.clone());
     drop(foo);
 
-    collect(); // synchronizes with other threads and ends its collection period
     collect(); // causes Bar to be created and then leaked
     collect(); // cleans up Bar (eventually)
 
@@ -918,7 +917,6 @@ fn try_leak_cycle_drop_many_times() {
         let _ = foo.0.set(foo.clone());
         drop(foo);
 
-        collect(); // synchronizes with other threads and ends its collection period
         collect(); // causes Bar to be created and then leaked
         collect(); // cleans up Bar (eventually)
 

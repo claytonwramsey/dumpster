@@ -177,8 +177,6 @@ fn loom_sync_leak_by_creation_in_drop() {
             let _ = foo.0.set(foo.clone());
             drop(foo);
 
-            println!("===== collect from 0 number 1");
-            collect(); // synchronizes with other threads and ends its collection period
             println!("===== collect from 0 number 2");
             collect(); // causes Bar to be created and then leaked
             println!("===== collect from 0 number 3");
