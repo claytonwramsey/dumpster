@@ -255,6 +255,7 @@ where
     });
 }
 
+#[cfg(test)]
 /// Deliver all [`TrashCan`]s from this thread's dumpster into the garbage truck.
 ///
 /// This function is available to to support testing, but currently is not part of the public API.
@@ -333,8 +334,13 @@ impl GarbageTruck {
     /// if they are inaccessible.
     /// If so, drop those allocations.
     fn collect_all(&self) {
+        assert!(
+            !CLEANING.with(Cell::get),
+            "may not double-collect in a single thread"
+        );
         let collecting_guard = self.collecting_lock.write();
         let to_collect = take(&mut *self.contents.lock());
+        CLEANING.with(|c| c.set(true));
         println!(
             "collection has begun with {} possibly-unreachable allocations",
             to_collect.len()
@@ -401,6 +407,7 @@ impl GarbageTruck {
                 drop_fn(ptr, &ref_graph);
             };
         }
+        CLEANING.with(|c| c.set(false));
         drop(collecting_guard);
     }
 }

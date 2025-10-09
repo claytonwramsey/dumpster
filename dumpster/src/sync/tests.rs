@@ -488,10 +488,10 @@ fn fuzz() {
     collect();
 
     let mut n_missing = 0;
-    for count in &DROP_DETECTORS[..next_detector] {
+    for (id, count) in DROP_DETECTORS[..next_detector].iter().enumerate() {
         let num = count.load(Ordering::Relaxed);
         if num != 1 {
-            // println!("expected 1 for id {id} but got {num}");
+            println!("expected 1 for id {id} but got {num}");
             n_missing += 1;
         }
     }
@@ -852,6 +852,7 @@ fn sync_leak_by_creation_in_drop() {
             let gcbar = Gc::new(Bar(OnceLock::new()));
             let _ = gcbar.0.set(gcbar.clone());
             drop(gcbar);
+            crate::sync::collect::deliver_dumpster();
             println!("drop for foo done");
         }
     }
@@ -900,7 +901,8 @@ fn try_leak_cycle_drop_many_times() {
                 let gcbar = Gc::new(Bar(OnceLock::new()));
                 let _ = gcbar.0.set(gcbar.clone());
                 drop(gcbar);
-                // MUST be included for the test to succeed (in case Foo is collected on separate thread)
+                // MUST be included for the test to succeed (in case Foo is collected on separate
+                // thread)
                 crate::sync::collect::deliver_dumpster();
                 println!("drop for foo done");
             }

@@ -153,7 +153,8 @@ fn loom_sync_leak_by_creation_in_drop() {
             let _ = gcbar.0.set(gcbar.clone());
             drop(gcbar);
 
-            // MUST be included for the test to succeed (in case Foo is collected on separate thread)
+            // MUST be included for the test to succeed (in case Foo is collected on separate
+            // thread)
             crate::sync::collect::deliver_dumpster();
             println!("drop for foo done");
         }
@@ -171,30 +172,26 @@ fn loom_sync_leak_by_creation_in_drop() {
 
         let mut join_handles = vec![];
 
-        let i = 0;
-        join_handles.push(loom::thread::spawn(move || {
-            let foo = Gc::new(Foo(OnceLock::new(), i));
-            let _ = foo.0.set(foo.clone());
-            drop(foo);
+        for i in 0..2 {
+            join_handles.push(loom::thread::spawn(move || {
+                let foo = Gc::new(Foo(OnceLock::new(), i));
+                let _ = foo.0.set(foo.clone());
+                drop(foo);
 
-            println!("===== collect from 0 number 2");
-            collect(); // causes Bar to be created and then leaked
-            println!("===== collect from 0 number 3");
-            collect(); // cleans up Bar (eventually)
+                println!("===== collect from {i} number 1");
+                collect(); // causes Bar to be created and then leaked
+                println!("===== collect from {i} number 2");
+                collect(); // cleans up Bar (eventually)
 
-            assert_eq!(
-                BAR_DROP_COUNT[0].load(Ordering::Relaxed),
-                1,
-                "failed to collect on thread 0"
-            );
-            collect::DUMPSTER.with(|d| println!("{:?}", d.contents));
-            assert!(collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
-        }));
-
-        join_handles.push(loom::thread::spawn(|| {
-            println!("===== collect from 1");
-            collect();
-        }));
+                assert_eq!(
+                    BAR_DROP_COUNT[i].load(Ordering::Relaxed),
+                    1,
+                    "failed to collect on thread 0"
+                );
+                collect::DUMPSTER.with(|d| println!("{:?}", d.contents));
+                assert!(collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
+            }));
+        }
 
         for join_handle in join_handles {
             join_handle.join().unwrap();
