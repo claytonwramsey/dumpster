@@ -274,9 +274,21 @@ impl<T: Trace + ?Sized> Gc<T> {
                         (*cell_ptr).set(self.0);
 
                         let box_ref = &*self.0.as_ptr();
-                        box_ref.ref_count.set(box_ref.ref_count.get());
+                        box_ref
+                            .ref_count
+                            .set(box_ref.ref_count.get().saturating_add(1));
+                        DUMPSTER.with(Dumpster::notify_created_gc);
                     }
                 }
+            }
+        }
+
+        /// Data structure for cleaning up the allocation in case we panic along the way.
+        struct CleanUp;
+
+        impl Drop for CleanUp {
+            fn drop(&mut self) {
+                todo!("clean up allocations");
             }
         }
 
@@ -286,6 +298,7 @@ impl<T: Trace + ?Sized> Gc<T> {
             ref_count: Cell::new(NonZeroUsize::MIN),
             value: Uninitialized(MaybeUninit::<T>::uninit()),
         })));
+        let cleanup = CleanUp;
 
         // nilgc is a dead Gc
         let nilgc = Gc {
@@ -315,7 +328,7 @@ impl<T: Trace + ?Sized> Gc<T> {
             ptr: Cell::new(Nullable::new(gcbox)),
         };
 
-        println!("gc's ref count is {}", gc.ref_count());
+        let _ = ManuallyDrop::new(cleanup);
         gc
     }
 
