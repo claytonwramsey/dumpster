@@ -16,7 +16,7 @@ use std::{
     },
 };
 
-use crate::{sync_coerce_gc, Visitor};
+use crate::{sync::coerce_gc, Visitor};
 
 use super::*;
 
@@ -289,7 +289,7 @@ fn coerce_array() {
 #[test]
 fn coerce_array_using_macro() {
     let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
-    let gc2: Gc<[u8]> = sync_coerce_gc!(gc1);
+    let gc2: Gc<[u8]> = coerce_gc!(gc1);
     assert_eq!(gc2.len(), 3);
     assert_eq!(
         std::mem::size_of::<Gc<[u8]>>(),

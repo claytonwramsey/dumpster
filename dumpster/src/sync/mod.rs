@@ -477,7 +477,7 @@ where
         }
     }
 
-    /// Exists solely for the [`sync_coerce_gc`] macro.
+    /// Exists solely for the [`coerce_gc`] macro.
     #[inline]
     #[must_use]
     #[doc(hidden)]
@@ -485,7 +485,7 @@ where
         Self::into_ptr(this)
     }
 
-    /// Exists solely for the [`sync_coerce_gc`] macro.
+    /// Exists solely for the [`coerce_gc`] macro.
     #[inline]
     #[must_use]
     #[doc(hidden)]
@@ -559,10 +559,10 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
 /// # Examples
 ///
 /// ```
-/// use dumpster::{sync::Gc, sync_coerce_gc};
+/// use dumpster::sync::{coerce_gc, Gc};
 ///
 /// let gc1: Gc<[u8; 3]> = Gc::new([7, 8, 9]);
-/// let gc2: Gc<[u8]> = sync_coerce_gc!(gc1);
+/// let gc2: Gc<[u8]> = coerce_gc!(gc1);
 /// assert_eq!(&gc2[..], &[7, 8, 9]);
 /// ```
 ///
@@ -571,19 +571,23 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
 ///
 /// ```compile_fail
 /// // This program is incorrect!
-/// use dumpster::{sync::Gc, sync_coerce_gc};
+/// use dumpster::sync::{Gc, coerce_gc};
 ///
 /// let gc1: Gc<u8> = Gc::new(1);
-/// let gc2: Gc<i8> = sync_coerce_gc!(gc1);
+/// let gc2: Gc<i8> = coerce_gc!(gc1);
 /// ```
+#[doc(hidden)]
 #[macro_export]
-macro_rules! sync_coerce_gc {
+macro_rules! __sync_coerce_gc {
     ($gc:expr) => {{
         // Temporarily convert the `Gc` into a raw pointer to allow for coercion to occur.
         let (ptr, tag): (*const _, usize) = $crate::sync::Gc::__private_into_ptr($gc);
         unsafe { $crate::sync::Gc::__private_from_ptr(ptr, tag) }
     }};
 }
+
+#[doc(inline)]
+pub use crate::__sync_coerce_gc as coerce_gc;
 
 impl<T> Clone for Gc<T>
 where
@@ -993,7 +997,7 @@ impl<T: Trace + Send + Sync, const N: usize> From<[T; N]> for Gc<[T]> {
     /// ```
     #[inline]
     fn from(v: [T; N]) -> Gc<[T]> {
-        sync_coerce_gc!(Gc::<[T; N]>::from(v))
+        coerce_gc!(Gc::<[T; N]>::from(v))
     }
 }
 

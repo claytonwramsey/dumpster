@@ -437,7 +437,7 @@ impl<T: Trace + ?Sized> Gc<T> {
         }
     }
 
-    /// Exists solely for the [`unsync_coerce_gc`] macro.
+    /// Exists solely for the [`coerce_gc`] macro.
     #[inline]
     #[must_use]
     #[doc(hidden)]
@@ -445,7 +445,7 @@ impl<T: Trace + ?Sized> Gc<T> {
         Self::into_ptr(this)
     }
 
-    /// Exists solely for the [`unsync_coerce_gc`] macro.
+    /// Exists solely for the [`coerce_gc`] macro.
     #[inline]
     #[must_use]
     #[doc(hidden)]
@@ -577,10 +577,10 @@ impl<T: Trace> Gc<[T]> {
 /// # Examples
 ///
 /// ```
-/// use dumpster::{unsync::Gc, unsync_coerce_gc};
+/// use dumpster::unsync::{coerce_gc, Gc};
 ///
 /// let gc1: Gc<[u8; 3]> = Gc::new([7, 8, 9]);
-/// let gc2: Gc<[u8]> = unsync_coerce_gc!(gc1);
+/// let gc2: Gc<[u8]> = coerce_gc!(gc1);
 /// assert_eq!(&gc2[..], &[7, 8, 9]);
 /// ```
 ///
@@ -589,19 +589,23 @@ impl<T: Trace> Gc<[T]> {
 ///
 /// ```compile_fail
 /// // This program is incorrect!
-/// use dumpster::{unsync::Gc, unsync_coerce_gc};
+/// use dumpster::unsync::{Gc, coerce_gc};
 ///
 /// let gc1: Gc<u8> = Gc::new(1);
-/// let gc2: Gc<i8> = unsync_coerce_gc!(gc1);
+/// let gc2: Gc<i8> = coerce_gc!(gc1);
 /// ```
+#[doc(hidden)]
 #[macro_export]
-macro_rules! unsync_coerce_gc {
+macro_rules! __unsync_coerce_gc {
     ($gc:expr) => {{
         // Temporarily convert the `Gc` into a raw pointer to allow for coercion to occur.
         let ptr: *const _ = $crate::unsync::Gc::__private_into_ptr($gc);
         unsafe { $crate::unsync::Gc::__private_from_ptr(ptr) }
     }};
 }
+
+#[doc(inline)]
+pub use crate::__unsync_coerce_gc as coerce_gc;
 
 impl<T: Trace + ?Sized> Deref for Gc<T> {
     type Target = T;
@@ -917,7 +921,7 @@ impl<T: Trace, const N: usize> From<[T; N]> for Gc<[T]> {
     /// ```
     #[inline]
     fn from(v: [T; N]) -> Gc<[T]> {
-        unsync_coerce_gc!(Gc::<[T; N]>::from(v))
+        coerce_gc!(Gc::<[T; N]>::from(v))
     }
 }
 
