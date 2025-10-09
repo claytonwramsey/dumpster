@@ -492,3 +492,27 @@ fn panic_visit() {
     drop(gc);
     collect();
 }
+
+fn new_cyclic_nothing() {
+    let gc = Gc::new_cyclic(|_| ());
+    drop(gc);
+}
+
+#[test]
+fn new_cyclic_one() {
+    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    struct Cycle(Gc<Self>);
+
+    unsafe impl Trace for Cycle {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    let cyc = Gc::new_cyclic(Cycle);
+    assert_eq!(cyc.ref_count().get(), 2);
+    drop(cyc);
+    collect();
+
+    assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+}

@@ -34,9 +34,10 @@
 
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
+    any::TypeId,
     borrow::{Borrow, Cow},
     cell::Cell,
-    mem::{self, ManuallyDrop},
+    mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
     ptr::{self, addr_of, addr_of_mut, drop_in_place, NonNull},
@@ -221,6 +222,101 @@ impl<T: Trace + ?Sized> Gc<T> {
                 value,
             }))))),
         }
+    }
+
+    /// Construct a self-referencing `Gc`.
+    ///
+    /// `new_cyclic` first allocates memory for `T`, then constructs a dead `Gc` pointing to the allocation.
+    /// The dead `Gc` is then passed to `data_fn` to construct a value of `T`, which is stored in the allocation.
+    /// Finally, `new_cyclic` will update the dead self-referential `Gc`s and rehydrate them to produce the final value.
+    ///
+    /// # Panics
+    ///
+    /// If `data_fn` panics, the panic is propagated to the caller.
+    /// The allocation is cleaned up normally.
+    ///
+    /// Additionally, if, when attempting to rehydrate the `Gc` members of `F`, the visitor fails to reach a `Gc`, this
+    /// function will panic and clean up the allocation.
+    pub fn new_cyclic<F: FnOnce(Gc<T>) -> T>(data_fn: F) -> Self
+    where
+        T: Sized,
+    {
+        /// A struct containing an uninitialized value of `T`.
+        /// May only be used inside `make_mut`.
+        struct Uninitialized<T>(MaybeUninit<T>);
+
+        unsafe impl<T> Trace for Uninitialized<T> {
+            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+                Ok(())
+            }
+        }
+
+        /// A struct for converting dead `Gc`s into live ones.
+        struct Rehydrate<U: Trace + 'static>(Nullable<GcBox<U>>);
+
+        impl<U: Trace + 'static> Visitor for Rehydrate<U> {
+            fn visit_sync<T>(&mut self, _: &crate::sync::Gc<T>)
+            where
+                T: Trace + Send + Sync + ?Sized,
+            {
+            }
+
+            fn visit_unsync<T>(&mut self, gc: &Gc<T>)
+            where
+                T: Trace + ?Sized,
+            {
+                if TypeId::of::<T>() == TypeId::of::<U>() && gc.is_dead() {
+                    unsafe {
+                        // SAFETY: it is safe to transmute these pointers because we have checked
+                        // that they are of the same type.
+                        // Additionally, the `GcBox` has been fully initialized, so it is safe to create a reference here.
+                        let cell_ptr = (&raw const gc.ptr).cast::<Cell<Nullable<GcBox<U>>>>();
+                        (*cell_ptr).set(self.0);
+
+                        let box_ref = &*self.0.as_ptr();
+                        box_ref.ref_count.set(box_ref.ref_count.get());
+                    }
+                }
+            }
+        }
+
+        // make an uninitialized allocation
+        DUMPSTER.with(Dumpster::notify_created_gc);
+        let mut gcbox = NonNull::from(Box::leak(Box::new(GcBox {
+            ref_count: Cell::new(NonZeroUsize::MIN),
+            value: Uninitialized(MaybeUninit::<T>::uninit()),
+        })));
+
+        // nilgc is a dead Gc
+        let nilgc = Gc {
+            ptr: Cell::new(Nullable::new(NonNull::from(gcbox.cast::<GcBox<T>>())).as_null()),
+        };
+        assert!(nilgc.is_dead());
+        unsafe {
+            // SAFETY: `gcbox` is a valid pointer to an uninitialized datum that we have allocated.
+            (*gcbox.as_mut()).value = Uninitialized(MaybeUninit::new(data_fn(nilgc)));
+        }
+
+        let gcbox = gcbox.cast::<GcBox<T>>();
+        let res = unsafe {
+            // SAFETY: the above unsafe block correctly constructed the Uninitialized value, so it
+            // is safe to cast `gcbox` and then construct a reference.
+            gcbox
+                .as_ref()
+                .value
+                .accept(&mut Rehydrate(Nullable::new(gcbox)))
+        };
+
+        assert!(
+            res.is_ok(),
+            "visitor must be able to access all Gc fields of structure when rehydrating dead Gcs"
+        );
+        let gc = Gc {
+            ptr: Cell::new(Nullable::new(gcbox)),
+        };
+
+        println!("gc's ref count is {}", gc.ref_count());
+        gc
     }
 
     /// Attempt to dereference this `Gc`.
