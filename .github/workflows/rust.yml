@@ -128,7 +128,7 @@ jobs:
       - name: Install rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ matrix.toolchain }}
+          toolchain: stable
       - name: Cache
         id: cache-restore
         uses: actions/cache@v4
