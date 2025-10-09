@@ -12,7 +12,7 @@ use std::{
     ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex,
+        Mutex, OnceLock,
     },
 };
 
@@ -84,7 +84,7 @@ fn self_referential() {
 
     impl Drop for Foo {
         fn drop(&mut self) {
-            println!("begin increment of the drop count!");
+            // println!("begin increment of the drop count!");
             DROP_COUNT.fetch_add(1, Ordering::Release);
         }
     }
@@ -327,7 +327,7 @@ fn malicious() {
             self.a.accept(visitor)?;
 
             if EVIL.fetch_add(1, Ordering::Relaxed) == 1 {
-                println!("committing evil...");
+                // println!("committing evil...");
                 // simulates a malicious thread
                 let y = unsafe { self.y.as_ref() };
                 *y.a.lock().unwrap() = (*self.a.lock().unwrap()).take();
@@ -410,7 +410,7 @@ fn fuzz() {
     fn dfs(alloc: &Gc<Alloc>, graph: &mut HashMap<usize, Vec<usize>>) {
         if let Entry::Vacant(v) = graph.entry(alloc.id) {
             if alloc.id == 2822 || alloc.id == 2814 {
-                println!("{} - {alloc:?}", alloc.id);
+                // println!("{} - {alloc:?}", alloc.id);
             }
             v.insert(Vec::new());
             alloc.refs.lock().unwrap().iter().for_each(|a| {
@@ -441,7 +441,7 @@ fn fuzz() {
         }
         match fastrand::u8(0..4) {
             0 => {
-                println!("add gc {next_detector}");
+                // println!("add gc {next_detector}");
                 gcs.push(Gc::new(Alloc {
                     refs: Mutex::new(Vec::new()),
                     id: next_detector,
@@ -452,7 +452,7 @@ fn fuzz() {
                 if gcs.len() > 1 {
                     let from = fastrand::usize(0..gcs.len());
                     let to = fastrand::usize(0..gcs.len());
-                    println!("add ref {} -> {}", gcs[from].id, gcs[to].id);
+                    // println!("add ref {} -> {}", gcs[from].id, gcs[to].id);
                     let new_gc = gcs[to].clone();
                     let mut guard = gcs[from].refs.lock().unwrap();
                     guard.push(new_gc);
@@ -460,7 +460,7 @@ fn fuzz() {
             }
             2 => {
                 let idx = fastrand::usize(0..gcs.len());
-                println!("remove gc {}", gcs[idx].id);
+                // println!("remove gc {}", gcs[idx].id);
                 gcs.swap_remove(idx);
             }
             3 => {
@@ -468,7 +468,7 @@ fn fuzz() {
                 let mut guard = gcs[from].refs.lock().unwrap();
                 if !guard.is_empty() {
                     let to = fastrand::usize(0..guard.len());
-                    println!("drop ref {} -> {}", gcs[from].id, guard[to].id);
+                    // println!("drop ref {} -> {}", gcs[from].id, guard[to].id);
                     guard.swap_remove(to);
                 }
             }
@@ -482,7 +482,7 @@ fn fuzz() {
         graph.get_mut(&9999).unwrap().push(alloc.id);
         dfs(alloc, &mut graph);
     }
-    println!("{graph:#?}");
+    // println!("{graph:#?}");
 
     drop(gcs);
     collect();
@@ -525,7 +525,7 @@ fn root_canal() {
 
             // simulate a malicious thread swapping things around
             if n_prior_visits == 1 {
-                println!("committing evil...");
+                // println!("committing evil...");
                 swap(
                     &mut *SMUGGLED_POINTERS[0].lock().unwrap(),
                     &mut *SMUGGLED_POINTERS[1]
@@ -559,7 +559,7 @@ fn root_canal() {
 
             // smuggle out some pointers
             if n_prior_visits == 0 {
-                println!("smuggling...");
+                // println!("smuggling...");
                 *SMUGGLED_POINTERS[0].lock().unwrap() = take(&mut *self.a2.lock().unwrap());
                 *SMUGGLED_POINTERS[1].lock().unwrap() = take(&mut *self.a3.lock().unwrap());
             }
@@ -593,17 +593,17 @@ fn root_canal() {
 
     drop(a.clone());
     collect();
-    println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
+    // println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
 
-    assert!(dbg!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref()).is_some());
+    assert!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref().is_some());
     assert!(SMUGGLED_POINTERS[1].lock().unwrap().as_ref().is_some());
-    println!("{}", B_VISIT_COUNT.load(Ordering::Relaxed));
+    // println!("{}", B_VISIT_COUNT.load(Ordering::Relaxed));
 
     assert_eq!(B_DROP_DETECT.load(Ordering::Relaxed), 0);
     drop(a);
     assert_eq!(B_DROP_DETECT.load(Ordering::Relaxed), 0);
     collect();
-    println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
+    // println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
 
     assert_eq!(B_DROP_DETECT.load(Ordering::Relaxed), 0);
 
@@ -647,7 +647,7 @@ fn escape_dead_pointer() {
     *(*esc).ptr.lock().unwrap() = Some(esc.clone());
     drop(esc);
     collect();
-    println!("{}", ESCAPED.lock().unwrap().as_ref().unwrap().x);
+    let _x = ESCAPED.lock().unwrap().as_ref().unwrap().x;
 }
 
 #[test]
@@ -825,4 +825,105 @@ fn make_mut_of_object_in_dumpster() {
     // we need to do something with `foo_mut` here so the mutable borrow is actually held
     // during collection
     assert_eq!(*foo_mut.something, 5);
+}
+
+#[test]
+/// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
+fn sync_leak_by_creation_in_drop() {
+    static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    struct Foo(OnceLock<Gc<Self>>);
+    struct Bar(OnceLock<Gc<Self>>);
+
+    unsafe impl Trace for Foo {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    unsafe impl Trace for Bar {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            println!("calling drop for foo");
+            let gcbar = Gc::new(Bar(OnceLock::new()));
+            let _ = gcbar.0.set(gcbar.clone());
+            drop(gcbar);
+            crate::sync::collect::deliver_dumpster();
+            println!("drop for foo done");
+        }
+    }
+
+    impl Drop for Bar {
+        fn drop(&mut self) {
+            println!("drop Bar");
+            BAR_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let foo = Gc::new(Foo(OnceLock::new()));
+    let _ = foo.0.set(foo.clone());
+    drop(foo);
+
+    collect(); // causes Bar to be created and then leaked
+    collect(); // cleans up Bar (eventually)
+
+    assert!(super::collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
+
+    assert_eq!(BAR_DROP_COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "miri is too slow")]
+fn try_leak_cycle_drop_many_times() {
+    static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    struct Foo(OnceLock<Gc<Self>>);
+    struct Bar(OnceLock<Gc<Self>>);
+    for i in 0..10_000 {
+        unsafe impl Trace for Foo {
+            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+                self.0.accept(visitor)
+            }
+        }
+
+        unsafe impl Trace for Bar {
+            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+                self.0.accept(visitor)
+            }
+        }
+
+        impl Drop for Foo {
+            fn drop(&mut self) {
+                println!("calling drop for foo");
+                let gcbar = Gc::new(Bar(OnceLock::new()));
+                let _ = gcbar.0.set(gcbar.clone());
+                drop(gcbar);
+                // MUST be included for the test to succeed (in case Foo is collected on separate
+                // thread)
+                crate::sync::collect::deliver_dumpster();
+                println!("drop for foo done");
+            }
+        }
+
+        impl Drop for Bar {
+            fn drop(&mut self) {
+                println!("drop Bar");
+                BAR_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let foo = Gc::new(Foo(OnceLock::new()));
+        let _ = foo.0.set(foo.clone());
+        drop(foo);
+
+        collect(); // causes Bar to be created and then leaked
+        collect(); // cleans up Bar (eventually)
+
+        assert!(super::collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
+
+        assert_eq!(BAR_DROP_COUNT.load(Ordering::Relaxed), i + 1);
+    }
 }
