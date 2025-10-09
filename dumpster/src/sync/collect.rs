@@ -10,7 +10,6 @@
 
 use std::{
     alloc::{dealloc, Layout},
-    backtrace::Backtrace,
     cell::{Cell, RefCell},
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take, transmute},
