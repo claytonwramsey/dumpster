@@ -36,7 +36,8 @@ struct GarbageTruck {
     /// This lock should be acquired for reads by threads running a collection and for writes by
     /// threads awaiting collection completion.
     collecting_lock: RwLock<()>,
-    /// The number of [`Gc`]s dropped since the last time [`GarbageTruck::collect_all()`] was called.
+    /// The number of [`Gc`]s dropped since the last time [`GarbageTruck::collect_all()`] was
+    /// called.
     n_gcs_dropped: AtomicUsize,
     /// The number of [`Gc`]s currently existing (which have not had their internals replaced with
     /// `None`).
