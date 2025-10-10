@@ -508,6 +508,7 @@ fn panic_visit() {
     collect();
 }
 
+#[test]
 fn new_cyclic_nothing() {
     static COUNT: AtomicUsize = AtomicUsize::new(0);
 
