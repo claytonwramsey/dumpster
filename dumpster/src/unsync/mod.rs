@@ -236,7 +236,28 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// The allocation is cleaned up normally.
     ///
     /// Additionally, if, when attempting to rehydrate the `Gc` members of `F`, the visitor fails to reach a `Gc`, this
-    /// function will panic and clean up the allocation.
+    /// function will panic and reserve the allocation to be cleaned up later.
+    ///
+    /// # Notes on safety
+    ///
+    /// Incorrect implementations of `data_fn` may have unusual or strange results.
+    /// Although `dumpster` guarantees that it will be safe, and will do its best to ensure correct results,
+    /// it is generally unwise to allow dead `Gc`s to exist for long.
+    /// If you implement `data_fn` wrong, this may cause panics later on inside of the collection process.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::{Trace, unsync::Gc};
+    ///
+    /// #[derive(Trace)]
+    /// struct Cycle {
+    ///     this: Gc<Self>
+    /// }
+    ///
+    /// let gc = Gc::new_cyclic(|this| Cycle { this });
+    /// assert!(Gc::ptr_eq(&gc, &gc.this));
+    /// ```
     pub fn new_cyclic<F: FnOnce(Gc<T>) -> T>(data_fn: F) -> Self
     where
         T: Sized,
@@ -284,11 +305,25 @@ impl<T: Trace + ?Sized> Gc<T> {
         }
 
         /// Data structure for cleaning up the allocation in case we panic along the way.
-        struct CleanUp;
+        struct CleanUp<T: Trace + 'static> {
+            initialized: bool,
+            ptr: NonNull<GcBox<T>>,
+        }
 
-        impl Drop for CleanUp {
+        impl<T: Trace + 'static> Drop for CleanUp<T> {
             fn drop(&mut self) {
-                todo!("clean up allocations");
+                if self.initialized {
+                    // push this `Gc` into the destruction queue
+                    DUMPSTER.with(|d| d.mark_dirty(self.ptr));
+                } else {
+                    // deallocate
+                    unsafe {
+                        dealloc(
+                            self.ptr.as_ptr().cast::<u8>(),
+                            Layout::for_value(self.ptr.as_ref()),
+                        );
+                    }
+                }
             }
         }
 
@@ -298,7 +333,10 @@ impl<T: Trace + ?Sized> Gc<T> {
             ref_count: Cell::new(NonZeroUsize::MIN),
             value: Uninitialized(MaybeUninit::<T>::uninit()),
         })));
-        let cleanup = CleanUp;
+        let mut cleanup = CleanUp {
+            ptr: gcbox,
+            initialized: false,
+        };
 
         // nilgc is a dead Gc
         let nilgc = Gc {
@@ -309,6 +347,7 @@ impl<T: Trace + ?Sized> Gc<T> {
             // SAFETY: `gcbox` is a valid pointer to an uninitialized datum that we have allocated.
             (*gcbox.as_mut()).value = Uninitialized(MaybeUninit::new(data_fn(nilgc)));
         }
+        cleanup.initialized = true;
 
         let gcbox = gcbox.cast::<GcBox<T>>();
         let res = unsafe {
