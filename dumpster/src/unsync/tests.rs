@@ -521,6 +521,7 @@ fn new_cyclic_nothing() {
 #[test]
 fn new_cyclic_one() {
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    #[expect(unused)]
     struct Cycle(Gc<Self>, DropCount);
 
     unsafe impl Trace for Cycle {
