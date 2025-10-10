@@ -264,6 +264,7 @@ impl<T: Trace + ?Sized> Gc<T> {
     {
         /// A struct containing an uninitialized value of `T`.
         /// May only be used inside `make_mut`.
+        #[repr(transparent)]
         struct Uninitialized<T>(MaybeUninit<T>);
 
         unsafe impl<T> Trace for Uninitialized<T> {
