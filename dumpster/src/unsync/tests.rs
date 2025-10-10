@@ -19,6 +19,20 @@ use std::{
     },
 };
 
+struct DropCount(&'static AtomicUsize);
+
+impl Drop for DropCount {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+unsafe impl Trace for DropCount {
+    fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
 #[test]
 /// Test a simple data structure
 fn simple() {
@@ -494,14 +508,18 @@ fn panic_visit() {
 }
 
 fn new_cyclic_nothing() {
-    let gc = Gc::new_cyclic(|_| ());
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    let gc = Gc::new_cyclic(|_| DropCount(&COUNT));
     drop(gc);
+    // collect not necessary since this a drop by reference count
+    assert_eq!(COUNT.load(Ordering::Relaxed), 1);
 }
 
 #[test]
 fn new_cyclic_one() {
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
-    struct Cycle(Gc<Self>);
+    struct Cycle(Gc<Self>, DropCount);
 
     unsafe impl Trace for Cycle {
         fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
@@ -509,10 +527,16 @@ fn new_cyclic_one() {
         }
     }
 
-    let cyc = Gc::new_cyclic(Cycle);
+    let cyc = Gc::new_cyclic(|gc| Cycle(gc, DropCount(&DROP_COUNT)));
     assert_eq!(cyc.ref_count().get(), 2);
     drop(cyc);
     collect();
 
     assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[should_panic = "ehehe"]
+fn new_cyclic_panic() {
+    let _: Gc<()> = Gc::new_cyclic(|_| panic!("ehehe"));
 }
