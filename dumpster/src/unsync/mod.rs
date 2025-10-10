@@ -313,7 +313,7 @@ impl<T: Trace + ?Sized> Gc<T> {
         struct CleanUp<T: Trace + 'static> {
             /// Is `true` if the [`GcBox::value`] is initialized.
             initialized: bool,
-            /// Pointer to the maybe uninitialized `GcBox`.
+            /// Pointer to the `GcBox` with a maybe uninitialized value.
             ptr: NonNull<GcBox<T>>,
         }
 
