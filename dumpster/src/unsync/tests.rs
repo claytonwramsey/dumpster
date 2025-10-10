@@ -475,6 +475,7 @@ fn make_mut_of_object_in_dumpster() {
 
 #[test]
 #[should_panic = "panic on visit"]
+#[cfg_attr(miri, ignore = "intentionally leaks memory")]
 fn panic_visit() {
     struct PanicVisit;
 
