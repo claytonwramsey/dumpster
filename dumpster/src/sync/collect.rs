@@ -429,6 +429,9 @@ impl Visitor for Dfs<'_> {
     where
         T: Trace + Send + Sync + ?Sized,
     {
+        if gc.is_dead() {
+            return;
+        }
         // must not use deref operators since we don't want to update the generation
         let ptr = unsafe {
             // SAFETY: This is the same as the deref implementation, but avoids
@@ -547,6 +550,9 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
         where
             T: Trace + Send + Sync + ?Sized,
         {
+            if gc.is_dead() {
+                return;
+            }
             let id = AllocationId::from(unsafe {
                 // SAFETY: This is the same as dereferencing the GC.
                 (*gc.ptr.get()).unwrap()

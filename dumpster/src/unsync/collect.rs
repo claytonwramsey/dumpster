@@ -245,6 +245,9 @@ impl Visitor for Dfs {
     where
         T: Trace + ?Sized,
     {
+        if gc.is_dead() {
+            return;
+        }
         let ptr = gc.ptr.get().unwrap();
         let next_id = AllocationId::from(ptr);
         match self.ref_graph.entry(next_id) {
@@ -284,6 +287,9 @@ impl Visitor for Mark {
     where
         T: Trace + ?Sized,
     {
+        if gc.is_dead() {
+            return;
+        }
         let ptr = gc.ptr.get().unwrap();
         if self.visited.insert(AllocationId::from(ptr)) {
             let _ = unsafe { ptr.as_ref().value.accept(self) };
@@ -311,6 +317,9 @@ impl Visitor for DropAlloc<'_> {
     where
         T: Trace + ?Sized,
     {
+        if gc.is_dead() {
+            return;
+        }
         let ptr = gc.ptr.get().unwrap();
         let id = AllocationId::from(ptr);
         if self.reachable.contains(&id) {
