@@ -226,33 +226,36 @@ impl<T: Trace + ?Sized> Gc<T> {
 
     /// Construct a self-referencing `Gc`.
     ///
-    /// `new_cyclic` first allocates memory for `T`, then constructs a dead `Gc` pointing to the allocation.
-    /// The dead `Gc` is then passed to `data_fn` to construct a value of `T`, which is stored in the allocation.
-    /// Finally, `new_cyclic` will update the dead self-referential `Gc`s and rehydrate them to produce the final value.
+    /// `new_cyclic` first allocates memory for `T`, then constructs a dead `Gc` pointing to the
+    /// allocation. The dead `Gc` is then passed to `data_fn` to construct a value of `T`, which
+    /// is stored in the allocation. Finally, `new_cyclic` will update the dead self-referential
+    /// `Gc`s and rehydrate them to produce the final value.
     ///
     /// # Panics
     ///
     /// If `data_fn` panics, the panic is propagated to the caller.
     /// The allocation is cleaned up normally.
     ///
-    /// Additionally, if, when attempting to rehydrate the `Gc` members of `F`, the visitor fails to reach a `Gc`, this
-    /// function will panic and reserve the allocation to be cleaned up later.
+    /// Additionally, if, when attempting to rehydrate the `Gc` members of `F`, the visitor fails to
+    /// reach a `Gc`, this function will panic and reserve the allocation to be cleaned up
+    /// later.
     ///
     /// # Notes on safety
     ///
     /// Incorrect implementations of `data_fn` may have unusual or strange results.
-    /// Although `dumpster` guarantees that it will be safe, and will do its best to ensure correct results,
-    /// it is generally unwise to allow dead `Gc`s to exist for long.
-    /// If you implement `data_fn` wrong, this may cause panics later on inside of the collection process.
+    /// Although `dumpster` guarantees that it will be safe, and will do its best to ensure correct
+    /// results, it is generally unwise to allow dead `Gc`s to exist for long.
+    /// If you implement `data_fn` wrong, this may cause panics later on inside of the collection
+    /// process.
     ///
     /// # Examples
     ///
     /// ```
-    /// use dumpster::{Trace, unsync::Gc};
+    /// use dumpster::{unsync::Gc, Trace};
     ///
     /// #[derive(Trace)]
     /// struct Cycle {
-    ///     this: Gc<Self>
+    ///     this: Gc<Self>,
     /// }
     ///
     /// let gc = Gc::new_cyclic(|this| Cycle { this });
@@ -291,7 +294,8 @@ impl<T: Trace + ?Sized> Gc<T> {
                     unsafe {
                         // SAFETY: it is safe to transmute these pointers because we have checked
                         // that they are of the same type.
-                        // Additionally, the `GcBox` has been fully initialized, so it is safe to create a reference here.
+                        // Additionally, the `GcBox` has been fully initialized, so it is safe to
+                        // create a reference here.
                         let cell_ptr = (&raw const gc.ptr).cast::<Cell<Nullable<GcBox<U>>>>();
                         (*cell_ptr).set(self.0);
 
