@@ -826,3 +826,22 @@ fn make_mut_of_object_in_dumpster() {
     // during collection
     assert_eq!(*foo_mut.something, 5);
 }
+
+#[test]
+#[should_panic = "panic on visit"]
+fn panic_visit() {
+    struct PanicVisit;
+
+    /// We technically can make it part of the contract for `Trace` to reject panicking impls,
+    /// but it is good form to accept these even though they are malformed.
+    unsafe impl Trace for PanicVisit {
+        fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+            panic!("panic on visit");
+        }
+    }
+
+    let gc = Gc::new(PanicVisit);
+    let _ = gc.clone();
+    drop(gc);
+    collect();
+}
