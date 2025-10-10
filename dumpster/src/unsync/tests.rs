@@ -548,7 +548,7 @@ fn new_cyclic_panic() {
 fn dead_inside_alive() {
     struct Cycle(Option<Gc<Self>>);
     thread_local! {
-        static ESCAPE: Cell<Option<Gc<Cycle>>> = Cell::new(None);
+        static ESCAPE: Cell<Option<Gc<Cycle>>> = const { Cell::new(None) };
     }
 
     unsafe impl Trace for Cycle {
@@ -573,5 +573,6 @@ fn dead_inside_alive() {
     let alloc2 = alloc.clone();
     drop(alloc);
     drop(alloc2);
-    collect(); // if correct, this collection should not panic or encounter UB when collecting `alloc`
+    collect(); // if correct, this collection should not panic or encounter UB when collecting
+               // `alloc`
 }

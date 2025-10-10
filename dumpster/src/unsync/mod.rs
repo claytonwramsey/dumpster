@@ -307,7 +307,9 @@ impl<T: Trace + ?Sized> Gc<T> {
 
         /// Data structure for cleaning up the allocation in case we panic along the way.
         struct CleanUp<T: Trace + 'static> {
+            /// Is `true` if the [`GcBox::value`] is initialized.
             initialized: bool,
+            /// Pointer to the maybe uninitialized `GcBox`.
             ptr: NonNull<GcBox<T>>,
         }
 
@@ -341,12 +343,12 @@ impl<T: Trace + ?Sized> Gc<T> {
 
         // nilgc is a dead Gc
         let nilgc = Gc {
-            ptr: Cell::new(Nullable::new(NonNull::from(gcbox.cast::<GcBox<T>>())).as_null()),
+            ptr: Cell::new(Nullable::new(gcbox.cast::<GcBox<T>>()).as_null()),
         };
         assert!(nilgc.is_dead());
         unsafe {
             // SAFETY: `gcbox` is a valid pointer to an uninitialized datum that we have allocated.
-            (*gcbox.as_mut()).value = Uninitialized(MaybeUninit::new(data_fn(nilgc)));
+            gcbox.as_mut().value = Uninitialized(MaybeUninit::new(data_fn(nilgc)));
         }
         cleanup.initialized = true;
 
