@@ -13,11 +13,26 @@ use crate::{unsync::coerce_gc, Visitor};
 use super::*;
 use std::{
     cell::RefCell,
+    mem::take,
     sync::{
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         Mutex,
     },
 };
+
+struct DropCount(&'static AtomicUsize);
+
+impl Drop for DropCount {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+unsafe impl Trace for DropCount {
+    fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+        Ok(())
+    }
+}
 
 #[test]
 /// Test a simple data structure
@@ -491,4 +506,71 @@ fn panic_visit() {
     let _ = gc.clone();
     drop(gc);
     collect();
+}
+
+#[test]
+fn new_cyclic_nothing() {
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    let gc = Gc::new_cyclic(|_| DropCount(&COUNT));
+    drop(gc);
+    // collect not necessary since this a drop by reference count
+    assert_eq!(COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn new_cyclic_one() {
+    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    struct Cycle(Gc<Self>, DropCount);
+
+    unsafe impl Trace for Cycle {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    let cyc = Gc::new_cyclic(|gc| Cycle(gc, DropCount(&DROP_COUNT)));
+    assert_eq!(cyc.ref_count().get(), 2);
+    drop(cyc);
+    collect();
+
+    assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[should_panic = "ehehe"]
+fn new_cyclic_panic() {
+    let _: Gc<()> = Gc::new_cyclic(|_| panic!("ehehe"));
+}
+
+#[test]
+fn dead_inside_alive() {
+    struct Cycle(Option<Gc<Self>>);
+    thread_local! {
+        static ESCAPE: Cell<Option<Gc<Cycle>>> = Cell::new(None);
+    }
+
+    unsafe impl Trace for Cycle {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    impl Drop for Cycle {
+        fn drop(&mut self) {
+            ESCAPE.set(take(&mut self.0));
+        }
+    }
+
+    let c1 = Gc::new_cyclic(|gc| Cycle(Some(gc)));
+    drop(c1);
+    collect();
+
+    // `ESCAPE` is now a dead pointer
+
+    let alloc = Gc::new(ESCAPE.take().unwrap());
+    let alloc2 = alloc.clone();
+    drop(alloc);
+    drop(alloc2);
+    collect(); // if correct, this collection should not panic or encounter UB when collecting `alloc`
 }
