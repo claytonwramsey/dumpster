@@ -13,6 +13,7 @@ use crate::{unsync::coerce_gc, Visitor};
 use super::*;
 use std::{
     cell::RefCell,
+    mem::take,
     sync::{
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         Mutex,
@@ -539,4 +540,36 @@ fn new_cyclic_one() {
 #[should_panic = "ehehe"]
 fn new_cyclic_panic() {
     let _: Gc<()> = Gc::new_cyclic(|_| panic!("ehehe"));
+}
+
+#[test]
+fn dead_inside_alive() {
+    struct Cycle(Option<Gc<Self>>);
+    thread_local! {
+        static ESCAPE: Cell<Option<Gc<Cycle>>> = Cell::new(None);
+    }
+
+    unsafe impl Trace for Cycle {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    impl Drop for Cycle {
+        fn drop(&mut self) {
+            ESCAPE.set(take(&mut self.0));
+        }
+    }
+
+    let c1 = Gc::new_cyclic(|gc| Cycle(Some(gc)));
+    drop(c1);
+    collect();
+
+    // `ESCAPE` is now a dead pointer
+
+    let alloc = Gc::new(ESCAPE.take().unwrap());
+    let alloc2 = alloc.clone();
+    drop(alloc);
+    drop(alloc2);
+    collect(); // if correct, this collection should not panic or encounter UB when collecting `alloc`
 }
