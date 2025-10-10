@@ -263,7 +263,7 @@ impl<T: Trace + ?Sized> Gc<T> {
         T: Sized,
     {
         /// A struct containing an uninitialized value of `T`.
-        /// May only be used inside `make_mut`.
+        /// May only be used inside `new_cyclic`.
         #[repr(transparent)]
         struct Uninitialized<T>(MaybeUninit<T>);
 
