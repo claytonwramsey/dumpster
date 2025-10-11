@@ -6,6 +6,8 @@
     file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
+#![cfg_attr(not(test), allow(dead_code))]
+
 use std::{
     mem::MaybeUninit,
     ops::Deref,
@@ -45,6 +47,7 @@ impl<T> Mutex<T> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    #[expect(dead_code)]
     pub fn is_locked(&self) -> bool {
         !matches!(self.0.try_lock(), Err(TryLockError::WouldBlock))
     }
@@ -66,25 +69,30 @@ impl<T> RwLock<T> {
     }
 }
 
-struct Once(Mutex<bool>);
+struct Once {
+    is_completed: Mutex<bool>,
+}
 
 impl Once {
     fn new() -> Self {
-        Self(Mutex::new(false))
+        Self {
+            is_completed: Mutex::new(false),
+        }
     }
 
     fn call_once(&self, f: impl FnOnce()) {
-        if self.is_completed() {
+        let mut is_completed = self.is_completed.lock();
+
+        if *is_completed {
             return;
         }
 
-        let mut guard = self.0.lock();
         f();
-        *guard = true;
+        *is_completed = true;
     }
 
     fn is_completed(&self) -> bool {
-        *self.0.lock()
+        *self.is_completed.lock()
     }
 }
 
@@ -138,18 +146,74 @@ impl<T> OnceLock<T> {
     }
 }
 
-pub struct LazyLock<T>(OnceLock<T>, fn() -> T);
+#[test]
+fn test_once() {
+    use loom::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
-impl<T> LazyLock<T> {
-    pub fn new(f: fn() -> T) -> Self {
-        Self(OnceLock::new(), f)
-    }
+    loom::model(|| {
+        let once = Arc::new(Once::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let mut join_handles = vec![];
+
+        for _ in 0..2 {
+            let once = once.clone();
+            let counter = counter.clone();
+
+            join_handles.push(loom::thread::spawn(move || {
+                once.call_once(|| {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                });
+            }));
+        }
+
+        for join_handle in join_handles {
+            join_handle.join().unwrap();
+        }
+
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    });
 }
 
-impl<T> Deref for LazyLock<T> {
-    type Target = T;
+#[test]
+fn test_once_lock() {
+    use loom::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
-    fn deref(&self) -> &Self::Target {
-        todo!()
-    }
+    loom::model(|| {
+        let once_lock = Arc::new(OnceLock::<String>::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let mut join_handles = vec![];
+
+        for _ in 0..2 {
+            let once_lock = once_lock.clone();
+            let counter = counter.clone();
+
+            join_handles.push(loom::thread::spawn({
+                move || {
+                    once_lock.with_or_init(
+                        || {
+                            counter.fetch_add(1, Ordering::Relaxed);
+                            String::from("test")
+                        },
+                        |value| {
+                            assert_eq!(value, "test");
+                        },
+                    );
+                }
+            }));
+        }
+
+        for join_handle in join_handles {
+            join_handle.join().unwrap();
+        }
+
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    });
 }
