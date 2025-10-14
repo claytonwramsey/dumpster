@@ -6,6 +6,8 @@
     file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
+//! Tests for running under loom.
+
 #![cfg_attr(not(test), allow(dead_code))]
 
 use std::{
@@ -23,6 +25,7 @@ use loom::{
 
 use crate::{Trace, Visitor};
 
+/// Simple wrapper mutex type.
 pub struct Mutex<T: ?Sized>(MutexImpl<T>);
 
 unsafe impl<T: Trace + ?Sized> Trace for Mutex<T> {
@@ -39,47 +42,58 @@ unsafe impl<T: Trace + ?Sized> Trace for Mutex<T> {
 }
 
 impl<T> Mutex<T> {
+    /// Construct a new mutex.
     pub fn new(value: T) -> Self {
         Self(MutexImpl::new(value))
     }
 
+    /// Lock the mutex.
     pub fn lock(&self) -> MutexGuard<'_, T> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     #[expect(dead_code)]
+    /// Is the mutex locked?
     pub fn is_locked(&self) -> bool {
         !matches!(self.0.try_lock(), Err(TryLockError::WouldBlock))
     }
 }
 
+/// A read-write lock
 pub struct RwLock<T>(RwLockImpl<T>);
 
 impl<T> RwLock<T> {
+    /// Construct a rwlock.
     pub fn new(value: T) -> Self {
         Self(RwLockImpl::new(value))
     }
 
+    /// Get a read guard.
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
         self.0.read().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Get a write guard.
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
         self.0.write().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
+/// A once-object.
 struct Once {
+    /// Completed?
     is_completed: Mutex<bool>,
 }
 
 impl Once {
+    /// Construct a once.
     fn new() -> Self {
         Self {
             is_completed: Mutex::new(false),
         }
     }
 
+    /// Call a function once.
     fn call_once(&self, f: impl FnOnce()) {
         let mut is_completed = self.is_completed.lock();
 
@@ -91,13 +105,17 @@ impl Once {
         *is_completed = true;
     }
 
+    /// Determine if we are completed.
     fn is_completed(&self) -> bool {
         *self.is_completed.lock()
     }
 }
 
+/// A once-lock.
 pub struct OnceLock<T> {
+    /// A thing that does it once.
     once: Once,
+    /// The data.
     value: UnsafeCell<MaybeUninit<T>>,
 }
 
@@ -111,6 +129,7 @@ unsafe impl<T: Trace> Trace for OnceLock<T> {
 }
 
 impl<T> OnceLock<T> {
+    /// Construct a once-lock.
     pub fn new() -> Self {
         Self {
             once: Once::new(),
@@ -118,11 +137,13 @@ impl<T> OnceLock<T> {
         }
     }
 
+    /// Call a function uncheckedly.
     unsafe fn with_unchecked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         self.value
             .with(|ptr| f(unsafe { (*ptr).assume_init_ref() }))
     }
 
+    /// Apply a function.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         if self.once.is_completed() {
             Some(unsafe { self.with_unchecked(f) })
@@ -131,6 +152,7 @@ impl<T> OnceLock<T> {
         }
     }
 
+    /// Apply or initialize.
     pub fn with_or_init<R>(&self, init: impl FnOnce() -> T, f: impl FnOnce(&T) -> R) -> R {
         self.once.call_once(|| {
             self.value.with_mut(|ptr| unsafe {
@@ -141,6 +163,7 @@ impl<T> OnceLock<T> {
         unsafe { self.with_unchecked(f) }
     }
 
+    /// Set the value.
     pub fn set(&self, value: T) {
         self.with_or_init(|| value, |_| {});
     }

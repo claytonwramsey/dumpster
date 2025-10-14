@@ -150,7 +150,7 @@ fn loom_sync_leak_by_creation_in_drop() {
         fn drop(&mut self) {
             println!("calling drop for foo");
             let gcbar = Gc::new(Bar(OnceLock::new(), self.1));
-            let _ = gcbar.0.set(gcbar.clone());
+            gcbar.0.set(gcbar.clone());
             drop(gcbar);
 
             // MUST be included for the test to succeed (in case Foo is collected on separate
@@ -175,7 +175,7 @@ fn loom_sync_leak_by_creation_in_drop() {
         for i in 0..2 {
             join_handles.push(loom::thread::spawn(move || {
                 let foo = Gc::new(Foo(OnceLock::new(), i));
-                let _ = foo.0.set(foo.clone());
+                foo.0.set(foo.clone());
                 drop(foo);
 
                 println!("===== collect from {i} number 1");

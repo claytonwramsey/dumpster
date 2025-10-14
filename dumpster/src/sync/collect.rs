@@ -493,14 +493,9 @@ impl Visitor for Dfs<'_> {
     {
         log!(T, "visitor found gc");
         // must not use deref operators since we don't want to update the generation
-        let ptr = unsafe {
-            // SAFETY: This is the same as the deref implementation, but avoids
-            // incrementing the generation count.
-            (*gc.ptr.get()).unwrap()
-        };
         let box_ref = unsafe {
             // SAFETY: same as above.
-            ptr.as_ref()
+            gc.ref_quiet()
         };
         let current_tag = CURRENT_TAG.load(Ordering::Relaxed);
         if gc.tag.swap(current_tag, Ordering::Relaxed) >= current_tag
@@ -547,6 +542,12 @@ impl Visitor for Dfs<'_> {
                 // This allocation has never been visited by the reference graph builder
                 let strong_count = box_ref.strong.load(Ordering::Acquire);
                 box_ref.weak.fetch_add(1, Ordering::Acquire);
+
+                #[cfg(not(loom))]
+                let ptr = unsafe { (*gc.ptr.get()).unwrap() };
+                #[cfg(loom)]
+                let ptr = gc.ptr.get().with(|p| unsafe { *p }.unwrap());
+
                 v.insert(AllocationInfo {
                     ptr: Erased::new(ptr),
                     weak_drop_fn: drop_weak_zero::<T>,
@@ -607,23 +608,49 @@ impl Visitor for PrepareForDestruction<'_> {
     where
         T: Trace + Send + Sync + ?Sized,
     {
-        let id = AllocationId::from(unsafe {
-            // SAFETY: This is the same as dereferencing the GC.
-            (*gc.ptr.get()).unwrap()
-        });
-        unsafe {
-            // SAFETY: The GC is unreachable,
-            // so the GC will never be dereferenced again.
-            let p = gc.ptr.get().as_mut().unwrap();
-            *p = p.as_null();
-        }
-
-        if matches!(self.graph[&id].reachability, Reachability::Reachable) {
+        #[cfg(not(loom))]
+        {
+            let id = AllocationId::from(unsafe {
+                // SAFETY: This is the same as dereferencing the GC.
+                (*gc.ptr.get()).unwrap()
+            });
             unsafe {
-                // SAFETY: the associated pointee is reachable, so the allocation here must
-                // still exist and be valid.
-                id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
+                // SAFETY: The GC is unreachable,
+                // so the GC will never be dereferenced again.
+                let p = gc.ptr.get().as_mut().unwrap();
+                *p = p.as_null();
             }
+
+            if matches!(self.graph[&id].reachability, Reachability::Reachable) {
+                unsafe {
+                    // SAFETY: the associated pointee is reachable, so the allocation here must
+                    // still exist and be valid.
+                    id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
+                }
+            }
+        }
+        #[cfg(loom)]
+        {
+            gc.ptr.with_mut(|p| {
+                let id = AllocationId::from(unsafe {
+                    // SAFETY: This is the same as dereferencing the GC.
+                    (*p).unwrap()
+                });
+                unsafe {
+                    // SAFETY: The GC is unreachable,
+                    // so the GC will never be dereferenced again.
+                    let p = p.as_mut().unwrap();
+                    *p = p.as_null();
+                }
+
+                if matches!(self.graph[&id].reachability, Reachability::Reachable) {
+                    unsafe {
+                        // SAFETY: the associated pointee is reachable, so the allocation here must
+                        // still exist and be valid.
+                        id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
+                    }
+                }
+            });
         }
     }
 

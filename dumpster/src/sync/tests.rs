@@ -275,6 +275,7 @@ fn eventually_collect() {
 }
 
 #[test]
+#[cfg(not(loom))]
 #[cfg(feature = "coerce-unsized")]
 fn coerce_array() {
     let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
@@ -615,7 +616,7 @@ fn root_canal() {
 }
 
 #[test]
-#[should_panic = "Attempting to dereference Gc to already-deallocated object.This is caused by accessing a Gc during a Drop implementation, likely implying a bug in your code."]
+#[should_panic = "Attempt to dereference Gc to already-collected object. This means a Gc escaped from a Drop implementation, likely implying a bug in your code."]
 fn escape_dead_pointer() {
     static ESCAPED: Mutex<Option<Gc<Escape>>> = Mutex::new(None);
 
@@ -651,6 +652,7 @@ fn escape_dead_pointer() {
 }
 
 #[test]
+#[cfg(not(loom))]
 fn from_box() {
     let gc: Gc<String> = Gc::from(Box::new(String::from("hello")));
 
@@ -668,6 +670,7 @@ fn from_box() {
 }
 
 #[test]
+#[cfg(not(loom))]
 fn from_slice() {
     let gc: Gc<[String]> = Gc::from(&[String::from("hello"), String::from("world")][..]);
 
@@ -728,6 +731,7 @@ fn from_slice_panic() {
 }
 
 #[test]
+#[cfg(not(loom))]
 fn from_vec() {
     let gc: Gc<[String]> = Gc::from(vec![String::from("hello"), String::from("world")]);
 
