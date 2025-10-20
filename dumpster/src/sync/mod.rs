@@ -318,7 +318,7 @@ where
     /// # dumpster::sync::collect();
     /// ```
     pub fn try_deref(gc: &Gc<T>) -> Option<&T> {
-        Gc::is_dead(gc).then(|| &**gc)
+        (!Gc::is_dead(gc)).then(|| &**gc)
     }
 
     /// Attempt to clone this `Gc`.
@@ -364,7 +364,7 @@ where
     /// # dumpster::sync::collect();
     /// ```
     pub fn try_clone(gc: &Gc<T>) -> Option<Gc<T>> {
-        Gc::is_dead(gc).then(|| gc.clone())
+        (!Gc::is_dead(gc)).then(|| gc.clone())
     }
 
     /// Provides a raw pointer to the data.
