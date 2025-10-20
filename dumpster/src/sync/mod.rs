@@ -385,15 +385,20 @@ where
     /// assert_eq!(unsafe { &*x_ptr }, "hello");
     /// ```
     pub fn as_ptr(gc: &Gc<T>) -> *const T {
+        if Gc::is_dead(gc) {
+            panic_deref_of_collected_object()
+        }
+        unsafe { addr_of_mut!((*Gc::as_box_ptr(gc)).value) }
+    }
+
+    fn as_box_ptr(gc: &Gc<T>) -> *mut GcBox<T> {
         #[cfg(not(loom))]
         unsafe {
-            let ptr = NonNull::as_ptr((*gc.ptr.get()).unwrap());
-            addr_of_mut!((*ptr).value)
+            (*gc.ptr.get()).as_ptr()
         }
         #[cfg(loom)]
         {
-            let ptr = NonNull::as_ptr(gc.ptr.with(|p| unsafe { *p }).unwrap());
-            unsafe { addr_of_mut!((*ptr).value) }
+            gc.ptr.with(|p| unsafe { *p }).as_ptr()
         }
     }
 
@@ -500,14 +505,9 @@ where
         if self.is_dead() {
             panic_deref_of_collected_object();
         }
-        #[cfg(not(loom))]
-        let box_ref = unsafe { self.ptr.get().read().unwrap_unchecked().as_ref() };
-        #[cfg(loom)]
-        let box_ref = self
-            .ptr
-            .get()
-            .with(|p| unsafe { (*p).unwrap_unchecked().as_ref() });
-        box_ref
+
+        let ptr = Gc::as_box_ptr(self);
+        unsafe { ptr.as_ref().unwrap() }
     }
 
     /// Consumes the `Gc<T>`, returning the inner `GcBox<T>` pointer and tag.
@@ -593,18 +593,12 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
             *this = Gc::new(box_ref.value.clone());
         }
 
+        let ptr = Gc::as_box_ptr(&this);
         // SAFETY: we have exclusive access to this `GcBox` because we ensured
         // that we hold the only reference to this allocation.
         // No other `Gc`s point to this allocation because the strong count is 1, and there are no
         // loose pointers internal to the collector because the weak count is 0.
-        #[cfg(not(loom))]
-        unsafe {
-            &mut (*this.ptr.get_mut().as_ptr()).value
-        }
-        #[cfg(loom)]
-        this.ptr
-            .get_mut()
-            .with(|p| unsafe { &mut (*(*p).as_ptr()).value })
+        unsafe { &mut (*ptr).value }
     }
 }
 
@@ -760,12 +754,7 @@ where
     T: Trace + Send + Sync + ?Sized,
 {
     fn drop(&mut self) {
-        #[cfg(not(loom))]
-        let Some(mut ptr) = unsafe { *self.ptr.get() }.as_option() else {
-            return;
-        };
-        #[cfg(loom)]
-        let Some(mut ptr) = unsafe { self.ptr.with(|p| *p) }.as_option() else {
+        let Some(mut ptr) = NonNull::new(Gc::as_box_ptr(self)) else {
             return;
         };
         log!(T, "call gc drop... ");
