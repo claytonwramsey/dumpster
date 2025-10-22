@@ -12,6 +12,7 @@ use std::{
     alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
     collections::{hash_map::Entry, HashMap, HashSet},
+    mem::take,
     num::NonZeroUsize,
     ptr::{drop_in_place, NonNull},
 };
@@ -26,7 +27,7 @@ use super::{CollectCondition, GcBox};
 
 thread_local! {
     /// Whether the current thread is running a cleanup process.
-    pub(super) static COLLECTING: Cell<bool> = const { Cell::new(false) };
+    static COLLECTING: Cell<bool> = const { Cell::new(false) };
     /// The global collection of allocation information for this thread.
     pub(super) static DUMPSTER: Dumpster = Dumpster {
         to_collect: RefCell::new(HashMap::new()),
@@ -106,6 +107,9 @@ unsafe fn apply_visitor<T: Trace + ?Sized, V: Visitor>(ptr: Erased, visitor: &mu
 impl Dumpster {
     /// Collect all unreachable allocations that this dumpster is responsible for.
     pub fn collect_all(&self) {
+        if COLLECTING.get() {
+            return; // Do not double-collect.
+        }
         self.n_ref_drops.set(0);
 
         unsafe {
@@ -150,15 +154,22 @@ impl Dumpster {
             };
 
             COLLECTING.set(true);
-            for cleanup in self
-                .to_collect
-                .borrow_mut()
+            // Do not hold mutable reference, as it is possible for a `Gc` to be marked dirty during
+            // collection by dropping.
+            let mut collectees = take(&mut *self.to_collect.borrow_mut());
+            for cleanup in collectees
                 .drain()
                 .filter_map(|(id, cleanup)| (!mark.visited.contains(&id)).then_some(cleanup))
             {
                 (cleanup.drop_fn)(cleanup.ptr, &mut decrementer);
             }
             COLLECTING.set(false);
+            assert!(collectees.is_empty());
+            let mut new_to_collect = self.to_collect.borrow_mut();
+            if new_to_collect.is_empty() {
+                // Reuse allocation from `collectees`
+                *new_to_collect = collectees;
+            }
         }
     }
 
@@ -322,14 +333,17 @@ impl Visitor for DropAlloc<'_> {
         }
         let ptr = gc.ptr.get().unwrap();
         let id = AllocationId::from(ptr);
+        gc.kill();
         if self.reachable.contains(&id) {
             unsafe {
                 let cell_ref = &ptr.as_ref().ref_count;
-                cell_ref.set(NonZeroUsize::new(cell_ref.get().get() - 1).unwrap());
+                cell_ref.set(NonZeroUsize::new(cell_ref.get().get() - 1).expect(
+                    "reachable allocation cannot be rendered unreachable by deleting lost alloc",
+                ));
             }
             return;
         }
-        gc.ptr.set(gc.ptr.get().as_null());
+
         if self.visited.insert(id) {
             unsafe {
                 ptr.as_ref().value.accept(self).unwrap();
@@ -345,17 +359,11 @@ impl Visitor for DropAlloc<'_> {
 /// find.
 /// Also, drop the allocation when done.
 unsafe fn drop_assist<T: Trace + ?Sized>(ptr: Erased, visitor: &mut DropAlloc<'_>) {
-    if visitor
-        .visited
-        .insert(AllocationId::from(ptr.specify::<GcBox<T>>()))
-    {
-        ptr.specify::<GcBox<T>>()
-            .as_ref()
-            .value
-            .accept(visitor)
-            .unwrap();
+    let mut spec = ptr.specify::<GcBox<T>>();
+    if visitor.visited.insert(AllocationId::from(spec)) {
+        spec.as_ref().value.accept(visitor).unwrap();
 
-        let mut_spec = ptr.specify::<GcBox<T>>().as_mut();
+        let mut_spec = spec.as_mut();
         let layout = Layout::for_value(mut_spec);
         drop_in_place(mut_spec);
         dealloc(std::ptr::from_mut::<GcBox<T>>(mut_spec).cast(), layout);
