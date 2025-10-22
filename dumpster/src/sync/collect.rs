@@ -543,10 +543,7 @@ impl Visitor for Dfs<'_> {
                 let strong_count = box_ref.strong.load(Ordering::Acquire);
                 box_ref.weak.fetch_add(1, Ordering::Acquire);
 
-                #[cfg(not(loom))]
-                let ptr = unsafe { (*gc.ptr.get()).unwrap() };
-                #[cfg(loom)]
-                let ptr = gc.ptr.get().with(|p| unsafe { *p }.unwrap());
+                let ptr = NonNull::new(Gc::as_box_ptr(gc)).unwrap();
 
                 v.insert(AllocationInfo {
                     ptr: Erased::new(ptr),
