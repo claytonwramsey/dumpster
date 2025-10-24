@@ -29,6 +29,10 @@
 
 mod cell;
 mod collect;
+#[cfg(loom)]
+mod loom_ext;
+#[cfg(all(loom, test))]
+mod loom_tests;
 #[cfg(all(test, not(loom)))]
 mod tests;
 
@@ -41,8 +45,15 @@ use std::{
     ops::Deref,
     ptr::{self, addr_of, addr_of_mut, drop_in_place, NonNull},
     slice,
+};
+
+#[cfg(loom)]
+use loom::{
+    lazy_static,
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
+#[cfg(not(loom))]
+use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use crate::{
     contains_gcs, panic_deref_of_collected_object, ptr::Nullable, sync::cell::UCell, Trace, Visitor,
@@ -103,9 +114,15 @@ pub struct Gc<T: Trace + Send + Sync + ?Sized + 'static> {
     tag: AtomicUsize,
 }
 
+#[cfg(not(loom))]
 /// The tag of the current sweep operation.
 /// All new allocations are minted with the current tag.
 static CURRENT_TAG: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(loom)]
+lazy_static! {
+    static ref CURRENT_TAG: AtomicUsize = AtomicUsize::new(0);
+}
 
 #[repr(C)]
 // This is only public to make the `sync_coerce_gc` macro work.

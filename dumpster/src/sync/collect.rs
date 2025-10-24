@@ -14,13 +14,26 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     mem::{replace, swap, take, transmute},
     ptr::{drop_in_place, NonNull},
-    sync::{
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
-        LazyLock,
-    },
 };
 
+#[cfg(not(loom))]
+use std::sync::{
+    atomic::{AtomicPtr, AtomicUsize, Ordering},
+    LazyLock,
+};
+
+#[cfg(loom)]
+use loom::{
+    lazy_static,
+    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
+    thread_local,
+};
+
+#[cfg(not(loom))]
 use parking_lot::{Mutex, RwLock};
+
+#[cfg(loom)]
+use crate::sync::loom_ext::{Mutex, RwLock};
 
 use crate::{ptr::Erased, Trace, Visitor};
 
@@ -49,20 +62,20 @@ struct GarbageTruck {
 }
 
 /// A structure containing the global information for the garbage collector.
-struct Dumpster {
+pub(super) struct Dumpster {
     /// A lookup table for the allocations which may need to be cleaned up later.
-    contents: RefCell<HashMap<AllocationId, TrashCan>>,
+    pub contents: RefCell<HashMap<AllocationId, TrashCan>>,
     /// The number of times an allocation on this thread has been dropped.
     n_drops: Cell<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 /// A unique identifier for an allocation.
-struct AllocationId(NonNull<GcBox<()>>);
+pub(super) struct AllocationId(NonNull<GcBox<()>>);
 
 #[derive(Debug)]
 /// The information which describes an allocation that may need to be cleaned up later.
-struct TrashCan {
+pub(super) struct TrashCan {
     /// A pointer to the allocation to be cleaned up.
     ptr: Erased,
     /// The function which can be used to build a reference graph.
@@ -102,21 +115,21 @@ enum Reachability {
     Reachable,
 }
 
+#[cfg(not(loom))]
 /// The global garbage truck.
 /// All [`TrashCan`]s should eventually end up in here.
-static GARBAGE_TRUCK: LazyLock<GarbageTruck> = LazyLock::new(|| GarbageTruck {
-    contents: Mutex::new(HashMap::new()),
-    collecting_lock: RwLock::new(()),
-    n_gcs_dropped: AtomicUsize::new(0),
-    n_gcs_existing: AtomicUsize::new(0),
-    collect_condition: AtomicPtr::new(default_collect_condition as *mut ()),
-});
+static GARBAGE_TRUCK: LazyLock<GarbageTruck> = LazyLock::new(GarbageTruck::new);
+
+#[cfg(loom)]
+lazy_static! {
+    static ref GARBAGE_TRUCK: GarbageTruck = GarbageTruck::new();
+}
 
 thread_local! {
     /// The dumpster for this thread.
     /// Allocations which are "dirty" will be transferred to this dumpster before being moved into
     /// the garbage truck for final collection.
-    static DUMPSTER: Dumpster = Dumpster {
+    pub(super) static DUMPSTER: Dumpster = Dumpster {
         contents: RefCell::new(HashMap::new()),
         n_drops: Cell::new(0),
     };
@@ -124,7 +137,7 @@ thread_local! {
     /// Whether the currently-running thread is doing a cleanup.
     /// This cannot be stored in `DUMPSTER` because otherwise it would cause weird use-after-drop
     /// behavior.
-    static CLEANING: Cell<bool> = const { Cell::new(false) };
+    static CLEANING: Cell<bool> = Cell::new(false);
 }
 
 /// Collect all allocations in the garbage truck (but not necessarily the dumpster), then await
@@ -218,6 +231,14 @@ where
     });
 }
 
+#[cfg(all(test, loom))]
+/// Deliver all [`TrashCan`]s from this thread's dumpster into the garbage truck.
+///
+/// This function is available to to support testing, but currently is not part of the public API.
+pub(super) fn deliver_dumpster() {
+    DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
+}
+
 /// Set the function which determines whether the garbage collector should be run.
 ///
 /// `f` will be periodically called by the garbage collector to determine whether it should perform
@@ -244,7 +265,7 @@ pub fn set_collect_condition(f: CollectCondition) {
 
 /// Determine whether this thread is currently cleaning.
 pub fn currently_cleaning() -> bool {
-    CLEANING.get()
+    CLEANING.with(Cell::get)
 }
 
 /// Get the number of `[Gc]`s dropped since the last collection.
@@ -284,6 +305,16 @@ impl Dumpster {
 }
 
 impl GarbageTruck {
+    fn new() -> Self {
+        GarbageTruck {
+            contents: Mutex::new(HashMap::new()),
+            collecting_lock: RwLock::new(()),
+            n_gcs_dropped: AtomicUsize::new(0),
+            n_gcs_existing: AtomicUsize::new(0),
+            collect_condition: AtomicPtr::new(default_collect_condition as *mut ()),
+        }
+    }
+
     /// Search through the set of existing allocations which have been marked inaccessible, and see
     /// if they are inaccessible.
     /// If so, drop those allocations.
@@ -321,7 +352,7 @@ impl GarbageTruck {
             mark(root_id, &mut ref_graph);
         }
 
-        CLEANING.set(true);
+        CLEANING.with(|c| c.set(true));
         // set of allocations which must be destroyed because we were the last weak pointer to it
         let mut weak_destroys = Vec::new();
         for (id, node) in &ref_graph {
@@ -345,7 +376,7 @@ impl GarbageTruck {
                 }
             }
         }
-        CLEANING.set(false);
+        CLEANING.with(|c| c.set(false));
         for (drop_fn, ptr) in weak_destroys {
             unsafe {
                 // SAFETY: we have proven (via header_ref.weak = 1) that the cleaning
@@ -627,6 +658,7 @@ where
     }
 }
 
+#[cfg(not(loom))] // cannot access lazy static in drop
 impl Drop for Dumpster {
     fn drop(&mut self) {
         self.deliver_to(&GARBAGE_TRUCK);
@@ -634,6 +666,7 @@ impl Drop for Dumpster {
     }
 }
 
+#[cfg(not(loom))] // cannot access lazy static in drop
 impl Drop for GarbageTruck {
     fn drop(&mut self) {
         GARBAGE_TRUCK.collect_all();
