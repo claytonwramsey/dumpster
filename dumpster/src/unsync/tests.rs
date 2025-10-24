@@ -12,11 +12,9 @@ use crate::{unsync::coerce_gc, Visitor};
 
 use super::*;
 use std::{
-    cell::OnceCell,
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     collections::{hash_map::Entry, HashMap},
-    mem::take,
-    mem::{transmute, MaybeUninit},
+    mem::{take, transmute, MaybeUninit},
     sync::{
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         Mutex,
