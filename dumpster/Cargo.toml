@@ -24,6 +24,12 @@ either = { version = "1.13.0", optional = true }
 [dev-dependencies]
 fastrand = "2.0.0"
 
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7.2", features = ["checkpoint"] }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7.2"
+
 [package.metadata.playground]
 features = ["derive"]
 
@@ -31,3 +37,6 @@ features = ["derive"]
 features = ["derive"]
 targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--generate-link-to-definition"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

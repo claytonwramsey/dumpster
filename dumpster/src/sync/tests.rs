@@ -659,7 +659,7 @@ fn from_box() {
     //
     // Here we ensure that the metadata is initialized to a valid state.
     unsafe {
-        let gc_box = gc.ptr.get().read().unwrap().as_ref();
+        let gc_box = gc.ptr.get().unwrap().as_ref();
         assert_eq!(gc_box.strong.load(Ordering::SeqCst), 1);
         assert_eq!(gc_box.weak.load(Ordering::SeqCst), 0);
     }
@@ -676,7 +676,7 @@ fn from_slice() {
     //
     // Here we ensure that the metadata is initialized to a valid state.
     unsafe {
-        let gc_box = gc.ptr.get().read().unwrap().as_ref();
+        let gc_box = gc.ptr.get().unwrap().as_ref();
         assert_eq!(gc_box.strong.load(Ordering::SeqCst), 1);
         assert_eq!(gc_box.weak.load(Ordering::SeqCst), 0);
     }
@@ -736,7 +736,7 @@ fn from_vec() {
     //
     // Here we ensure that the metadata is initialized to a valid state.
     unsafe {
-        let gc_box = gc.ptr.get().read().unwrap().as_ref();
+        let gc_box = gc.ptr.get().unwrap().as_ref();
         assert_eq!(gc_box.strong.load(Ordering::SeqCst), 1);
         assert_eq!(gc_box.weak.load(Ordering::SeqCst), 0);
     }

@@ -27,14 +27,14 @@
 //! // contents of the Gc are automatically freed
 //! ```
 
+mod cell;
 mod collect;
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests;
 
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
     borrow::{Borrow, Cow},
-    cell::UnsafeCell,
     fmt::Debug,
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
@@ -44,7 +44,9 @@ use std::{
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
-use crate::{contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, Visitor};
+use crate::{
+    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, sync::cell::UCell, Trace, Visitor,
+};
 
 use self::collect::{
     collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
@@ -96,7 +98,7 @@ const MAX_STRONG_COUNT: usize = (isize::MAX) as usize;
 /// operations [`Gc::try_deref`] and [`Gc::try_clone`].
 pub struct Gc<T: Trace + Send + Sync + ?Sized + 'static> {
     /// The pointer to the allocation.
-    ptr: UnsafeCell<Nullable<GcBox<T>>>,
+    ptr: UCell<Nullable<GcBox<T>>>,
     /// The tag information of this pointer, used for mutation detection when marking.
     tag: AtomicUsize,
 }
@@ -243,7 +245,7 @@ where
     {
         notify_created_gc();
         Gc {
-            ptr: UnsafeCell::new(Nullable::new(NonNull::from(Box::leak(Box::new(GcBox {
+            ptr: UCell::new(Nullable::new(NonNull::from(Box::leak(Box::new(GcBox {
                 strong: AtomicUsize::new(1),
                 weak: AtomicUsize::new(0),
                 generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
@@ -297,7 +299,7 @@ where
     /// # dumpster::sync::collect();
     /// ```
     pub fn try_deref(gc: &Gc<T>) -> Option<&T> {
-        unsafe { (!(*gc.ptr.get()).is_null()).then(|| &**gc) }
+        unsafe { (!gc.ptr.get().is_null()).then(|| &**gc) }
     }
 
     /// Attempt to clone this `Gc`.
@@ -343,7 +345,7 @@ where
     /// # dumpster::sync::collect();
     /// ```
     pub fn try_clone(gc: &Gc<T>) -> Option<Gc<T>> {
-        unsafe { (!(*gc.ptr.get()).is_null()).then(|| gc.clone()) }
+        unsafe { (!gc.ptr.get().is_null()).then(|| gc.clone()) }
     }
 
     /// Provides a raw pointer to the data.
@@ -365,7 +367,7 @@ where
     /// ```
     pub fn as_ptr(gc: &Gc<T>) -> *const T {
         unsafe {
-            let ptr = NonNull::as_ptr((*gc.ptr.get()).unwrap());
+            let ptr = NonNull::as_ptr(gc.ptr.get().unwrap());
             addr_of_mut!((*ptr).value)
         }
     }
@@ -387,7 +389,7 @@ where
     /// assert!(!Gc::ptr_eq(&gc1, &gc3));
     /// ```
     pub fn ptr_eq(this: &Gc<T>, other: &Gc<T>) -> bool {
-        unsafe { *this.ptr.get() }.as_option() == unsafe { *other.ptr.get() }.as_option()
+        unsafe { this.ptr.get() }.as_option() == unsafe { other.ptr.get() }.as_option()
     }
 
     /// Get the number of references to the value pointed to by this `Gc`.
@@ -413,7 +415,7 @@ where
     /// drop(gc2);
     /// ```
     pub fn ref_count(&self) -> NonZeroUsize {
-        let box_ptr = unsafe { *self.ptr.get() }.expect(
+        let box_ptr = unsafe { self.ptr.get() }.expect(
             "Attempt to dereference Gc to already-collected object. \
     This means a Gc escaped from a Drop implementation, likely implying a bug in your code.",
         );
@@ -452,7 +454,7 @@ where
     /// ```
     #[inline]
     pub fn is_dead(&self) -> bool {
-        unsafe { *self.ptr.get() }.is_null()
+        unsafe { self.ptr.get() }.is_null()
     }
 
     /// Consumes the `Gc<T>`, returning the inner `GcBox<T>` pointer and tag.
@@ -460,9 +462,8 @@ where
     #[must_use]
     fn into_ptr(this: Self) -> (*const GcBox<T>, usize) {
         let this = ManuallyDrop::new(this);
-        let ptr = &raw const this.ptr;
         let tag = &raw const this.tag;
-        let ptr = unsafe { ptr.read() }.into_inner().as_ptr();
+        let ptr = unsafe { this.ptr.get().as_ptr() };
         let tag = unsafe { tag.read() }.into_inner();
         (ptr, tag)
     }
@@ -472,7 +473,7 @@ where
     #[must_use]
     unsafe fn from_ptr(ptr: *const GcBox<T>, tag: usize) -> Self {
         Self {
-            ptr: UnsafeCell::new(Nullable::from_ptr(ptr.cast_mut())),
+            ptr: UCell::new(Nullable::from_ptr(ptr.cast_mut())),
             tag: AtomicUsize::new(tag),
         }
     }
@@ -533,7 +534,7 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
         }
 
         // SAFETY: we checked above that the object is alive (not null)
-        let box_ref = unsafe { this.ptr.get().read().unwrap_unchecked().as_ref() };
+        let box_ref = unsafe { this.ptr.get().unwrap_unchecked().as_ref() };
 
         let strong = box_ref.strong.load(Ordering::Acquire);
         let weak = box_ref.weak.load(Ordering::Acquire);
@@ -547,7 +548,7 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
         // that we hold the only reference to this allocation.
         // No other `Gc`s point to this allocation because the strong count is 1, and there are no
         // loose pointers internal to the collector because the weak count is 0.
-        unsafe { &mut (*this.ptr.get_mut().as_ptr()).value }
+        unsafe { &mut (*this.ptr.get().as_ptr()).value }
     }
 }
 
@@ -639,7 +640,7 @@ where
     /// ```
     fn clone(&self) -> Gc<T> {
         let box_ref = unsafe {
-            (*self.ptr.get()).expect("attempt to clone Gc to already-deallocated object. \
+            self.ptr.get().expect("attempt to clone Gc to already-deallocated object. \
             This means a Gc was accessed during a Drop implementation, likely implying a bug in your code.").as_ref()
         };
 
@@ -668,7 +669,7 @@ where
         // mark_clean(box_ref); // causes performance drops
 
         Gc {
-            ptr: UnsafeCell::new(unsafe { *self.ptr.get() }),
+            ptr: UCell::new(unsafe { self.ptr.get() }),
             tag: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
         }
     }
@@ -682,7 +683,7 @@ where
         if currently_cleaning() {
             return;
         }
-        let Some(mut ptr) = unsafe { *self.ptr.get() }.as_option() else {
+        let Some(mut ptr) = unsafe { self.ptr.get() }.as_option() else {
             return;
         };
         let box_ref = unsafe { ptr.as_ref() };
@@ -873,7 +874,7 @@ impl<T: Trace + Send + Sync + ?Sized> Deref for Gc<T> {
     /// ```
     fn deref(&self) -> &Self::Target {
         let box_ref = unsafe {
-            (*self.ptr.get()).expect(
+            self.ptr.get().expect(
             "Attempting to dereference Gc to already-deallocated object.\
             This is caused by accessing a Gc during a Drop implementation, likely implying a bug in your code."
         ).as_ref()
@@ -944,6 +945,7 @@ impl<T: Trace + Send + Sync + ?Sized> std::fmt::Pointer for Gc<T> {
     }
 }
 
+#[cfg(not(loom))]
 #[cfg(feature = "coerce-unsized")]
 impl<T, U> std::ops::CoerceUnsized<Gc<U>> for Gc<T>
 where
@@ -1073,7 +1075,7 @@ impl<T: Trace + Send + Sync + Clone> From<&[T]> for Gc<[T]> {
             notify_created_gc();
 
             Self {
-                ptr: UnsafeCell::new(Nullable::from_ptr(ptr)),
+                ptr: UCell::new(Nullable::from_ptr(ptr)),
                 tag: AtomicUsize::new(0),
             }
         }

@@ -437,7 +437,7 @@ impl Visitor for Dfs<'_> {
         let ptr = unsafe {
             // SAFETY: This is the same as the deref implementation, but avoids
             // incrementing the generation count.
-            (*gc.ptr.get()).unwrap()
+            gc.ptr.get().unwrap()
         };
         let box_ref = unsafe {
             // SAFETY: same as above.
@@ -556,7 +556,7 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
             }
             let id = AllocationId::from(unsafe {
                 // SAFETY: This is the same as dereferencing the GC.
-                (*gc.ptr.get()).unwrap()
+                gc.ptr.get().unwrap()
             });
             if matches!(self.graph[&id].reachability, Reachability::Reachable) {
                 unsafe {
@@ -567,7 +567,7 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
                 unsafe {
                     // SAFETY: The GC is unreachable,
                     // so the GC will never be dereferenced again.
-                    gc.ptr.get().write((*gc.ptr.get()).as_null());
+                    gc.ptr.set(gc.ptr.get().as_null());
                 }
             }
         }
