@@ -133,7 +133,18 @@ thread_local! {
         contents: RefCell::new(HashMap::new()),
         n_drops: Cell::new(0),
     };
+}
 
+#[cfg(not(loom))]
+thread_local! {
+    /// Whether the currently-running thread is doing a cleanup.
+    /// This cannot be stored in `DUMPSTER` because otherwise it would cause weird use-after-drop
+    /// behavior.
+    static CLEANING: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(loom)]
+thread_local! {
     /// Whether the currently-running thread is doing a cleanup.
     /// This cannot be stored in `DUMPSTER` because otherwise it would cause weird use-after-drop
     /// behavior.

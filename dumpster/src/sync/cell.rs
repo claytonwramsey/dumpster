@@ -57,7 +57,7 @@ impl<T> UCell<T> {
         }
         #[cfg(not(loom))]
         {
-            *self.0.get() = x
+            *self.0.get() = x;
         }
     }
 }
