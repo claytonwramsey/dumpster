@@ -12,7 +12,7 @@ use std::{
     ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex,
+        Mutex, OnceLock,
     },
 };
 
@@ -845,4 +845,50 @@ fn panic_visit() {
     let _ = gc.clone();
     drop(gc);
     collect();
+}
+
+#[test]
+/// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
+fn sync_leak_by_creation_in_drop() {
+    static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    struct Foo(OnceLock<Gc<Self>>);
+    struct Bar(OnceLock<Gc<Self>>);
+
+    unsafe impl Trace for Foo {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    unsafe impl Trace for Bar {
+        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            let gcbar = Gc::new(Bar(OnceLock::new()));
+            let _ = gcbar.0.set(gcbar.clone());
+            drop(gcbar);
+            crate::sync::collect::deliver_dumpster(); // needed to prevent allocation from being lost in other thread
+        }
+    }
+
+    impl Drop for Bar {
+        fn drop(&mut self) {
+            BAR_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let foo = Gc::new(Foo(OnceLock::new()));
+    let _ = foo.0.set(foo.clone());
+    drop(foo);
+
+    collect(); // causes Bar to be created and then leaked
+    collect(); // cleans up Bar (eventually)
+
+    assert!(super::collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
+
+    assert_eq!(BAR_DROP_COUNT.load(Ordering::Relaxed), 1);
 }

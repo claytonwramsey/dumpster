@@ -231,7 +231,7 @@ where
     });
 }
 
-#[cfg(all(test, loom))]
+#[cfg(any(test, loom))]
 /// Deliver all [`TrashCan`]s from this thread's dumpster into the garbage truck.
 ///
 /// This function is available to to support testing, but currently is not part of the public API.
@@ -261,11 +261,6 @@ pub fn set_collect_condition(f: CollectCondition) {
     GARBAGE_TRUCK
         .collect_condition
         .store(f as *mut (), Ordering::Relaxed);
-}
-
-/// Determine whether this thread is currently cleaning.
-pub fn currently_cleaning() -> bool {
-    CLEANING.with(Cell::get)
 }
 
 /// Get the number of `[Gc]`s dropped since the last collection.
@@ -594,12 +589,10 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
                     // SAFETY: This is the same as dereferencing the GC.
                     id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
                 }
-            } else {
-                unsafe {
-                    // SAFETY: The GC is unreachable,
-                    // so the GC will never be dereferenced again.
-                    gc.ptr.set(gc.ptr.get().as_null());
-                }
+            }
+            unsafe {
+                // SAFETY: we have a unique reference to `gc` as we are destroying the structure.
+                gc.kill();
             }
         }
 
