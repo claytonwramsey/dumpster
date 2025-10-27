@@ -871,7 +871,8 @@ fn sync_leak_by_creation_in_drop() {
             let gcbar = Gc::new(Bar(OnceLock::new()));
             let _ = gcbar.0.set(gcbar.clone());
             drop(gcbar);
-            crate::sync::collect::deliver_dumpster(); // needed to prevent allocation from being lost in other thread
+            crate::sync::collect::deliver_dumpster(); // needed to prevent allocation from being
+                                                      // lost in other thread
         }
     }
 

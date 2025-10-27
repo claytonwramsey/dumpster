@@ -499,7 +499,8 @@ where
     ///
     /// # Safety
     ///
-    /// The caller is responsible for making sure that no other code can access this `Gc` while `kill` is running.
+    /// The caller is responsible for making sure that no other code can access this `Gc` while
+    /// `kill` is running.
     unsafe fn kill(&self) {
         self.ptr.set(self.ptr.get().as_null());
     }
