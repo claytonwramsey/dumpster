@@ -15,13 +15,21 @@ use loom::cell::UnsafeCell;
 use std::cell::UnsafeCell;
 
 #[derive(Debug)]
+/// An unsafe cell that is agnostic over using `std` or `loom` as its backing implementation.
+/// It is intended to only be used with [`Copy`] data.
 pub struct UCell<T>(UnsafeCell<T>);
 
 impl<T> UCell<T> {
+    /// Construct a `UCell` containing the value.
     pub fn new(x: T) -> Self {
         Self(UnsafeCell::new(x))
     }
 
+    /// Get the value inside the `UCell`.
+    ///
+    /// # Safety
+    ///
+    /// This function can only be called when no other code is calling [`UCell::set`].
     pub unsafe fn get(&self) -> T
     where
         T: Copy,
@@ -36,6 +44,12 @@ impl<T> UCell<T> {
         }
     }
 
+    /// Overwrite the value inside this cell.
+    ///
+    /// # Safety
+    ///
+    /// This function can only be called when no other code is calling [`UCell::set`] or
+    /// [`UCell::get`].
     pub unsafe fn set(&self, x: T) {
         #[cfg(loom)]
         {

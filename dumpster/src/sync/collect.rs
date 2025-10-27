@@ -231,7 +231,7 @@ where
     });
 }
 
-#[cfg(any(test, loom))]
+#[cfg(test)]
 /// Deliver all [`TrashCan`]s from this thread's dumpster into the garbage truck.
 ///
 /// This function is available to to support testing, but currently is not part of the public API.
@@ -300,8 +300,12 @@ impl Dumpster {
 }
 
 impl GarbageTruck {
+    /// Construct a new, empty garbage truck.
+    ///
+    /// Since the `GarbageTruck` is meant to be a single global value, this function should only be
+    /// called once in the initialization of `GARBAGE_TRUCK`.
     fn new() -> Self {
-        GarbageTruck {
+        Self {
             contents: Mutex::new(HashMap::new()),
             collecting_lock: RwLock::new(()),
             n_gcs_dropped: AtomicUsize::new(0),
