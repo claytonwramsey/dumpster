@@ -124,7 +124,6 @@ fn loom_two_cycle() {
     });
 }
 
-#[ignore = "not fixing this one yet"]
 #[test]
 /// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
 fn loom_sync_leak_by_creation_in_drop() {

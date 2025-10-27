@@ -231,7 +231,7 @@ where
     });
 }
 
-#[cfg(all(test, loom))]
+#[cfg(any(test, loom))]
 /// Deliver all [`TrashCan`]s from this thread's dumpster into the garbage truck.
 ///
 /// This function is available to to support testing, but currently is not part of the public API.
