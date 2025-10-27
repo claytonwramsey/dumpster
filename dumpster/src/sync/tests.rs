@@ -848,7 +848,6 @@ fn panic_visit() {
 }
 
 #[test]
-#[ignore = "not fixing this yet"]
 /// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
 fn sync_leak_by_creation_in_drop() {
     static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);

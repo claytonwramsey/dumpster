@@ -264,7 +264,7 @@ pub fn set_collect_condition(f: CollectCondition) {
 }
 
 /// Determine whether this thread is currently cleaning.
-pub fn currently_cleaning() -> bool {
+fn currently_cleaning() -> bool {
     CLEANING.with(Cell::get)
 }
 
@@ -594,12 +594,10 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
                     // SAFETY: This is the same as dereferencing the GC.
                     id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
                 }
-            } else {
-                unsafe {
-                    // SAFETY: The GC is unreachable,
-                    // so the GC will never be dereferenced again.
-                    gc.ptr.set(gc.ptr.get().as_null());
-                }
+            }
+            unsafe {
+                // SAFETY: we have a unique reference to `gc` as we are destroying the structure.
+                gc.kill();
             }
         }
 

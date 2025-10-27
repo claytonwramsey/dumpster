@@ -60,8 +60,8 @@ use crate::{
 };
 
 use self::collect::{
-    collect_all_await, currently_cleaning, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
-    notify_created_gc, notify_dropped_gc,
+    collect_all_await, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing, notify_created_gc,
+    notify_dropped_gc,
 };
 
 /// A soft limit on the amount of references that may be made to a `Gc`.
@@ -495,6 +495,15 @@ where
         }
     }
 
+    /// Kill this `Gc`, making it dead.
+    ///
+    /// # Safety
+    ///
+    /// The caller is responsible for making sure that no other code can access this `Gc` while `kill` is running.
+    unsafe fn kill(&self) {
+        self.ptr.set(self.ptr.get().as_null());
+    }
+
     /// Exists solely for the [`coerce_gc`] macro.
     #[inline]
     #[must_use]
@@ -697,9 +706,6 @@ where
     T: Trace + Send + Sync + ?Sized,
 {
     fn drop(&mut self) {
-        if currently_cleaning() {
-            return;
-        }
         let Some(mut ptr) = unsafe { self.ptr.get() }.as_option() else {
             return;
         };
