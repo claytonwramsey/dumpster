@@ -6,7 +6,7 @@
     file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
-//! Implementations of [`Trace`] for common data types.
+//! Implementations of [`TraceWith<V>`] for common data types.
 
 #![allow(deprecated)]
 
@@ -31,17 +31,17 @@ use std::{
     },
 };
 
-use crate::{Trace, Visitor};
+use crate::{TraceWith, Visitor};
 
-unsafe impl Trace for Infallible {
-    fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor> TraceWith<V> for Infallible {
+    fn accept(&self, _: &mut V) -> Result<(), ()> {
         match *self {}
     }
 }
 
 #[cfg(feature = "either")]
-unsafe impl<A: Trace, B: Trace> Trace for either::Either<A, B> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, A: TraceWith<V>, B: TraceWith<V>> TraceWith<V> for either::Either<A, B> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             either::Either::Left(a) => a.accept(visitor),
             either::Either::Right(b) => b.accept(visitor),
@@ -49,12 +49,12 @@ unsafe impl<A: Trace, B: Trace> Trace for either::Either<A, B> {
     }
 }
 
-/// Implement `Trace` trivially for some parametric `?Sized` type.
+/// Implement `TraceWith<V>` trivially for some parametric `?Sized` type.
 macro_rules! param_trivial_impl_unsized {
     ($x: ty) => {
-        unsafe impl<T: ?Sized> Trace for $x {
+        unsafe impl<V: Visitor, T: ?Sized> TraceWith<V> for $x {
             #[inline]
-            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+            fn accept(&self, _: &mut V) -> Result<(), ()> {
                 Ok(())
             }
         }
@@ -66,12 +66,12 @@ param_trivial_impl_unsized!(RwLockReadGuard<'static, T>);
 param_trivial_impl_unsized!(&'static T);
 param_trivial_impl_unsized!(PhantomData<T>);
 
-/// Implement `Trace` trivially for some parametric `Sized` type.
+/// Implement `TraceWith<V>` trivially for some parametric `Sized` type.
 macro_rules! param_trivial_impl_sized {
     ($x: ty) => {
-        unsafe impl<T> Trace for $x {
+        unsafe impl<V: Visitor, T> TraceWith<V> for $x {
             #[inline]
-            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+            fn accept(&self, _: &mut V) -> Result<(), ()> {
                 Ok(())
             }
         }
@@ -81,23 +81,23 @@ macro_rules! param_trivial_impl_sized {
 param_trivial_impl_sized!(std::future::Pending<T>);
 param_trivial_impl_sized!(std::mem::Discriminant<T>);
 
-unsafe impl<T: Trace + ?Sized> Trace for Box<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for Box<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         (**self).accept(visitor)
     }
 }
 
-unsafe impl<T> Trace for BuildHasherDefault<T> {
-    fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T> TraceWith<V> for BuildHasherDefault<T> {
+    fn accept(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
     }
 }
 
-unsafe impl<T: ToOwned> Trace for Cow<'_, T>
+unsafe impl<V: Visitor, T: ToOwned> TraceWith<V> for Cow<'_, T>
 where
-    T::Owned: Trace,
+    T::Owned: TraceWith<V>,
 {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         if let Cow::Owned(ref v) = self {
             v.accept(visitor)?;
         }
@@ -105,16 +105,16 @@ where
     }
 }
 
-unsafe impl<T: Trace + ?Sized> Trace for RefCell<T> {
+unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for RefCell<T> {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_borrow().map_err(|_| ())?.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace + ?Sized> Trace for Mutex<T> {
+unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for Mutex<T> {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_lock()
             .map_err(|e| match e {
                 TryLockError::Poisoned(_) => panic!(),
@@ -125,9 +125,9 @@ unsafe impl<T: Trace + ?Sized> Trace for Mutex<T> {
     }
 }
 
-unsafe impl<T: Trace + ?Sized> Trace for RwLock<T> {
+unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for RwLock<T> {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_read()
             .map_err(|e| match e {
                 TryLockError::Poisoned(_) => panic!(),
@@ -138,9 +138,9 @@ unsafe impl<T: Trace + ?Sized> Trace for RwLock<T> {
     }
 }
 
-unsafe impl<T: Trace> Trace for Option<T> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for Option<T> {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             Some(x) => x.accept(visitor),
             None => Ok(()),
@@ -148,9 +148,9 @@ unsafe impl<T: Trace> Trace for Option<T> {
     }
 }
 
-unsafe impl<T: Trace, E: Trace> Trace for Result<T, E> {
+unsafe impl<V: Visitor, T: TraceWith<V>, E: TraceWith<V>> TraceWith<V> for Result<T, E> {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             Ok(t) => t.accept(visitor),
             Err(e) => e.accept(visitor),
@@ -158,120 +158,124 @@ unsafe impl<T: Trace, E: Trace> Trace for Result<T, E> {
     }
 }
 
-unsafe impl<T: Copy + Trace> Trace for Cell<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: Copy + TraceWith<V>> TraceWith<V> for Cell<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for OnceCell<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for OnceCell<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().map_or(Ok(()), |x| x.accept(visitor))
     }
 }
 
-unsafe impl<T: Trace> Trace for OnceLock<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for OnceLock<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().map_or(Ok(()), |x| x.accept(visitor))
     }
 }
 
-unsafe impl<T: Trace> Trace for std::cmp::Reverse<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::cmp::Reverse<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.0.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace + ?Sized> Trace for std::io::BufReader<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for std::io::BufReader<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get_ref().accept(visitor)
     }
 }
 
-unsafe impl<T: Trace + std::io::Write + ?Sized> Trace for std::io::BufWriter<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V> + std::io::Write + ?Sized> TraceWith<V>
+    for std::io::BufWriter<T>
+{
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get_ref().accept(visitor)
     }
 }
 
-unsafe impl<T: Trace, U: Trace> Trace for std::io::Chain<T, U> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>, U: TraceWith<V>> TraceWith<V> for std::io::Chain<T, U> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         let (t, u) = self.get_ref();
         t.accept(visitor)?;
         u.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::io::Cursor<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::io::Cursor<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get_ref().accept(visitor)
     }
 }
 
-unsafe impl<T: Trace + std::io::Write + ?Sized> Trace for std::io::LineWriter<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V> + std::io::Write + ?Sized> TraceWith<V>
+    for std::io::LineWriter<T>
+{
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get_ref().accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::io::Take<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::io::Take<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get_ref().accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::mem::ManuallyDrop<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::mem::ManuallyDrop<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         (**self).accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::num::Saturating<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::num::Saturating<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.0.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::num::Wrapping<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::num::Wrapping<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.0.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::ops::Range<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::Range<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.start.accept(visitor)?;
         self.end.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::ops::RangeFrom<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::RangeFrom<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.start.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::ops::RangeInclusive<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::RangeInclusive<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.start().accept(visitor)?;
         self.end().accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::ops::RangeTo<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::RangeTo<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.end.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::ops::RangeToInclusive<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::RangeToInclusive<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.end.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::ops::Bound<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::Bound<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             std::ops::Bound::Included(x) | std::ops::Bound::Excluded(x) => x.accept(visitor),
             std::ops::Bound::Unbounded => Ok(()),
@@ -279,8 +283,10 @@ unsafe impl<T: Trace> Trace for std::ops::Bound<T> {
     }
 }
 
-unsafe impl<B: Trace, C: Trace> Trace for std::ops::ControlFlow<B, C> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, B: TraceWith<V>, C: TraceWith<V>> TraceWith<V>
+    for std::ops::ControlFlow<B, C>
+{
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             std::ops::ControlFlow::Continue(c) => c.accept(visitor),
             std::ops::ControlFlow::Break(b) => b.accept(visitor),
@@ -288,14 +294,14 @@ unsafe impl<B: Trace, C: Trace> Trace for std::ops::ControlFlow<B, C> {
     }
 }
 
-unsafe impl<T: Trace> Trace for std::panic::AssertUnwindSafe<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::panic::AssertUnwindSafe<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.0.accept(visitor)
     }
 }
 
-unsafe impl<T: Trace> Trace for std::task::Poll<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::task::Poll<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             std::task::Poll::Ready(r) => r.accept(visitor),
             std::task::Poll::Pending => Ok(()),
@@ -303,14 +309,14 @@ unsafe impl<T: Trace> Trace for std::task::Poll<T> {
     }
 }
 
-/// Implement [`Trace`] for a collection data structure which has some method `iter()` that
+/// Implement [`TraceWith<V>`] for a collection data structure which has some method `iter()` that
 /// iterates over all elements of the data structure and `iter_mut()` which does the same over
 /// mutable references.
 macro_rules! Trace_collection_impl {
     ($x: ty) => {
-        unsafe impl<T: Trace> Trace for $x {
+        unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for $x {
             #[inline]
-            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+            fn accept(&self, visitor: &mut V) -> Result<(), ()> {
                 for elem in self {
                     elem.accept(visitor)?;
                 }
@@ -327,9 +333,9 @@ Trace_collection_impl!([T]);
 Trace_collection_impl!(BinaryHeap<T>);
 Trace_collection_impl!(BTreeSet<T>);
 
-unsafe impl<T: Trace> Trace for std::vec::IntoIter<T> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::vec::IntoIter<T> {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         for elem in self.as_slice() {
             elem.accept(visitor)?;
         }
@@ -337,8 +343,10 @@ unsafe impl<T: Trace> Trace for std::vec::IntoIter<T> {
     }
 }
 
-unsafe impl<K: Trace, V: Trace, S: BuildHasher + Trace> Trace for HashMap<K, V, S> {
-    fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
+unsafe impl<Z: Visitor, K: TraceWith<Z>, V: TraceWith<Z>, S: BuildHasher + TraceWith<Z>>
+    TraceWith<Z> for HashMap<K, V, S>
+{
+    fn accept(&self, visitor: &mut Z) -> Result<(), ()> {
         for (k, v) in self {
             k.accept(visitor)?;
             v.accept(visitor)?;
@@ -347,8 +355,10 @@ unsafe impl<K: Trace, V: Trace, S: BuildHasher + Trace> Trace for HashMap<K, V, 
     }
 }
 
-unsafe impl<T: Trace, S: BuildHasher + Trace> Trace for HashSet<T, S> {
-    fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
+unsafe impl<Z: Visitor, T: TraceWith<Z>, S: BuildHasher + TraceWith<Z>> TraceWith<Z>
+    for HashSet<T, S>
+{
+    fn accept(&self, visitor: &mut Z) -> Result<(), ()> {
         for elem in self {
             elem.accept(visitor)?;
         }
@@ -356,8 +366,8 @@ unsafe impl<T: Trace, S: BuildHasher + Trace> Trace for HashSet<T, S> {
     }
 }
 
-unsafe impl<K: Trace, V: Trace> Trace for BTreeMap<K, V> {
-    fn accept<Z: Visitor>(&self, visitor: &mut Z) -> Result<(), ()> {
+unsafe impl<Z: Visitor, K: TraceWith<Z>, V: TraceWith<Z>> TraceWith<Z> for BTreeMap<K, V> {
+    fn accept(&self, visitor: &mut Z) -> Result<(), ()> {
         for (k, v) in self {
             k.accept(visitor)?;
             v.accept(visitor)?;
@@ -366,9 +376,9 @@ unsafe impl<K: Trace, V: Trace> Trace for BTreeMap<K, V> {
     }
 }
 
-unsafe impl<T: Trace, const N: usize> Trace for [T; N] {
+unsafe impl<V: Visitor, T: TraceWith<V>, const N: usize> TraceWith<V> for [T; N] {
     #[inline]
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         for elem in self {
             elem.accept(visitor)?;
         }
@@ -376,13 +386,13 @@ unsafe impl<T: Trace, const N: usize> Trace for [T; N] {
     }
 }
 
-/// Implement [`Trace`] for a trivially-collected type which contains no `Gc`s in its
+/// Implement [`TraceWith<V>`] for a trivially-collected type which contains no `Gc`s in its
 /// fields.
 macro_rules! Trace_trivial_impl {
     ($x: ty) => {
-        unsafe impl Trace for $x {
+        unsafe impl<V: Visitor> TraceWith<V> for $x {
             #[inline]
-            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+            fn accept(&self, _: &mut V) -> Result<(), ()> {
                 Ok(())
             }
         }
@@ -558,12 +568,12 @@ Trace_trivial_impl!(std::time::SystemTime);
 Trace_trivial_impl!(std::time::SystemTimeError);
 Trace_trivial_impl!(std::time::TryFromFloatSecsError);
 
-/// Implement [`Trace`] for a tuple.
+/// Implement [`TraceWith<V>`] for a tuple.
 macro_rules! Trace_tuple {
     () => {}; // This case is handled above by the trivial case
     ($($args:ident),*) => {
-        unsafe impl<$($args: Trace),*> Trace for ($($args,)*) {
-            fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        unsafe impl<V: Visitor, $($args: TraceWith<V>),*> TraceWith<V> for ($($args,)*) {
+            fn accept(&self, visitor: &mut V) -> Result<(), ()> {
                 #[expect(clippy::allow_attributes)]
                 #[allow(non_snake_case)]
                 let &($(ref $args,)*) = self;
@@ -586,16 +596,16 @@ Trace_tuple!(A, B, C, D, E, F, G, H);
 Trace_tuple!(A, B, C, D, E, F, G, H, I);
 Trace_tuple!(A, B, C, D, E, F, G, H, I, J);
 
-/// Implement `Trace` for one function type.
+/// Implement `TraceWith<V>` for one function type.
 macro_rules! Trace_fn {
     ($ty:ty $(,$args:ident)*) => {
-        unsafe impl<Ret $(,$args)*> Trace for $ty {
-            fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> { Ok(()) }
+        unsafe impl<V: Visitor, Ret $(,$args)*> TraceWith<V> for $ty {
+            fn accept(&self, _: &mut V) -> Result<(), ()> { Ok(()) }
         }
     }
 }
 
-/// Implement `Trace` for all functions with a given set of args.
+/// Implement `TraceWith<V>` for all functions with a given set of args.
 macro_rules! Trace_fn_group {
     () => {
         Trace_fn!(extern "Rust" fn () -> Ret);

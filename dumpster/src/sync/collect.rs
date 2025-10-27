@@ -457,7 +457,7 @@ unsafe fn dfs<T: Trace + Send + Sync + ?Sized>(
 
 #[derive(Debug)]
 /// The visitor structure used for building the found-reference-graph of allocations.
-struct Dfs<'a> {
+pub(super) struct Dfs<'a> {
     /// The reference graph.
     /// Each allocation is assigned a node.
     ref_graph: &'a mut HashMap<AllocationId, AllocationInfo>,
@@ -571,6 +571,44 @@ fn mark(root: AllocationId, graph: &mut HashMap<AllocationId, AllocationInfo>) {
     }
 }
 
+/// A visitor for decrementing the reference count of pointees.
+pub(super) struct PrepareForDestruction<'a> {
+    /// The reference graph.
+    /// Must have been populated with reachability already.
+    graph: &'a HashMap<AllocationId, AllocationInfo>,
+}
+
+impl Visitor for PrepareForDestruction<'_> {
+    fn visit_sync<T>(&mut self, gc: &crate::sync::Gc<T>)
+    where
+        T: Trace + Send + Sync + ?Sized,
+    {
+        let id = AllocationId::from(unsafe {
+            // SAFETY: This is the same as dereferencing the GC.
+            gc.ptr.get().unwrap()
+        });
+        if matches!(self.graph[&id].reachability, Reachability::Reachable) {
+            unsafe {
+                // SAFETY: This is the same as dereferencing the GC.
+                id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
+            }
+        } else {
+            unsafe {
+                // SAFETY: The GC is unreachable,
+                // so the GC will never be dereferenced again.
+                gc.kill();
+            }
+        }
+    }
+
+    fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
+    where
+        T: Trace + ?Sized,
+    {
+        unreachable!("no unsync members of sync Gc possible!");
+    }
+}
+
 /// Destroy an allocation, obliterating its GCs, dropping it, and deallocating it.
 ///
 /// # Safety
@@ -580,45 +618,6 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
     ptr: Erased,
     graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
-    /// A visitor for decrementing the reference count of pointees.
-    struct PrepareForDestruction<'a> {
-        /// The reference graph.
-        /// Must have been populated with reachability already.
-        graph: &'a HashMap<AllocationId, AllocationInfo>,
-    }
-
-    impl Visitor for PrepareForDestruction<'_> {
-        fn visit_sync<T>(&mut self, gc: &crate::sync::Gc<T>)
-        where
-            T: Trace + Send + Sync + ?Sized,
-        {
-            if gc.is_dead() {
-                return;
-            }
-            let id = AllocationId::from(unsafe {
-                // SAFETY: This is the same as dereferencing the GC.
-                gc.ptr.get().unwrap()
-            });
-            if matches!(self.graph[&id].reachability, Reachability::Reachable) {
-                unsafe {
-                    // SAFETY: This is the same as dereferencing the GC.
-                    id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
-                }
-            }
-            unsafe {
-                // SAFETY: we have a unique reference to `gc` as we are destroying the structure.
-                gc.kill();
-            }
-        }
-
-        fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
-        where
-            T: Trace + ?Sized,
-        {
-            unreachable!("no unsync members of sync Gc possible!");
-        }
-    }
-
     let specified = ptr.specify::<GcBox<T>>().as_mut();
     specified
         .value

@@ -23,13 +23,13 @@ use loom::{
     },
 };
 
-use crate::{Trace, Visitor};
+use crate::{TraceWith, Visitor};
 
 /// Simple wrapper mutex type.
 pub struct Mutex<T: ?Sized>(MutexImpl<T>);
 
-unsafe impl<T: Trace + ?Sized> Trace for Mutex<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for Mutex<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.0
             .try_lock()
             .map_err(|e| match e {
@@ -122,8 +122,8 @@ pub struct OnceLock<T> {
 unsafe impl<T: Sync + Send> Sync for OnceLock<T> {}
 unsafe impl<T: Send> Send for OnceLock<T> {}
 
-unsafe impl<T: Trace> Trace for OnceLock<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for OnceLock<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.with(|value| value.accept(visitor)).unwrap_or(Ok(()))
     }
 }

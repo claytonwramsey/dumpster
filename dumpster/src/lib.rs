@@ -201,18 +201,29 @@ mod ptr;
 pub mod sync;
 pub mod unsync;
 
+/// Contains the sealed trait for [`Trace`].
+mod trace {
+    use crate::{sync::TraceSync, unsync::TraceUnsync, ContainsGcs, TraceWith};
+
+    /// The sealed trait for [`Trace`](crate::Trace),
+    /// hiding away the implementation details and making it
+    /// impossible to manually implement `Trace`.
+    #[expect(clippy::missing_safety_doc)]
+    #[expect(private_bounds)]
+    pub unsafe trait TraceWithV: TraceWith<ContainsGcs> + TraceSync + TraceUnsync {}
+
+    unsafe impl<T> TraceWithV for T where T: ?Sized + TraceWith<ContainsGcs> + TraceSync + TraceUnsync {}
+}
+
 /// The trait that any garbage-collected data must implement.
 ///
 /// This trait should usually be implemented by using `#[derive(Trace)]`, using the provided
 /// macro.
 /// Only data structures using raw pointers or other magic should manually implement `Trace`.
 ///
-/// # Safety
-///
-/// If the implementation of this trait is incorrect, this will result in undefined behavior,
-/// typically double-frees or use-after-frees.
-/// This includes [`Trace::accept`], even though it is a safe function, since its correctness
-/// is required for safety.
+/// To manually implement `Trace` you need to implement [`TraceWith<V>`].
+/// Any type that implements `TraceWith` for all <code>V: [Visitor]</code>
+/// automatically implements `Trace`.
 ///
 /// # Examples
 ///
@@ -221,12 +232,12 @@ pub mod unsync;
 /// Accepting a visitor is simply a no-op.
 ///
 /// ```
-/// use dumpster::{Trace, Visitor};
+/// use dumpster::{TraceWith, Visitor};
 ///
 /// struct Foo(u8);
 ///
-/// unsafe impl Trace for Foo {
-///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+/// unsafe impl<V: Visitor> TraceWith<V> for Foo {
+///     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
 ///         Ok(())
 ///     }
 /// }
@@ -236,12 +247,12 @@ pub mod unsync;
 /// fields in `accept`.
 ///
 /// ```
-/// use dumpster::{unsync::Gc, Trace, Visitor};
+/// use dumpster::{unsync::Gc, TraceWith, Visitor};
 ///
 /// struct Bar(Gc<Bar>);
 ///
-/// unsafe impl Trace for Bar {
-///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+/// unsafe impl<V: Visitor> TraceWith<V> for Bar {
+///     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
 ///         self.0.accept(visitor)
 ///     }
 /// }
@@ -251,22 +262,50 @@ pub mod unsync;
 /// delegate to both fields in a consistent order:
 ///
 /// ```
-/// use dumpster::{unsync::Gc, Trace, Visitor};
+/// use dumpster::{unsync::Gc, TraceWith, Visitor};
 ///
 /// struct Baz {
 ///     a: Gc<Baz>,
 ///     b: Gc<Baz>,
 /// }
 ///
-/// unsafe impl Trace for Baz {
-///     fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+/// unsafe impl<V: Visitor> TraceWith<V> for Baz {
+///     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
 ///         self.a.accept(visitor)?;
 ///         self.b.accept(visitor)?;
 ///         Ok(())
 ///     }
 /// }
 /// ```
-pub unsafe trait Trace {
+///
+/// `Trace` is dyn-compatible, so you can use it as a subtrait
+/// to allocate your own trait object.
+///
+/// ```
+/// use dumpster::{
+///     unsync::{coerce_gc, Gc},
+///     Trace,
+/// };
+///
+/// trait MyTrait: Trace {}
+/// impl<T: Trace> MyTrait for T {}
+///
+/// let gc: Gc<i32> = Gc::new(5);
+/// let gc: Gc<dyn MyTrait> = coerce_gc!(gc);
+/// ```
+pub trait Trace: trace::TraceWithV {}
+
+impl<T> Trace for T where T: trace::TraceWithV + ?Sized {}
+
+/// The underlying tracing implementation powering the [`Trace`] trait.
+///
+/// # Safety
+///
+/// If the implementation of this trait is incorrect, this will result in undefined behavior,
+/// typically double-frees or use-after-frees.
+/// This includes [`TraceWith::accept`], even though it is a safe function, since its correctness
+/// is required for safety.
+pub unsafe trait TraceWith<V: Visitor> {
     /// Accept a visitor to this garbage-collected value.
     ///
     /// Implementors of this function need only delegate to all fields owned by this value which
@@ -283,7 +322,7 @@ pub unsafe trait Trace {
     /// after delegating acceptance to it, or if this value's data is inaccessible (such as
     /// attempting to borrow from a [`RefCell`](std::cell::RefCell) which has already been
     /// mutably borrowed).
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()>;
+    fn accept(&self, visitor: &mut V) -> Result<(), ()>;
 }
 
 /// A visitor for a garbage collected value.
@@ -348,29 +387,29 @@ pub use dumpster_derive::Trace;
 /// - `Ok(false)`: The data structure contains no garbage-collected pointers.
 /// - `Err(())`: The data structure was accessed while we checked it for garbage-collected pointers.
 fn contains_gcs<T: Trace + ?Sized>(x: &T) -> Result<bool, ()> {
-    /// A visitor structure used for determining whether some garbage-collected pointer contains a
-    /// `Gc` in its pointed-to value.
-    struct ContainsGcs(bool);
-
-    impl Visitor for ContainsGcs {
-        fn visit_sync<T>(&mut self, _: &sync::Gc<T>)
-        where
-            T: Trace + Send + Sync + ?Sized,
-        {
-            self.0 = true;
-        }
-
-        fn visit_unsync<T>(&mut self, _: &unsync::Gc<T>)
-        where
-            T: Trace + ?Sized,
-        {
-            self.0 = true;
-        }
-    }
-
     let mut visit = ContainsGcs(false);
     x.accept(&mut visit)?;
     Ok(visit.0)
+}
+
+/// A visitor structure used for determining whether some garbage-collected pointer contains a
+/// `Gc` in its pointed-to value.
+struct ContainsGcs(bool);
+
+impl Visitor for ContainsGcs {
+    fn visit_sync<T>(&mut self, _: &sync::Gc<T>)
+    where
+        T: Trace + Send + Sync + ?Sized,
+    {
+        self.0 = true;
+    }
+
+    fn visit_unsync<T>(&mut self, _: &unsync::Gc<T>)
+    where
+        T: Trace + ?Sized,
+    {
+        self.0 = true;
+    }
 }
 
 /// Panics with a message that explains that the gc object has already been collected.
