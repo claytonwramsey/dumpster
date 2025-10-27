@@ -25,8 +25,8 @@ impl Drop for DropCount<'_> {
     }
 }
 
-unsafe impl Trace for DropCount<'_> {
-    fn accept<V: crate::Visitor>(&self, _: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor> TraceWith<V> for DropCount<'_> {
+    fn accept(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
     }
 }
@@ -37,8 +37,8 @@ struct MultiRef {
     count: DropCount<'static>,
 }
 
-unsafe impl Trace for MultiRef {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor> TraceWith<V> for MultiRef {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
     }
 }
@@ -68,8 +68,8 @@ fn loom_self_referential() {
         static ref DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
     }
 
-    unsafe impl Trace for Foo {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
@@ -135,14 +135,14 @@ fn loom_sync_leak_by_creation_in_drop() {
     struct Foo(OnceLock<Gc<Self>>, usize);
     struct Bar(OnceLock<Gc<Self>>, usize);
 
-    unsafe impl Trace for Foo {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
 
-    unsafe impl Trace for Bar {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Bar {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }

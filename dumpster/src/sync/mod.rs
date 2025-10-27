@@ -56,7 +56,13 @@ use loom::{
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use crate::{
-    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, sync::cell::UCell, Trace, Visitor,
+    contains_gcs, panic_deref_of_collected_object,
+    ptr::Nullable,
+    sync::{
+        cell::UCell,
+        collect::{Dfs, PrepareForDestruction},
+    },
+    Trace, TraceWith, Visitor,
 };
 
 use self::collect::{
@@ -71,6 +77,18 @@ use self::collect::{
 ///
 /// See comment in `Gc::clone`.
 const MAX_STRONG_COUNT: usize = (isize::MAX) as usize;
+
+/// Allows tracing with all unsync visitors.
+#[expect(private_bounds)]
+pub(crate) trait TraceSync:
+    for<'a> TraceWith<Dfs<'a>> + for<'a> TraceWith<PrepareForDestruction<'a>>
+{
+}
+
+impl<T> TraceSync for T where
+    T: ?Sized + for<'a> TraceWith<Dfs<'a>> + for<'a> TraceWith<PrepareForDestruction<'a>>
+{
+}
 
 /// A thread-safe garbage-collected pointer.
 ///
@@ -843,8 +861,8 @@ impl<T: Trace + Send + Sync> Gc<[T]> {
     }
 }
 
-unsafe impl<T: Trace + Send + Sync + ?Sized> Trace for Gc<T> {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor, T: Trace + Send + Sync + ?Sized> TraceWith<V> for Gc<T> {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         visitor.visit_sync(self);
         Ok(())
     }

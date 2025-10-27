@@ -29,8 +29,8 @@ impl Drop for DropCount {
     }
 }
 
-unsafe impl Trace for DropCount {
-    fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor> TraceWith<V> for DropCount {
+    fn accept(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
     }
 }
@@ -47,8 +47,8 @@ fn simple() {
         }
     }
 
-    unsafe impl Trace for Foo {
-        fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, _: &mut V) -> Result<(), ()> {
             Ok(())
         }
     }
@@ -73,8 +73,8 @@ struct MultiRef {
     drop_count: &'static AtomicUsize,
 }
 
-unsafe impl Trace for MultiRef {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor> TraceWith<V> for MultiRef {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
     }
 }
@@ -90,9 +90,9 @@ fn self_referential() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
-    unsafe impl Trace for Foo {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
         #[inline]
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
@@ -117,9 +117,9 @@ fn cyclic() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
 
-    unsafe impl Trace for Foo {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
         #[inline]
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
@@ -304,8 +304,8 @@ fn escape_dead_pointer() {
         }
     }
 
-    unsafe impl Trace for Escape {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Escape {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.ptr.accept(visitor)
         }
     }
@@ -366,8 +366,8 @@ fn from_slice_panic() {
         }
     }
 
-    unsafe impl Trace for MayPanicOnClone {
-        fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for MayPanicOnClone {
+        fn accept(&self, _: &mut V) -> Result<(), ()> {
             Ok(())
         }
     }
@@ -458,8 +458,8 @@ fn make_mut_of_object_in_dumpster() {
         something: Gc<i32>,
     }
 
-    unsafe impl Trace for Foo {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.something.accept(visitor)
         }
     }
@@ -494,8 +494,8 @@ fn panic_visit() {
 
     /// We technically can make it part of the contract for `Trace` to reject panicking impls,
     /// but it is good form to accept these even though they are malformed.
-    unsafe impl Trace for PanicVisit {
-        fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for PanicVisit {
+        fn accept(&self, _: &mut V) -> Result<(), ()> {
             panic!("panic on visit");
         }
     }
@@ -522,8 +522,8 @@ fn new_cyclic_one() {
     #[expect(unused)]
     struct Cycle(Gc<Self>, DropCount);
 
-    unsafe impl Trace for Cycle {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Cycle {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
@@ -549,8 +549,8 @@ fn dead_inside_alive() {
         static ESCAPE: Cell<Option<Gc<Cycle>>> = const { Cell::new(None) };
     }
 
-    unsafe impl Trace for Cycle {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Cycle {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
@@ -582,14 +582,14 @@ fn leak_by_creation_in_drop() {
     struct Foo(OnceCell<Gc<Self>>);
     struct Bar(OnceCell<Gc<Self>>);
 
-    unsafe impl Trace for Foo {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
 
-    unsafe impl Trace for Bar {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Bar {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
@@ -647,8 +647,8 @@ fn unsync_fuzz() {
         }
     }
 
-    unsafe impl Trace for Alloc {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Alloc {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.refs.accept(visitor)
         }
     }
@@ -739,4 +739,14 @@ fn unsync_fuzz() {
         }
     }
     assert_eq!(n_missing, 0);
+}
+
+#[test]
+fn custom_trait_object() {
+    trait MyTrait: Trace + Send + Sync {}
+    impl<T: Trace + Send + Sync> MyTrait for T {}
+
+    let gc = Gc::new(5i32);
+    let gc: Gc<dyn MyTrait> = coerce_gc!(gc);
+    _ = gc;
 }

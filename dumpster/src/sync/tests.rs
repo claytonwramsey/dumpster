@@ -28,8 +28,8 @@ impl Drop for DropCount<'_> {
     }
 }
 
-unsafe impl Trace for DropCount<'_> {
-    fn accept<V: crate::Visitor>(&self, _: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor> TraceWith<V> for DropCount<'_> {
+    fn accept(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
     }
 }
@@ -40,8 +40,8 @@ struct MultiRef {
     count: DropCount<'static>,
 }
 
-unsafe impl Trace for MultiRef {
-    fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+unsafe impl<V: Visitor> TraceWith<V> for MultiRef {
+    fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
     }
 }
@@ -76,8 +76,8 @@ fn self_referential() {
     struct Foo(Mutex<Option<Gc<Foo>>>);
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-    unsafe impl Trace for Foo {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
@@ -315,15 +315,15 @@ fn malicious() {
 
     unsafe impl Send for X {}
 
-    unsafe impl Trace for A {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for A {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.x.accept(visitor)?;
             self.y.accept(visitor)
         }
     }
 
-    unsafe impl Trace for X {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for X {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.a.accept(visitor)?;
 
             if EVIL.fetch_add(1, Ordering::Relaxed) == 1 {
@@ -337,8 +337,8 @@ fn malicious() {
         }
     }
 
-    unsafe impl Trace for Y {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Y {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.a.accept(visitor)
         }
     }
@@ -401,8 +401,8 @@ fn fuzz() {
         }
     }
 
-    unsafe impl Trace for Alloc {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Alloc {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.refs.accept(visitor)
         }
     }
@@ -511,14 +511,14 @@ fn root_canal() {
         a3: Mutex<Option<Gc<A>>>,
     }
 
-    unsafe impl Trace for A {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for A {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.b.accept(visitor)
         }
     }
 
-    unsafe impl Trace for B {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for B {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             let n_prior_visits = B_VISIT_COUNT.fetch_add(1, Ordering::Relaxed);
             self.a0.accept(visitor)?;
             self.a1.accept(visitor)?;
@@ -633,8 +633,8 @@ fn escape_dead_pointer() {
         }
     }
 
-    unsafe impl Trace for Escape {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Escape {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.ptr.accept(visitor)
         }
     }
@@ -703,8 +703,8 @@ fn from_slice_panic() {
         }
     }
 
-    unsafe impl Trace for MayPanicOnClone {
-        fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for MayPanicOnClone {
+        fn accept(&self, _: &mut V) -> Result<(), ()> {
             Ok(())
         }
     }
@@ -799,8 +799,8 @@ fn make_mut_of_object_in_dumpster() {
         something: Gc<i32>,
     }
 
-    unsafe impl Trace for Foo {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.something.accept(visitor)
         }
     }
@@ -835,8 +835,8 @@ fn panic_visit() {
 
     /// We technically can make it part of the contract for `Trace` to reject panicking impls,
     /// but it is good form to accept these even though they are malformed.
-    unsafe impl Trace for PanicVisit {
-        fn accept<V: Visitor>(&self, _: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for PanicVisit {
+        fn accept(&self, _: &mut V) -> Result<(), ()> {
             panic!("panic on visit");
         }
     }
@@ -854,14 +854,14 @@ fn sync_leak_by_creation_in_drop() {
     struct Foo(OnceLock<Gc<Self>>);
     struct Bar(OnceLock<Gc<Self>>);
 
-    unsafe impl Trace for Foo {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
 
-    unsafe impl Trace for Bar {
-        fn accept<V: Visitor>(&self, visitor: &mut V) -> Result<(), ()> {
+    unsafe impl<V: Visitor> TraceWith<V> for Bar {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
         }
     }
@@ -892,4 +892,14 @@ fn sync_leak_by_creation_in_drop() {
     assert!(super::collect::DUMPSTER.with(|d| d.contents.borrow().is_empty()));
 
     assert_eq!(BAR_DROP_COUNT.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn custom_trait_object() {
+    trait MyTrait: Trace + Send + Sync {}
+    impl<T: Trace + Send + Sync> MyTrait for T {}
+
+    let gc = Gc::new(5i32);
+    let gc: Gc<dyn MyTrait> = coerce_gc!(gc);
+    _ = gc;
 }

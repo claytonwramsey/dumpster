@@ -82,26 +82,29 @@ struct Cleanup {
     ptr: Erased,
 }
 
-impl Cleanup {
-    /// Construct a new cleanup for an allocation.
-    fn new<T: Trace + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
-        Cleanup {
-            dfs_fn: apply_visitor::<T, Dfs>,
-            mark_fn: apply_visitor::<T, Mark>,
-            drop_fn: drop_assist::<T>,
-            ptr: Erased::new(box_ptr),
-        }
-    }
-}
-
-/// Apply a visitor to some erased pointer.
+/// Creates a function that applies a visitor to some erased pointer.
 ///
 /// # Safety
 ///
 /// `T` must be the same type that `ptr` was created with via [`Erased::new`].
-unsafe fn apply_visitor<T: Trace + ?Sized, V: Visitor>(ptr: Erased, visitor: &mut V) {
-    let specified: NonNull<GcBox<T>> = ptr.specify();
-    let _ = specified.as_ref().value.accept(visitor);
+macro_rules! apply_visitor {
+    () => {
+        |ptr, visitor| unsafe {
+            _ = ptr.specify::<GcBox<T>>().as_ref().value.accept(visitor);
+        }
+    };
+}
+
+impl Cleanup {
+    /// Construct a new cleanup for an allocation.
+    fn new<T: Trace + ?Sized>(box_ptr: NonNull<GcBox<T>>) -> Cleanup {
+        Cleanup {
+            dfs_fn: apply_visitor!(),
+            mark_fn: apply_visitor!(),
+            drop_fn: drop_assist::<T>,
+            ptr: Erased::new(box_ptr),
+        }
+    }
 }
 
 impl Dumpster {
@@ -224,7 +227,7 @@ impl Drop for Dumpster {
 }
 
 /// The data required to construct the graph of reachable allocations.
-struct Dfs {
+pub(super) struct Dfs {
     /// The set of allocations which have already been visited.
     visited: HashSet<AllocationId>,
     /// A map from allocation identifiers to information about their reachability.
@@ -269,7 +272,7 @@ impl Visitor for Dfs {
                 v.insert(Reachability {
                     n_unaccounted: unsafe { next_id.0.as_ref().get().get() - 1 },
                     ptr: Erased::new(ptr),
-                    mark_fn: apply_visitor::<T, Mark>,
+                    mark_fn: apply_visitor!(),
                 });
             }
         }
@@ -280,7 +283,7 @@ impl Visitor for Dfs {
 }
 
 /// A mark traversal, which marks allocations as reachable.
-struct Mark {
+pub(super) struct Mark {
     /// The set of allocations which have been marked as reachable.
     visited: HashSet<AllocationId>,
 }
@@ -309,7 +312,7 @@ impl Visitor for Mark {
 }
 
 /// A visitor for dropping allocations.
-struct DropAlloc<'a> {
+pub(super) struct DropAlloc<'a> {
     /// The set of unreachable allocations we've already visited.
     visited: HashSet<AllocationId>,
     /// The set of unreachable allocations.
