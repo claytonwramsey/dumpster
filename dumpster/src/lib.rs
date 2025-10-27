@@ -114,7 +114,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = "1.1.0"
+//! dumpster = "1.2.0"
 //! ```
 //!
 //! # Optional features
@@ -166,11 +166,25 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 //! dumpster = { version = "1.1.0", features = ["coerce-unsized"]}
 //! ```
 //!
+//! ## Loom support
+//!
+//! `dumpster` has experimental support for permutation testing under [`loom`](https://github.com/tokio-rs/loom).
+//! It is expected to be unstable and buggy.
+//! To compile `dumpster` using `loom`, add `--cfg loom` to `RUSTFLAGS` when compiling, for example:
+//!
+//! ```sh
+//! RUSTFLAGS='--cfg loom' cargo test
+//! ```
+//!
 //! # License
 //!
 //! `dumpster` is licensed under the Mozilla Public License, version 2.0.
 //! For more details, refer to
 //! [LICENSE.md](https://github.com/claytonwramsey/dumpster/blob/master/LICENSE.md).
+//!
+//! This project includes portions of code derived from the Rust standard library,
+//! which is dual-licensed under the MIT and Apache 2.0 licenses.
+//! Copyright (c) The Rust Project Developers.
 
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]

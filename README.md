@@ -71,12 +71,12 @@ To install, simply add `dumpster` as a dependency to your project.
 
 ```toml
 [dependencies]
-dumpster = "1.1.0"
+dumpster = "1.2.0"
 ```
 
 ## Optional features
 
-## `derive`
+### `derive`
 
 `derive` is enabled by default.
 It enables the derive macro for `Trace`, which makes it easy for users to implement their
@@ -95,12 +95,12 @@ let my_foo = Gc::new(Foo(RefCell::new(None)));
 drop(my_foo); // my_foo will be automatically cleaned up
 ```
 
-## `either`
+### `either`
 
 `either` is disabled by default. It adds support for the [`either`](https://crates.io/crates/either) crate,
 specifically by implementing `Trace` for [`either::Either`](https://docs.rs/either/1.13.0/either/enum.Either.html).
 
-## `coerce-unsized`
+### `coerce-unsized`
 
 `coerce-unsized` is disabled by default.
 This enables the implementation of `CoerceUnsized` for each garbage collector,
@@ -117,7 +117,17 @@ To use `coerce-unsized`, edit your installation to `Cargo.toml` to include the f
 
 ```toml
 [dependencies]
-dumpster = { version = "1.1.1", features = ["coerce-unsized"]}
+dumpster = { version = "1.2.0", features = ["coerce-unsized"]}
+```
+
+## Loom support
+
+`dumpster` has experimental support for permutation testing under [`loom`](https://github.com/tokio-rs/loom).
+It is expected to be unstable and buggy.
+To compile `dumpster` using `loom`, add `--cfg loom` to `RUSTFLAGS` when compiling, for example:
+
+```sh
+RUSTFLAGS='--cfg loom' cargo test
 ```
 
 ## License
