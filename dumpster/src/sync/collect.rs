@@ -263,11 +263,6 @@ pub fn set_collect_condition(f: CollectCondition) {
         .store(f as *mut (), Ordering::Relaxed);
 }
 
-/// Determine whether this thread is currently cleaning.
-fn currently_cleaning() -> bool {
-    CLEANING.with(Cell::get)
-}
-
 /// Get the number of `[Gc]`s dropped since the last collection.
 pub fn n_gcs_dropped() -> usize {
     GARBAGE_TRUCK.n_gcs_dropped.load(Ordering::Relaxed)
