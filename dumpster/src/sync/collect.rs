@@ -44,7 +44,7 @@ use super::{default_collect_condition, CollectCondition, CollectInfo, Gc, GcBox,
 struct GarbageTruck {
     /// The contents of the garbage truck, containing all the allocations which need to be
     /// collected and have already been delivered by a [`Dumpster`].
-    contents: Mutex<HashMap<AllocationId, TrashCan>>,
+    contents: LazyLock<Mutex<HashMap<AllocationId, TrashCan>>>,
     /// A lock used for synchronizing threads that are awaiting completion of a collection process.
     /// This lock should be acquired for reads by threads running a collection and for writes by
     /// threads awaiting collection completion.
@@ -118,7 +118,7 @@ enum Reachability {
 #[cfg(not(loom))]
 /// The global garbage truck.
 /// All [`TrashCan`]s should eventually end up in here.
-static GARBAGE_TRUCK: LazyLock<GarbageTruck> = LazyLock::new(GarbageTruck::new);
+static GARBAGE_TRUCK: GarbageTruck = GarbageTruck::new();
 
 #[cfg(loom)]
 lazy_static! {
@@ -315,9 +315,9 @@ impl GarbageTruck {
     ///
     /// Since the `GarbageTruck` is meant to be a single global value, this function should only be
     /// called once in the initialization of `GARBAGE_TRUCK`.
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
-            contents: Mutex::new(HashMap::new()),
+            contents: LazyLock::new(|| Mutex::new(HashMap::new())),
             collecting_lock: RwLock::new(()),
             n_gcs_dropped: AtomicUsize::new(0),
             n_gcs_existing: AtomicUsize::new(0),
