@@ -672,10 +672,3 @@ impl Drop for Dumpster {
         // collect_all();
     }
 }
-
-#[cfg(not(loom))] // cannot access lazy static in drop
-impl Drop for GarbageTruck {
-    fn drop(&mut self) {
-        GARBAGE_TRUCK.collect_all();
-    }
-}
