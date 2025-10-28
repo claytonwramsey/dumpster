@@ -388,20 +388,18 @@ impl<T: Trace + ?Sized> Gc<T> {
     ///
     /// ```
     /// use dumpster::{unsync::Gc, Trace};
-    /// use std::cell::OnceCell;
     ///
     /// #[derive(Trace)]
-    /// struct Cycle(OnceCell<Gc<Self>>);
+    /// struct Cycle(Gc<Self>);
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         let maybe_ref = Gc::try_deref(self.0.get().unwrap());
+    ///         let maybe_ref = Gc::try_deref(&self.0);
     ///         assert!(maybe_ref.is_none());
     ///     }
     /// }
     ///
-    /// let gc1 = Gc::new(Cycle(OnceCell::new()));
-    /// gc1.0.set(gc1.clone());
+    /// let gc1 = Gc::new_cyclic(|this| Cycle(this));
     /// # drop(gc1);
     /// # dumpster::unsync::collect();
     /// ```
@@ -434,20 +432,18 @@ impl<T: Trace + ?Sized> Gc<T> {
     ///
     /// ```
     /// use dumpster::{unsync::Gc, Trace};
-    /// use std::cell::OnceCell;
     ///
     /// #[derive(Trace)]
-    /// struct Cycle(OnceCell<Gc<Self>>);
+    /// struct Cycle(Gc<Self>);
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         let cloned = Gc::try_clone(self.0.get().unwrap());
+    ///         let cloned = Gc::try_clone(&self.0);
     ///         assert!(cloned.is_none());
     ///     }
     /// }
     ///
-    /// let gc1 = Gc::new(Cycle(OnceCell::new()));
-    /// gc1.0.set(gc1.clone());
+    /// let gc1 = Gc::new_cyclic(|this| Cycle(this));
     /// # drop(gc1);
     /// # dumpster::unsync::collect();
     /// ```
@@ -540,19 +536,17 @@ impl<T: Trace + ?Sized> Gc<T> {
     ///
     /// ```
     /// use dumpster::{unsync::Gc, Trace};
-    /// use std::cell::OnceCell;
     ///
     /// #[derive(Trace)]
-    /// struct Cycle(OnceCell<Gc<Self>>);
+    /// struct Cycle(Gc<Self>);
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         assert!(self.0.get().unwrap().is_dead());
+    ///         assert!(self.0.is_dead());
     ///     }
     /// }
     ///
-    /// let gc1 = Gc::new(Cycle(OnceCell::new()));
-    /// gc1.0.set(gc1.clone());
+    /// let gc1 = Gc::new_cyclic(|this| Cycle(this));
     /// # drop(gc1);
     /// # dumpster::unsync::collect();
     /// ```
@@ -821,23 +815,23 @@ impl<T: Trace + ?Sized> Deref for Gc<T> {
     /// ```should_panic
     /// // This is wrong!
     /// use dumpster::{unsync::Gc, Trace};
-    /// use std::cell::RefCell;
     ///
     /// #[derive(Trace)]
     /// struct Bad {
     ///     s: String,
-    ///     cycle: RefCell<Option<Gc<Bad>>>,
+    ///     this: Gc<Bad>,
     /// }
     ///
     /// impl Drop for Bad {
     ///     fn drop(&mut self) {
-    ///         println!("{}", self.cycle.borrow().as_ref().unwrap().s)
+    ///         // will panic when dereferencing `this`
+    ///         println!("{}", self.this.s)
     ///     }
     /// }
     ///
-    /// let foo = Gc::new(Bad {
+    /// let foo = Gc::new_cyclic(|this| Bad {
     ///     s: "foo".to_string(),
-    ///     cycle: RefCell::new(None),
+    ///     this,
     /// });
     /// ```
     fn deref(&self) -> &Self::Target {
@@ -877,19 +871,17 @@ impl<T: Trace + ?Sized> Clone for Gc<T> {
     ///
     /// ```should_panic
     /// use dumpster::{unsync::Gc, Trace};
-    /// use std::cell::OnceCell;
     ///
     /// #[derive(Trace)]
-    /// struct Cycle(OnceCell<Gc<Self>>);
+    /// struct Cycle(Gc<Self>);
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         let _ = self.0.get().unwrap().clone();
+    ///         let _ = self.0.clone();
     ///     }
     /// }
     ///
-    /// let gc1 = Gc::new(Cycle(OnceCell::new()));
-    /// gc1.0.set(gc1.clone());
+    /// let gc1 = Gc::new_cyclic(|this| Cycle(this));
     /// # drop(gc1);
     /// # dumpster::unsync::collect();
     /// ```
