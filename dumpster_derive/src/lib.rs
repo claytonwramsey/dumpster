@@ -15,23 +15,44 @@ use proc_macro2::{TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned, ToTokens as _};
 use syn::{
     parse_macro_input, parse_quote, spanned::Spanned, Data, DeriveInput, Fields, GenericParam,
-    Generics, Ident, Index,
+    Generics, Ident, Index, Path,
 };
 
-#[proc_macro_derive(Trace)]
+#[proc_macro_derive(Trace, attributes(dumpster))]
 pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    let mut dumpster: Path = parse_quote!(::dumpster);
+
+    // look for `crate` argument
+    for attr in &input.attrs {
+        if !attr.path().is_ident("dumpster") {
+            continue;
+        }
+
+        let result = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("crate") {
+                dumpster = meta.value()?.parse()?;
+                Ok(())
+            } else {
+                Err(meta.error("unsupported attribute"))
+            }
+        });
+
+        if let Err(err) = result {
+            return err.into_compile_error().into();
+        }
+    }
 
     // name of the type being implemented
     let name = &input.ident;
 
     // generic parameters of the type being implemented
-    let generics = add_trait_bounds(input.generics);
+    let generics = add_trait_bounds(&dumpster, input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let impl_generics = {
         let tokens = impl_generics.into_token_stream();
-        let param = quote! { __V: ::dumpster::Visitor };
+        let param = quote! { __V: #dumpster::Visitor };
 
         let params = if tokens.is_empty() {
             quote! { #param }
@@ -48,10 +69,10 @@ pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         quote! { < #params > }
     };
 
-    let do_visitor = delegate_methods(name, &input.data);
+    let do_visitor = delegate_methods(&dumpster, name, &input.data);
 
     let generated = quote! {
-        unsafe impl #impl_generics ::dumpster::TraceWith<__V> for #name #ty_generics #where_clause {
+        unsafe impl #impl_generics #dumpster::TraceWith<__V> for #name #ty_generics #where_clause {
             #[inline]
             fn accept(&self, visitor: &mut __V) -> ::core::result::Result<(), ()> {
                 #do_visitor
@@ -63,12 +84,12 @@ pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 /// Collect the trait bounds for some generic expression.
-fn add_trait_bounds(mut generics: Generics) -> Generics {
+fn add_trait_bounds(dumpster: &Path, mut generics: Generics) -> Generics {
     for param in &mut generics.params {
         if let GenericParam::Type(ref mut type_param) = *param {
             type_param
                 .bounds
-                .push(parse_quote!(::dumpster::TraceWith<__V>));
+                .push(parse_quote!(#dumpster::TraceWith<__V>));
         }
     }
     generics
@@ -76,14 +97,14 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
 
 #[allow(clippy::too_many_lines)]
 /// Generate method implementations for [`Trace`] for some data type.
-fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
+fn delegate_methods(dumpster: &Path, name: &Ident, data: &Data) -> TokenStream {
     match data {
         Data::Struct(data) => match data.fields {
             Fields::Named(ref f) => {
                 let delegate_visit = f.named.iter().map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span() =>
-                        ::dumpster::TraceWith::accept(
+                        #dumpster::TraceWith::accept(
                             &self.#name,
                             visitor
                         )?;
@@ -96,7 +117,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                 let delegate_visit = f.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span() =>
-                        ::dumpster::TraceWith::accept(
+                        #dumpster::TraceWith::accept(
                             &self.#index,
                             visitor
                         )?;
@@ -130,7 +151,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                             }
 
                             execution_visit.extend(quote! {
-                                ::dumpster::TraceWith::accept(
+                                #dumpster::TraceWith::accept(
                                     #field_name,
                                     visitor
                                 )?;
@@ -157,7 +178,7 @@ fn delegate_methods(name: &Ident, data: &Data) -> TokenStream {
                             }
 
                             execution_visit.extend(quote! {
-                                ::dumpster::TraceWith::accept(
+                                #dumpster::TraceWith::accept(
                                     #field_name,
                                     visitor
                                 )?;

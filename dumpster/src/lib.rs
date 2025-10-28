@@ -378,6 +378,19 @@ extern crate dumpster_derive;
 ///     bar: Option<Box<Foo>>,
 /// }
 /// ```
+///
+/// You can specify the crate path for the `dumpster` crate using the `dumpster` attribute:
+///
+/// ```
+/// use dumpster as dumpster_renamed;
+/// use dumpster_renamed::Trace;
+///
+/// #[derive(Trace)]
+/// #[dumpster(crate = dumpster_renamed)]
+/// struct Foo {
+///     bar: Option<Box<Foo>>,
+/// }
+/// ```
 pub use dumpster_derive::Trace;
 
 /// Determine whether some value contains a garbage-collected pointer.
