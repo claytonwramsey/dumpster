@@ -583,6 +583,9 @@ impl Visitor for PrepareForDestruction<'_> {
     where
         T: Trace + Send + Sync + ?Sized,
     {
+        if gc.is_dead() {
+            return;
+        }
         let id = AllocationId::from(unsafe {
             // SAFETY: This is the same as dereferencing the GC.
             gc.ptr.get().unwrap()
@@ -592,12 +595,10 @@ impl Visitor for PrepareForDestruction<'_> {
                 // SAFETY: This is the same as dereferencing the GC.
                 id.0.as_ref().strong.fetch_sub(1, Ordering::Release);
             }
-        } else {
-            unsafe {
-                // SAFETY: The GC is unreachable,
-                // so the GC will never be dereferenced again.
-                gc.kill();
-            }
+        }
+        unsafe {
+            // SAFETY: we have a unique reference to `gc` as we are destroying the structure.
+            gc.kill();
         }
     }
 
