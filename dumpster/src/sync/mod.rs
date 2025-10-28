@@ -78,7 +78,7 @@ use self::collect::{
 /// See comment in `Gc::clone`.
 const MAX_STRONG_COUNT: usize = (isize::MAX) as usize;
 
-/// Allows tracing with all unsync visitors.
+/// Allows tracing with all sync visitors.
 #[expect(private_bounds)]
 pub(crate) trait TraceSync:
     for<'a> TraceWith<Dfs<'a>> + for<'a> TraceWith<PrepareForDestruction<'a>>
@@ -558,7 +558,7 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
     /// # Examples
     ///
     /// ```
-    /// use dumpster::unsync::Gc;
+    /// use dumpster::sync::Gc;
     ///
     /// let mut data = Gc::new(5);
     ///
@@ -1015,7 +1015,7 @@ impl<T: Trace + Send + Sync> From<T> for Gc<T> {
     ///
     /// # Example
     /// ```rust
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let x = 5;
     /// let rc = Gc::new(5);
     ///
@@ -1034,7 +1034,7 @@ impl<T: Trace + Send + Sync, const N: usize> From<[T; N]> for Gc<[T]> {
     /// # Example
     ///
     /// ```
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let original: [i32; 3] = [1, 2, 3];
     /// let shared: Gc<[i32]> = Gc::from(original);
     /// assert_eq!(&[1, 2, 3], &shared[..]);
@@ -1051,7 +1051,7 @@ impl<T: Trace + Send + Sync + Clone> From<&[T]> for Gc<[T]> {
     /// # Example
     ///
     /// ```
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let original: &[i32] = &[1, 2, 3];
     /// let shared: Gc<[i32]> = Gc::from(original);
     /// assert_eq!(&[1, 2, 3], &shared[..]);
@@ -1130,7 +1130,7 @@ impl<T: Trace + Send + Sync + Clone> From<&mut [T]> for Gc<[T]> {
     /// # Example
     ///
     /// ```
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let mut original = [1, 2, 3];
     /// let original: &mut [i32] = &mut original;
     /// let shared: Gc<[i32]> = Gc::from(original);
@@ -1148,7 +1148,7 @@ impl From<&str> for Gc<str> {
     /// # Example
     ///
     /// ```
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let shared: Gc<str> = Gc::from("statue");
     /// assert_eq!("statue", &shared[..]);
     /// ```
@@ -1166,7 +1166,7 @@ impl From<&mut str> for Gc<str> {
     /// # Example
     ///
     /// ```
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let mut original = String::from("statue");
     /// let original: &mut str = &mut original;
     /// let shared: Gc<str> = Gc::from(original);
@@ -1184,7 +1184,7 @@ impl From<Gc<str>> for Gc<[u8]> {
     /// # Example
     ///
     /// ```
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let string: Gc<str> = Gc::from("eggplant");
     /// let bytes: Gc<[u8]> = Gc::from(string);
     /// assert_eq!("eggplant".as_bytes(), bytes.as_ref());
@@ -1202,7 +1202,7 @@ impl From<String> for Gc<str> {
     /// # Example
     ///
     /// ```
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let original: String = "statue".to_owned();
     /// let shared: Gc<str> = Gc::from(original);
     /// assert_eq!("statue", &shared[..]);
@@ -1254,7 +1254,7 @@ impl<T: Trace + Send + Sync> From<Vec<T>> for Gc<[T]> {
     /// # Example
     ///
     /// ```
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// let unique: Vec<i32> = vec![1, 2, 3];
     /// let shared: Gc<[i32]> = Gc::from(unique);
     /// assert_eq!(&[1, 2, 3], &shared[..]);
@@ -1291,7 +1291,7 @@ where
     /// # Example
     ///
     /// ```rust
-    /// # use dumpster::unsync::Gc;
+    /// # use dumpster::sync::Gc;
     /// # use std::borrow::Cow;
     /// let cow: Cow<'_, str> = Cow::Borrowed("eggplant");
     /// let shared: Gc<str> = Gc::from(cow);
