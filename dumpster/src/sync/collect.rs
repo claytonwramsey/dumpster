@@ -33,7 +33,7 @@ use loom::{
 use parking_lot::{Mutex, RwLock};
 
 #[cfg(loom)]
-use crate::sync::loom_ext::{Mutex, RwLock};
+use crate::sync::loom_ext::{LazyLock, Mutex, RwLock};
 
 use crate::{ptr::Erased, Trace, Visitor};
 
@@ -289,9 +289,25 @@ impl Dumpster {
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
         self.n_drops.set(0);
-        let mut guard = garbage_truck.contents.lock();
+
+        #[cfg(not(loom))]
+        {
+            let mut guard = garbage_truck.contents.lock();
+            self.deliver_to_contents(&mut guard);
+        }
+
+        #[cfg(loom)]
+        {
+            garbage_truck.contents.with(|contents| {
+                let mut guard = contents.lock();
+                self.deliver_to_contents(&mut guard);
+            });
+        }
+    }
+
+    fn deliver_to_contents(&self, contents: &mut HashMap<AllocationId, TrashCan>) {
         for (id, can) in self.contents.borrow_mut().drain() {
-            if guard.insert(id, can).is_some() {
+            if contents.insert(id, can).is_some() {
                 unsafe {
                     // SAFETY: an allocation can only be in the dumpster if it still exists and its
                     // header is valid
@@ -315,7 +331,23 @@ impl GarbageTruck {
     ///
     /// Since the `GarbageTruck` is meant to be a single global value, this function should only be
     /// called once in the initialization of `GARBAGE_TRUCK`.
+    #[cfg(not(loom))]
     const fn new() -> Self {
+        Self {
+            contents: LazyLock::new(|| Mutex::new(HashMap::new())),
+            collecting_lock: RwLock::new(()),
+            n_gcs_dropped: AtomicUsize::new(0),
+            n_gcs_existing: AtomicUsize::new(0),
+            collect_condition: AtomicPtr::new(default_collect_condition as *mut ()),
+        }
+    }
+
+    /// Construct a new, empty garbage truck.
+    ///
+    /// Since the `GarbageTruck` is meant to be a single global value, this function should only be
+    /// called once in the initialization of `GARBAGE_TRUCK`.
+    #[cfg(loom)]
+    fn new() -> Self {
         Self {
             contents: LazyLock::new(|| Mutex::new(HashMap::new())),
             collecting_lock: RwLock::new(()),
@@ -331,7 +363,13 @@ impl GarbageTruck {
     fn collect_all(&self) {
         let collecting_guard = self.collecting_lock.write();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
+
+        #[cfg(not(loom))]
         let to_collect = take(&mut *self.contents.lock());
+
+        #[cfg(loom)]
+        let to_collect = self.contents.with(|contents| take(&mut *contents.lock()));
+
         let mut ref_graph = HashMap::with_capacity(to_collect.len());
 
         CURRENT_TAG.fetch_add(1, Ordering::Release);

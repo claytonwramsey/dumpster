@@ -169,6 +169,26 @@ impl<T> OnceLock<T> {
     }
 }
 
+pub struct LazyLock<T> {
+    once: OnceLock<T>,
+    init: fn() -> T,
+}
+
+impl<T> LazyLock<T> {
+    /// Construct a lazy-lock.
+    pub fn new(init: fn() -> T) -> Self {
+        Self {
+            once: OnceLock::new(),
+            init,
+        }
+    }
+
+    /// Apply a function.
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        self.once.with_or_init(self.init, f)
+    }
+}
+
 #[test]
 fn test_once() {
     use loom::sync::{
