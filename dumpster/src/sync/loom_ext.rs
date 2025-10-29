@@ -169,8 +169,11 @@ impl<T> OnceLock<T> {
     }
 }
 
+/// A lazy-lock.
 pub struct LazyLock<T> {
+    /// The data behind a once-lock.
     once: OnceLock<T>,
+    /// The initializer function.
     init: fn() -> T,
 }
 
