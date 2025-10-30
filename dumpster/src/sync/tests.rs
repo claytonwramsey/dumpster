@@ -903,3 +903,22 @@ fn custom_trait_object() {
     let gc: Gc<dyn MyTrait> = coerce_gc!(gc);
     _ = gc;
 }
+
+#[test]
+fn new_cyclic_simple() {
+    struct Cycle(Gc<Self>);
+    unsafe impl<V: Visitor> TraceWith<V> for Cycle {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+    let gc = Gc::new_cyclic(Cycle);
+    assert_eq!(gc.ref_count().get(), 2);
+    drop(gc);
+}
+
+#[test]
+#[should_panic = "told you"]
+fn panic_new_cyclic() {
+    let _ = Gc::<()>::new_cyclic(|_| panic!("told you"));
+}

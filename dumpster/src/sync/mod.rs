@@ -38,9 +38,10 @@ mod tests;
 
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
+    any::TypeId,
     borrow::{Borrow, Cow},
     fmt::Debug,
-    mem::{self, ManuallyDrop},
+    mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
     ptr::{self, addr_of, addr_of_mut, drop_in_place, NonNull},
@@ -81,12 +82,15 @@ const MAX_STRONG_COUNT: usize = (isize::MAX) as usize;
 /// Allows tracing with all sync visitors.
 #[expect(private_bounds)]
 pub(crate) trait TraceSync:
-    for<'a> TraceWith<Dfs<'a>> + for<'a> TraceWith<PrepareForDestruction<'a>>
+    for<'a> TraceWith<Dfs<'a>> + for<'a> TraceWith<PrepareForDestruction<'a>> + TraceWith<Rehydrate>
 {
 }
 
 impl<T> TraceSync for T where
-    T: ?Sized + for<'a> TraceWith<Dfs<'a>> + for<'a> TraceWith<PrepareForDestruction<'a>>
+    T: ?Sized
+        + for<'a> TraceWith<Dfs<'a>>
+        + for<'a> TraceWith<PrepareForDestruction<'a>>
+        + TraceWith<Rehydrate>
 {
 }
 
@@ -288,6 +292,131 @@ where
             }))))),
             tag: AtomicUsize::new(0),
         }
+    }
+
+    /// Construct a self-referencing `Gc`.
+    ///
+    /// `new_cyclic` first allocates memory for `T`, then constructs a dead `Gc` pointing to the
+    /// allocation. The dead `Gc` is then passed to `data_fn` to construct a value of `T`, which
+    /// is stored in the allocation. Finally, `new_cyclic` will update the dead self-referential
+    /// `Gc`s and rehydrate them to produce the final value.
+    ///
+    /// # Panics
+    ///
+    /// If `data_fn` panics, the panic is propagated to the caller.
+    /// The allocation is cleaned up normally.
+    ///
+    /// Additionally, if, when attempting to rehydrate the `Gc` members of `F`, the visitor fails to
+    /// reach a `Gc`, this function will panic and reserve the allocation to be cleaned up
+    /// later.
+    ///
+    /// # Notes on safety
+    ///
+    /// Incorrect implementations of `data_fn` may have unusual or strange results.
+    /// Although `dumpster` guarantees that it will be safe, and will do its best to ensure correct
+    /// results, it is generally unwise to allow dead `Gc`s to exist for long.
+    /// If you implement `data_fn` wrong, this may cause panics later on inside of the collection
+    /// process.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::{sync::Gc, Trace};
+    ///
+    /// #[derive(Trace)]
+    /// struct Cycle {
+    ///     this: Gc<Self>,
+    /// }
+    ///
+    /// let gc = Gc::new_cyclic(|this| Cycle { this });
+    /// assert!(Gc::ptr_eq(&gc, &gc.this));
+    /// ```
+    pub fn new_cyclic<F: FnOnce(Self) -> T>(data_fn: F) -> Self
+    where
+        T: Sized,
+    {
+        /// A struct containing an uninitialized value of `T`.
+        /// May only be used inside `new_cyclic`.
+        #[repr(transparent)]
+        struct Uninitialized<T>(MaybeUninit<T>);
+
+        unsafe impl<V: Visitor, T> TraceWith<V> for Uninitialized<T> {
+            fn accept(&self, _: &mut V) -> Result<(), ()> {
+                Ok(())
+            }
+        }
+
+        /// Data structure for cleaning up the allocation in case we panic along the way.
+        struct CleanUp<T: Trace + Send + Sync + 'static> {
+            /// Is `true` if the [`GcBox::value`] is initialized.
+            initialized: bool,
+            /// Pointer to the `GcBox` with a maybe uninitialized value.
+            ptr: NonNull<GcBox<T>>,
+        }
+
+        impl<T: Trace + Send + Sync + 'static> Drop for CleanUp<T> {
+            fn drop(&mut self) {
+                if self.initialized {
+                    // push this `Gc` into the destruction queue
+                    unsafe { mark_dirty(self.ptr) };
+                } else {
+                    // deallocate because this `Gc` is not initialized
+                    unsafe {
+                        dealloc(
+                            self.ptr.as_ptr().cast::<u8>(),
+                            Layout::for_value(self.ptr.as_ref()),
+                        );
+                    }
+                }
+            }
+        }
+
+        // make an uninitialized allocation
+        notify_created_gc();
+        let mut gcbox = NonNull::from(Box::leak(Box::new(GcBox {
+            strong: AtomicUsize::new(1),
+            weak: AtomicUsize::new(0),
+            generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
+            value: Uninitialized(MaybeUninit::<T>::uninit()),
+        })));
+        let mut cleanup = CleanUp {
+            ptr: gcbox,
+            initialized: false,
+        };
+
+        // nilgc is a dead Gc
+        let nilgc = Gc {
+            tag: AtomicUsize::new(0),
+            ptr: UCell::new(Nullable::new(gcbox.cast::<GcBox<T>>()).as_null()),
+        };
+        assert!(nilgc.is_dead());
+        unsafe {
+            // SAFETY: `gcbox` is a valid pointer to an uninitialized datum that we have allocated.
+            gcbox.as_mut().value = Uninitialized(MaybeUninit::new(data_fn(nilgc)));
+        }
+        cleanup.initialized = true;
+
+        let gcbox = gcbox.cast::<GcBox<T>>();
+        let res = unsafe {
+            // SAFETY: the above unsafe block correctly constructed the Uninitialized value, so it
+            // is safe to cast `gcbox` and then construct a reference.
+            gcbox.as_ref().value.accept(&mut Rehydrate {
+                ptr: Nullable::new(gcbox.cast()),
+                type_id: TypeId::of::<T>(),
+            })
+        };
+
+        assert!(
+            res.is_ok(),
+            "visitor must be able to access all Gc fields of structure when rehydrating dead Gcs"
+        );
+        let gc = Gc {
+            ptr: UCell::new(Nullable::new(gcbox)),
+            tag: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
+        };
+
+        let _ = ManuallyDrop::new(cleanup);
+        gc
     }
 
     /// Attempt to dereference this `Gc`.
@@ -537,6 +666,51 @@ where
     #[doc(hidden)]
     pub unsafe fn __private_from_ptr(ptr: *const GcBox<T>, tag: usize) -> Self {
         Self::from_ptr(ptr, tag)
+    }
+}
+
+/// A struct for converting dead `Gc`s into live ones.
+///
+/// This is used in [`Gc::new_cyclic`].
+pub(super) struct Rehydrate {
+    /// The pointer to the currently hydrating [`GcBox`].
+    ptr: Nullable<GcBox<()>>,
+    /// The [`TypeId`] of `T` in `Gc<T>` to be hydrated.
+    type_id: TypeId,
+}
+
+impl Visitor for Rehydrate {
+    fn visit_sync<T>(&mut self, gc: &Gc<T>)
+    where
+        T: Trace + Send + Sync + ?Sized,
+    {
+        if gc.is_dead() && TypeId::of::<T>() == self.type_id {
+            unsafe {
+                // SAFETY: it is safe to transmute these pointers because we have checked
+                // that they are of the same type.
+                // Additionally, the `GcBox` has been fully initialized, so it is safe to
+                // create a reference here.
+                let cell_ptr = (&raw const gc.ptr).cast::<UCell<Nullable<GcBox<()>>>>();
+                (*cell_ptr).set(self.ptr);
+
+                let box_ref = &*self.ptr.as_ptr();
+                let old_strong = box_ref.strong.fetch_add(1, Ordering::Relaxed);
+                // Check for overflow. See implementation of clone for details.
+                if old_strong > MAX_STRONG_COUNT {
+                    std::process::abort();
+                }
+                box_ref
+                    .generation
+                    .store(CURRENT_TAG.load(Ordering::Acquire), Ordering::Release);
+                notify_created_gc();
+            }
+        }
+    }
+
+    fn visit_unsync<T>(&mut self, _: &crate::unsync::Gc<T>)
+    where
+        T: Trace + ?Sized,
+    {
     }
 }
 

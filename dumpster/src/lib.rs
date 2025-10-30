@@ -305,11 +305,25 @@ impl<T> Trace for T where T: trace::TraceWithV + ?Sized {}
 /// typically double-frees or use-after-frees.
 /// This includes [`TraceWith::accept`], even though it is a safe function, since its correctness
 /// is required for safety.
+///
+/// The garbage collector in `dumpster` requires strong assumptions about the values inside of a
+/// `Gc`; by implementing `TraceWith`, you are responsible for these assumptions.
+/// Specifically, in order to be `TraceWith`, a value must have a _tree-like_ ownership structure.
+/// If some type `T` implements `TraceWith`, it means that no references to a value inside `T` will
+/// remain valid while `T` is moved. For instance, this means that `Rc` can never be `Trace`, as
+/// moving one `Rc` will not invalidate other `Rc`s pointing to the same allocation.
+/// We allow exceptions for fields of `T` that are not visited by the implementation of
+/// [`TraceWith::accept`], such as borrows (see the implementation of `TraceWith` for `&T`) and
+/// naturally for [`unsync::Gc`] and [`sync::Gc`].
+///
+/// Any structure whose implementation of `TraceWith` comes from `#[derive(Trace)]` satisfies the
+/// tree-like requirement.
 pub unsafe trait TraceWith<V: Visitor> {
     /// Accept a visitor to this garbage-collected value.
     ///
     /// Implementors of this function need only delegate to all fields owned by this value which
     /// may contain a garbage-collected reference (either a [`sync::Gc`] or a [`unsync::Gc`]).
+    /// This delegation must be done in a consistent order.
     ///
     /// For structures which have more than one field, they should return immediately after the
     /// first `Err` is returned from one of its fields.
