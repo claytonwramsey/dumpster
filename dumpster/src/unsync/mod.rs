@@ -334,7 +334,7 @@ impl<T: Trace + ?Sized> Gc<T> {
         let nilgc = Gc {
             ptr: Cell::new(Nullable::new(gcbox.cast::<GcBox<T>>()).as_null()),
         };
-        assert!(nilgc.is_dead());
+        assert!(Gc::is_dead(&nilgc));
         unsafe {
             // SAFETY: `gcbox` is a valid pointer to an uninitialized datum that we have allocated.
             gcbox.as_mut().value = Uninitialized(MaybeUninit::new(data_fn(nilgc)));
@@ -509,14 +509,14 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// use dumpster::unsync::Gc;
     ///
     /// let gc = Gc::new(());
-    /// assert_eq!(gc.ref_count().get(), 1);
+    /// assert_eq!(Gc::ref_count(&gc).get(), 1);
     /// let gc2 = gc.clone();
-    /// assert_eq!(gc.ref_count().get(), 2);
+    /// assert_eq!(Gc::ref_count(&gc).get(), 2);
     /// drop(gc);
     /// drop(gc2);
     /// ```
-    pub fn ref_count(&self) -> NonZeroUsize {
-        let box_ptr = self.ptr.get().expect(
+    pub fn ref_count(gc: &Self) -> NonZeroUsize {
+        let box_ptr = gc.ptr.get().expect(
             "Attempt to dereference Gc to already-collected object. \
     This means a Gc escaped from a Drop implementation, likely implying a bug in your code.",
         );
@@ -542,7 +542,7 @@ impl<T: Trace + ?Sized> Gc<T> {
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         assert!(self.0.is_dead());
+    ///         assert!(Gc::is_dead(&self.0));
     ///     }
     /// }
     ///
@@ -550,8 +550,8 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// # drop(gc1);
     /// # dumpster::unsync::collect();
     /// ```
-    pub fn is_dead(&self) -> bool {
-        self.ptr.get().is_null()
+    pub fn is_dead(gc: &Self) -> bool {
+        gc.ptr.get().is_null()
     }
 
     /// Consumes the `Gc<T>`, returning the inner `GcBox<T>` pointer.
@@ -614,7 +614,7 @@ impl Visitor for Rehydrate {
     where
         T: Trace + ?Sized,
     {
-        if gc.is_dead() && TypeId::of::<T>() == self.type_id {
+        if Gc::is_dead(gc) && TypeId::of::<T>() == self.type_id {
             unsafe {
                 // SAFETY: it is safe to transmute these pointers because we have checked
                 // that they are of the same type.
@@ -667,7 +667,7 @@ impl<T: Trace + Clone> Gc<T> {
     /// ```
     #[inline]
     pub fn make_mut(this: &mut Self) -> &mut T {
-        if this.is_dead() {
+        if Gc::is_dead(this) {
             panic_deref_of_collected_object();
         }
 

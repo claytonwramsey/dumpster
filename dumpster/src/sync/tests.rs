@@ -813,7 +813,7 @@ fn make_mut_of_object_in_dumpster() {
 
     // now foo is in the dumpster
     // and its ref count is one
-    assert_eq!(foo.ref_count().get(), 1);
+    assert_eq!(Gc::ref_count(&foo).get(), 1);
 
     // we get a mut reference
     let foo_mut = Gc::make_mut(&mut foo);
@@ -913,7 +913,7 @@ fn new_cyclic_simple() {
         }
     }
     let gc = Gc::new_cyclic(Cycle);
-    assert_eq!(gc.ref_count().get(), 2);
+    assert_eq!(Gc::ref_count(&gc).get(), 2);
     drop(gc);
 }
 

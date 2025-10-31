@@ -509,7 +509,7 @@ impl Visitor for Dfs<'_> {
     where
         T: Trace + Send + Sync + ?Sized,
     {
-        if gc.is_dead() {
+        if Gc::is_dead(gc) {
             return;
         }
         // must not use deref operators since we don't want to update the generation
@@ -621,7 +621,7 @@ impl Visitor for PrepareForDestruction<'_> {
     where
         T: Trace + Send + Sync + ?Sized,
     {
-        if gc.is_dead() {
+        if Gc::is_dead(gc) {
             return;
         }
         let id = AllocationId::from(unsafe {

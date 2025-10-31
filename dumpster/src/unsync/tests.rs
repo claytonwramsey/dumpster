@@ -329,7 +329,7 @@ fn from_box() {
     // construct the `Gc`.
     //
     // Here we ensure that the metadata is initialized to a valid state.
-    assert_eq!(gc.ref_count().get(), 1);
+    assert_eq!(Gc::ref_count(&gc).get(), 1);
 
     assert_eq!(&*gc, "hello");
 }
@@ -342,7 +342,7 @@ fn from_slice() {
     // construct the `Gc`.
     //
     // Here we ensure that the metadata is initialized to a valid state.
-    assert_eq!(gc.ref_count().get(), 1);
+    assert_eq!(Gc::ref_count(&gc).get(), 1);
 
     assert_eq!(&*gc, ["hello", "world"]);
 }
@@ -398,7 +398,7 @@ fn from_vec() {
     // construct the `Gc`.
     //
     // Here we ensure that the metadata is initialized to a valid state.
-    assert_eq!(gc.ref_count().get(), 1);
+    assert_eq!(Gc::ref_count(&gc).get(), 1);
 
     assert_eq!(&*gc, ["hello", "world"]);
 }
@@ -472,7 +472,7 @@ fn make_mut_of_object_in_dumpster() {
 
     // now foo is in the dumpster
     // and its ref count is one
-    assert_eq!(foo.ref_count().get(), 1);
+    assert_eq!(Gc::ref_count(&foo).get(), 1);
 
     // we get a mut reference
     let foo_mut = Gc::make_mut(&mut foo);
@@ -529,7 +529,7 @@ fn new_cyclic_one() {
     }
 
     let cyc = Gc::new_cyclic(|gc| Cycle(gc, DropCount(&DROP_COUNT)));
-    assert_eq!(cyc.ref_count().get(), 2);
+    assert_eq!(Gc::ref_count(&cyc).get(), 2);
     drop(cyc);
     collect();
 
