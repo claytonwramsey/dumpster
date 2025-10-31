@@ -259,7 +259,7 @@ impl Visitor for Dfs {
     where
         T: Trace + ?Sized,
     {
-        if gc.is_dead() {
+        if Gc::is_dead(gc) {
             return;
         }
         let ptr = gc.ptr.get().unwrap();
@@ -301,7 +301,7 @@ impl Visitor for Mark {
     where
         T: Trace + ?Sized,
     {
-        if gc.is_dead() {
+        if Gc::is_dead(gc) {
             return;
         }
         let ptr = gc.ptr.get().unwrap();
@@ -331,7 +331,7 @@ impl Visitor for DropAlloc<'_> {
     where
         T: Trace + ?Sized,
     {
-        if gc.is_dead() {
+        if Gc::is_dead(gc) {
             return;
         }
         let ptr = gc.ptr.get().unwrap();
