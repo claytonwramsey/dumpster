@@ -10,17 +10,15 @@
 
 use std::{
     alloc::{dealloc, Layout},
-    cell::{Cell, RefCell},
+    cell::{Cell, LazyCell, RefCell},
     collections::{hash_map::Entry, HashMap},
+    hash::Hash,
     mem::{replace, swap, take, transmute},
     ptr::{drop_in_place, NonNull},
 };
 
 #[cfg(not(loom))]
-use std::sync::{
-    atomic::{AtomicPtr, AtomicUsize, Ordering},
-    LazyLock,
-};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 #[cfg(loom)]
 use loom::{
@@ -33,7 +31,7 @@ use loom::{
 use parking_lot::{Mutex, RwLock};
 
 #[cfg(loom)]
-use crate::sync::loom_ext::{LazyLock, Mutex, RwLock};
+use crate::sync::loom_ext::{Mutex, RwLock};
 
 use crate::{ptr::Erased, Trace, Visitor};
 
@@ -44,7 +42,7 @@ use super::{default_collect_condition, CollectCondition, CollectInfo, Gc, GcBox,
 struct GarbageTruck {
     /// The contents of the garbage truck, containing all the allocations which need to be
     /// collected and have already been delivered by a [`Dumpster`].
-    contents: LazyLock<Mutex<HashMap<AllocationId, TrashCan>>>,
+    contents: Mutex<LazyCell<HashMap<AllocationId, TrashCan>>>,
     /// A lock used for synchronizing threads that are awaiting completion of a collection process.
     /// This lock should be acquired for reads by threads running a collection and for writes by
     /// threads awaiting collection completion.
@@ -290,19 +288,8 @@ impl Dumpster {
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
         self.n_drops.set(0);
 
-        #[cfg(not(loom))]
-        {
-            let mut guard = garbage_truck.contents.lock();
-            self.deliver_to_contents(&mut guard);
-        }
-
-        #[cfg(loom)]
-        {
-            garbage_truck.contents.with(|contents| {
-                let mut guard = contents.lock();
-                self.deliver_to_contents(&mut guard);
-            });
-        }
+        let mut guard = garbage_truck.contents.lock();
+        self.deliver_to_contents(&mut guard);
     }
 
     /// Deliver the entries in this dumpster to `contents`.
@@ -335,7 +322,7 @@ impl GarbageTruck {
     #[cfg(not(loom))]
     const fn new() -> Self {
         Self {
-            contents: LazyLock::new(|| Mutex::new(HashMap::new())),
+            contents: Mutex::new(LazyCell::new(HashMap::new)),
             collecting_lock: RwLock::new(()),
             n_gcs_dropped: AtomicUsize::new(0),
             n_gcs_existing: AtomicUsize::new(0),
@@ -350,7 +337,7 @@ impl GarbageTruck {
     #[cfg(loom)]
     fn new() -> Self {
         Self {
-            contents: LazyLock::new(|| Mutex::new(HashMap::new())),
+            contents: Mutex::new(LazyCell::new(HashMap::new)),
             collecting_lock: RwLock::new(()),
             n_gcs_dropped: AtomicUsize::new(0),
             n_gcs_existing: AtomicUsize::new(0),
@@ -365,11 +352,7 @@ impl GarbageTruck {
         let collecting_guard = self.collecting_lock.write();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
 
-        #[cfg(not(loom))]
-        let to_collect = take(&mut *self.contents.lock());
-
-        #[cfg(loom)]
-        let to_collect = self.contents.with(|contents| take(&mut *contents.lock()));
+        let to_collect = take(&mut **self.contents.lock());
 
         let mut ref_graph = HashMap::with_capacity(to_collect.len());
 
