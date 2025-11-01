@@ -305,6 +305,7 @@ impl Dumpster {
         }
     }
 
+    /// Deliver the entries in this dumpster to `contents`.
     fn deliver_to_contents(&self, contents: &mut HashMap<AllocationId, TrashCan>) {
         for (id, can) in self.contents.borrow_mut().drain() {
             if contents.insert(id, can).is_some() {
