@@ -113,6 +113,26 @@ unsafe impl rust_cc::Trace for RustCcMultiRef {
     }
 }
 
+pub struct TracingRcUnsyncMultiRef {
+    refs: Vec<tracing_rc::rc::Gc<TracingRcUnsyncMultiRef>>,
+}
+
+impl tracing_rc::rc::Trace for TracingRcUnsyncMultiRef {
+    fn visit_children(&self, visitor: &mut tracing_rc::rc::GcVisitor) {
+        self.refs.visit_children(visitor)
+    }
+}
+
+pub struct TracingRcSyncMultiRef {
+    refs: Mutex<Vec<tracing_rc::sync::Agc<TracingRcSyncMultiRef>>>,
+}
+
+impl tracing_rc::sync::Trace for TracingRcSyncMultiRef {
+    fn visit_children(&self, visitor: &mut tracing_rc::sync::GcVisitor) {
+        self.refs.lock().unwrap().visit_children(visitor)
+    }
+}
+
 impl Multiref for dumpster::sync::Gc<DumpsterSyncMultiref> {
     fn new(points_to: Vec<Self>) -> Self {
         dumpster::sync::Gc::new(DumpsterSyncMultiref {
@@ -223,6 +243,36 @@ impl Multiref for rust_cc::Cc<RustCcMultiRef> {
 
     fn collect() {
         rust_cc::collect_cycles();
+    }
+}
+
+impl Multiref for tracing_rc::rc::Gc<TracingRcUnsyncMultiRef> {
+    fn new(points_to: Vec<Self>) -> Self {
+        tracing_rc::rc::Gc::new(TracingRcUnsyncMultiRef { refs: points_to })
+    }
+
+    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
+        f(self.borrow_mut().refs.as_mut());
+    }
+
+    fn collect() {
+        tracing_rc::rc::collect_full();
+    }
+}
+
+impl Multiref for tracing_rc::sync::Agc<TracingRcSyncMultiRef> {
+    fn new(points_to: Vec<Self>) -> Self {
+        tracing_rc::sync::Agc::new(TracingRcSyncMultiRef {
+            refs: Mutex::new(points_to),
+        })
+    }
+
+    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
+        f(self.read().refs.lock().unwrap().as_mut());
+    }
+
+    fn collect() {
+        tracing_rc::sync::collect_full();
     }
 }
 
