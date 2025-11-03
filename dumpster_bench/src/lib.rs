@@ -102,6 +102,17 @@ unsafe impl gc::Trace for GcMultiref {
     }
 }
 
+#[derive(rust_cc::Finalize)]
+pub struct RustCcMultiRef {
+    refs: Mutex<Vec<rust_cc::Cc<RustCcMultiRef>>>,
+}
+
+unsafe impl rust_cc::Trace for RustCcMultiRef {
+    fn trace(&self, ctx: &mut rust_cc::Context<'_>) {
+        self.refs.lock().unwrap().trace(ctx)
+    }
+}
+
 impl Multiref for dumpster::sync::Gc<DumpsterSyncMultiref> {
     fn new(points_to: Vec<Self>) -> Self {
         dumpster::sync::Gc::new(DumpsterSyncMultiref {
@@ -196,6 +207,22 @@ impl Multiref for shredder::Gc<ShredderSyncMultiref> {
 
     fn collect() {
         shredder::synchronize_destructors();
+    }
+}
+
+impl Multiref for rust_cc::Cc<RustCcMultiRef> {
+    fn new(points_to: Vec<Self>) -> Self {
+        rust_cc::Cc::new(RustCcMultiRef {
+            refs: Mutex::new(points_to),
+        })
+    }
+
+    fn apply(&self, f: impl FnOnce(&mut Vec<Self>)) {
+        f(self.refs.lock().unwrap().as_mut());
+    }
+
+    fn collect() {
+        rust_cc::collect_cycles();
     }
 }
 

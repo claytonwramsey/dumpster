@@ -19,7 +19,7 @@ use std::{
 
 use dumpster_bench::{
     ArcMultiref, BaconRajanMultiref, DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref,
-    Multiref, RcMultiref, ShredderMultiref, ShredderSyncMultiref, SyncMultiref,
+    Multiref, RcMultiref, RustCcMultiRef, ShredderMultiref, ShredderSyncMultiref, SyncMultiref,
 };
 
 use parking_lot::Mutex;
@@ -90,6 +90,23 @@ fn main() {
         println!(
             "{}",
             single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon-rajan-cc", N_ITERS)
+        );
+
+        rust_cc::config::config(|config| {
+            config.set_auto_collect(true);
+        })
+        .unwrap();
+        println!(
+            "{}",
+            single_threaded::<rust_cc::Cc<RustCcMultiRef>>("rust-cc", N_ITERS)
+        );
+        rust_cc::config::config(|config| {
+            config.set_auto_collect(false);
+        })
+        .unwrap();
+        println!(
+            "{}",
+            single_threaded::<rust_cc::Cc<RustCcMultiRef>>("rust-cc (manual)", N_ITERS)
         );
         for n_threads in 1..=available_parallelism().unwrap().get() {
             // println!("--- {n_threads} threads");
