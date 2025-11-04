@@ -35,7 +35,7 @@ plt.show()
 multi_times.pop('shredder', None)
 for (i, (name, v)) in enumerate(multi_times.items()):
     (xs, ys) = v
-    plt.scatter(xs, ys, label=name, color=f"tab:{['blue', 'orange', 'red'][i]}")
+    plt.scatter(xs, ys, label=name, color=f"tab:{['blue', 'orange', 'green', 'purple'][i]}")
 plt.xlabel('Number of threads')
 plt.ylabel('Time taken for 1M ops (ms)')
 plt.title('Parallel garbage collector scaling (sans shredder)')

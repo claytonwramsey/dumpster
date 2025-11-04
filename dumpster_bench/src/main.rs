@@ -19,7 +19,8 @@ use std::{
 
 use dumpster_bench::{
     ArcMultiref, BaconRajanMultiref, DumpsterSyncMultiref, DumpsterUnsyncMultiref, GcMultiref,
-    Multiref, RcMultiref, ShredderMultiref, ShredderSyncMultiref, SyncMultiref,
+    Multiref, RcMultiref, RustCcMultiRef, ShredderMultiref, ShredderSyncMultiref, SyncMultiref,
+    TracingRcSyncMultiRef, TracingRcUnsyncMultiRef,
 };
 
 use parking_lot::Mutex;
@@ -91,6 +92,37 @@ fn main() {
             "{}",
             single_threaded::<bacon_rajan_cc::Cc<BaconRajanMultiref>>("bacon-rajan-cc", N_ITERS)
         );
+
+        rust_cc::config::config(|config| {
+            config.set_auto_collect(true);
+        })
+        .unwrap();
+        println!(
+            "{}",
+            single_threaded::<rust_cc::Cc<RustCcMultiRef>>("rust-cc", N_ITERS)
+        );
+        rust_cc::config::config(|config| {
+            config.set_auto_collect(false);
+        })
+        .unwrap();
+        println!(
+            "{}",
+            single_threaded::<rust_cc::Cc<RustCcMultiRef>>("rust-cc (manual)", N_ITERS)
+        );
+        println!(
+            "{}",
+            single_threaded::<tracing_rc::rc::Gc<TracingRcUnsyncMultiRef>>(
+                "tracing-rc (unsync)",
+                N_ITERS
+            )
+        );
+        println!(
+            "{}",
+            single_threaded::<tracing_rc::sync::Agc<TracingRcSyncMultiRef>>(
+                "tracing-rc (sync)",
+                N_ITERS
+            )
+        );
         for n_threads in 1..=available_parallelism().unwrap().get() {
             // println!("--- {n_threads} threads");
             dumpster::sync::set_collect_condition(dumpster::sync::default_collect_condition);
@@ -110,6 +142,14 @@ fn main() {
                     "dumpster (sync/manual)",
                     N_ITERS,
                     n_threads,
+                )
+            );
+            println!(
+                "{}",
+                multi_threaded::<tracing_rc::sync::Agc<TracingRcSyncMultiRef>>(
+                    "tracing-rc (sync)",
+                    N_ITERS,
+                    n_threads
                 )
             );
         }

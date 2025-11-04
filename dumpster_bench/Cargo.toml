@@ -18,3 +18,7 @@ fastrand = "2.0.0"
 shredder = "0.2.0"
 shredder_derive = "0.2.0"
 parking_lot = "0.12.3"
+rust-cc = "0.6.2"
+tracing-rc = { version = "0.2.0", default-features = false, features = [
+    "sync",
+] }
