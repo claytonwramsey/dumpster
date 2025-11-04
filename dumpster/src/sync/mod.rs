@@ -771,7 +771,7 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
     }
 }
 
-/// Allows coercing `T` of [`sync::Gc<T>`](Gc).
+/// Allows coercing `T` of [`Gc<T>`](Gc).
 ///
 /// This means that you can convert a `Gc` containing a strictly-sized type (such as `[T; N]`) into
 /// a `Gc` containing its unsized version (such as `[T]`), all without using nightly-only features.
