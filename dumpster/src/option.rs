@@ -443,15 +443,6 @@ macro_rules! make_option_gc {
         }
 
         impl<T: Trace $(+ $($bounds)*)? + ?Sized + 'static + Eq> Eq for OptionGc<T> {}
-
-        #[cfg(not(loom))]
-        #[cfg(feature = "coerce-unsized")]
-        impl<T, U> std::ops::CoerceUnsized<OptionGc<U>> for OptionGc<T>
-        where
-            T: std::marker::Unsize<U> + Trace $(+ $($bounds)*)? + ?Sized,
-            U: Trace $(+ $($bounds)*)? + ?Sized,
-        {
-        }
     };
 }
 

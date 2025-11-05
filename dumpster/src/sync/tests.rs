@@ -920,16 +920,6 @@ fn coerce_option_gc_using_macro() {
 }
 
 #[test]
-#[cfg(feature = "coerce-unsized")]
-fn coerce_option_gc() {
-    let gc: Gc<[u8; 3]> = Gc::new([1, 2, 3]);
-    let slice: OptionGc<[u8]> = OptionGc::some(gc.clone());
-    let trait_object: OptionGc<dyn Trace + Send + Sync> = OptionGc::some(gc);
-    _ = slice;
-    _ = trait_object;
-}
-
-#[test]
 fn new_cyclic_simple() {
     struct Cycle(Gc<Self>);
     unsafe impl<V: Visitor> TraceWith<V> for Cycle {
