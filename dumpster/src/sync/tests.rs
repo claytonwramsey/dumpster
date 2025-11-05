@@ -905,6 +905,31 @@ fn custom_trait_object() {
 }
 
 #[test]
+fn coerce_option_gc_using_macro() {
+    let gc: OptionGc<[i32]> = coerce_option_gc!(OptionGc::some(Gc::new([1, 2, 3])));
+    assert_eq!(gc.as_deref().unwrap(), &[1, 2, 3]);
+
+    let gc: OptionGc<dyn Trace + Send + Sync> = coerce_option_gc!(OptionGc::some(Gc::new(1)));
+    assert!(gc.is_some());
+
+    let gc: OptionGc<[i32]> = coerce_option_gc!(OptionGc::<[i32; 3]>::NONE);
+    assert!(gc.is_none());
+
+    let gc: OptionGc<dyn Trace + Send + Sync> = coerce_option_gc!(OptionGc::<i32>::NONE);
+    assert!(gc.is_none());
+}
+
+#[test]
+#[cfg(feature = "coerce-unsized")]
+fn coerce_option_gc() {
+    let gc: Gc<[u8; 3]> = Gc::new([1, 2, 3]);
+    let slice: OptionGc<[u8]> = OptionGc::some(gc.clone());
+    let trait_object: OptionGc<dyn Trace + Send + Sync> = OptionGc::some(gc);
+    _ = slice;
+    _ = trait_object;
+}
+
+#[test]
 fn new_cyclic_simple() {
     struct Cycle(Gc<Self>);
     unsafe impl<V: Visitor> TraceWith<V> for Cycle {

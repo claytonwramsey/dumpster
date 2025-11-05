@@ -99,6 +99,11 @@ impl<T: ?Sized> Nullable<T> {
         Nullable(self.0.with_addr(0))
     }
 
+    /// Returns this pointer with the given address.
+    pub fn with_addr(self, addr: usize) -> Nullable<T> {
+        Nullable(self.0.with_addr(addr))
+    }
+
     /// Determine whether this pointer is null.
     pub fn is_null(self) -> bool {
         self.as_option().is_none()
@@ -115,8 +120,13 @@ impl<T: ?Sized> Nullable<T> {
     }
 
     /// Create a new nullable pointer from a pointer.
-    pub fn from_ptr(ptr: *mut T) -> Self {
+    pub const fn from_ptr(ptr: *mut T) -> Self {
         Self(ptr)
+    }
+
+    /// Returns the pointer's address.
+    pub fn addr(self) -> usize {
+        self.0.addr()
     }
 
     /// Convert this pointer to a `NonNull<T>`, panicking if this pointer is null with message

@@ -37,6 +37,7 @@ use std::{
     any::TypeId,
     borrow::{Borrow, Cow},
     cell::Cell,
+    fmt::Debug,
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
@@ -45,7 +46,8 @@ use std::{
 };
 
 use crate::{
-    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, TraceWith, Visitor,
+    contains_gcs, option::make_option_gc, panic_deref_of_collected_object, ptr::Nullable, Trace,
+    TraceWith, Visitor,
 };
 
 use self::collect::{Dfs, DropAlloc, Dumpster, Mark, DUMPSTER};
@@ -107,6 +109,15 @@ pub struct Gc<T: Trace + ?Sized + 'static> {
     /// This can only happen observably if this `Gc` is accessed during the [`Drop`] implementation
     /// of a [`Trace`] type.
     ptr: Cell<Nullable<GcBox<T>>>,
+}
+
+make_option_gc! {
+    module: unsync,
+    visit_fn: visit_unsync,
+    extra_bounds: {},
+    from_ptr: |ptr| Gc::from_ptr(ptr),
+    get_ptr: |gc| gc.ptr.get(),
+    set_ptr: |gc, ptr| gc.ptr.set(ptr),
 }
 
 /// Collect all existing unreachable allocations.
@@ -565,7 +576,7 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// Constructs a `Gc<T>` from the innner `GcBox<T>` pointer.
     #[inline]
     #[must_use]
-    unsafe fn from_ptr(ptr: *const GcBox<T>) -> Self {
+    const unsafe fn from_ptr(ptr: *const GcBox<T>) -> Self {
         Self {
             ptr: Cell::new(Nullable::from_ptr(ptr.cast_mut())),
         }
@@ -779,12 +790,36 @@ macro_rules! __unsync_coerce_gc {
     ($gc:expr) => {{
         // Temporarily convert the `Gc` into a raw pointer to allow for coercion to occur.
         let ptr: *const _ = $crate::unsync::Gc::__private_into_ptr($gc);
-        unsafe { $crate::unsync::Gc::__private_from_ptr(ptr) }
+
+        // The user might call this macro in an unsafe context,
+        // making the `unsafe` "unused".
+        #[expect(clippy::allow_attributes)]
+        #[allow(unused_unsafe)]
+        unsafe {
+            $crate::unsync::Gc::__private_from_ptr(ptr)
+        }
     }};
 }
 
 #[doc(inline)]
 pub use crate::__unsync_coerce_gc as coerce_gc;
+
+/// Allows coercing `T` of [`OptionGc<T>`](OptionGc).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __unsync_coerce_option_gc {
+    ($option_gc:expr) => {{
+        let option_gc = $option_gc;
+        unsafe {
+            $crate::unsync::OptionGc::__private_from_gc($crate::unsync::coerce_gc!(
+                $crate::unsync::OptionGc::__private_into_gc(option_gc)
+            ))
+        }
+    }};
+}
+
+#[doc(inline)]
+pub use crate::__unsync_coerce_option_gc as coerce_option_gc;
 
 impl<T: Trace + ?Sized> Deref for Gc<T> {
     type Target = T;

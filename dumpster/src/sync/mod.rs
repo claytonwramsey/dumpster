@@ -66,6 +66,9 @@ use crate::{
     Trace, TraceWith, Visitor,
 };
 
+#[cfg(not(loom))]
+use crate::option::make_option_gc;
+
 use self::collect::{
     collect_all_await, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing, notify_created_gc,
     notify_dropped_gc,
@@ -134,6 +137,17 @@ pub struct Gc<T: Trace + Send + Sync + ?Sized + 'static> {
     ptr: UCell<Nullable<GcBox<T>>>,
     /// The tag information of this pointer, used for mutation detection when marking.
     tag: AtomicUsize,
+}
+
+// Loom's `AtomicUsize::new` is not const which prevents implementing `OptionGc::NONE`.
+#[cfg(not(loom))]
+make_option_gc! {
+    module: sync,
+    visit_fn: visit_sync,
+    extra_bounds: { Send + Sync },
+    from_ptr: |ptr| Gc::from_ptr(ptr, usize::MAX),
+    get_ptr: |gc| unsafe { gc.ptr.get() },
+    set_ptr: |gc, ptr| unsafe { gc.ptr.set(ptr) },
 }
 
 #[cfg(not(loom))]
@@ -635,6 +649,18 @@ where
     /// Constructs a `Gc<T>` from the innner `GcBox<T>` pointer and tag.
     #[inline]
     #[must_use]
+    #[cfg(not(loom))]
+    const unsafe fn from_ptr(ptr: *const GcBox<T>, tag: usize) -> Self {
+        Self {
+            ptr: UCell::new(Nullable::from_ptr(ptr.cast_mut())),
+            tag: AtomicUsize::new(tag),
+        }
+    }
+
+    /// Constructs a `Gc<T>` from the innner `GcBox<T>` pointer and tag.
+    #[inline]
+    #[must_use]
+    #[cfg(loom)]
     unsafe fn from_ptr(ptr: *const GcBox<T>, tag: usize) -> Self {
         Self {
             ptr: UCell::new(Nullable::from_ptr(ptr.cast_mut())),
@@ -802,12 +828,36 @@ macro_rules! __sync_coerce_gc {
     ($gc:expr) => {{
         // Temporarily convert the `Gc` into a raw pointer to allow for coercion to occur.
         let (ptr, tag): (*const _, usize) = $crate::sync::Gc::__private_into_ptr($gc);
-        unsafe { $crate::sync::Gc::__private_from_ptr(ptr, tag) }
+
+        // The user might call this macro in an unsafe context,
+        // making the `unsafe` "unused".
+        #[expect(clippy::allow_attributes)]
+        #[allow(unused_unsafe)]
+        unsafe {
+            $crate::sync::Gc::__private_from_ptr(ptr, tag)
+        }
     }};
 }
 
 #[doc(inline)]
 pub use crate::__sync_coerce_gc as coerce_gc;
+
+/// Allows coercing `T` of [`OptionGc<T>`](OptionGc).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __sync_coerce_option_gc {
+    ($option_gc:expr) => {{
+        let option_gc = $option_gc;
+        unsafe {
+            $crate::sync::OptionGc::__private_from_gc($crate::sync::coerce_gc!(
+                $crate::sync::OptionGc::__private_into_gc(option_gc)
+            ))
+        }
+    }};
+}
+
+#[doc(inline)]
+pub use crate::__sync_coerce_option_gc as coerce_option_gc;
 
 impl<T> Clone for Gc<T>
 where
