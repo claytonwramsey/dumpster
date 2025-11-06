@@ -296,8 +296,8 @@ where
 
     /// Construct a self-referencing `Gc`.
     ///
-    /// `new_cyclic` first allocates memory for `T`, then constructs a dead `Gc` pointing to the
-    /// allocation. The dead `Gc` is then passed to `data_fn` to construct a value of `T`, which
+    /// `new_cyclic` first allocates memory for `T`, then constructs a dead `Gc`.
+    ///  The dead `Gc` is then passed to `data_fn` to construct a value of `T`, which
     /// is stored in the allocation. Finally, `new_cyclic` will update the dead self-referential
     /// `Gc`s and rehydrate them to produce the final value.
     ///
@@ -439,7 +439,7 @@ where
     /// assert!(Gc::try_deref(&gc1).is_some());
     /// ```
     ///
-    /// The only way to get a `Gc` which fails on `try_clone` is by accessing a `Gc` during its
+    /// The only way to get a `Gc` that fails on `try_deref` is by accessing a `Gc` during its
     /// `Drop` implementation.
     ///
     /// ```
@@ -468,12 +468,10 @@ where
 
     /// Attempt to clone this `Gc`.
     ///
-    /// This function will return `None` if `self` is a "dead" `Gc`, which points to an
-    /// already-deallocated object.
-    /// This can only occur if a `Gc` is accessed during the `Drop` implementation of a
-    /// [`Trace`] object.
+    /// This function will return `None` if `self` is a "dead" `Gc`, which does not point to an
+    /// existing object. For details on dead `Gc`s, refer to [`Gc::is_dead`].
     ///
-    /// For a version which panics instead of returning `None`, consider using [`Clone`].
+    /// For a version that simply clones the dead `Gc`, use [`Clone`].
     ///
     /// # Examples
     ///
@@ -491,20 +489,18 @@ where
     ///
     /// ```
     /// use dumpster::{sync::Gc, Trace};
-    /// use std::sync::Mutex;
     ///
     /// #[derive(Trace)]
-    /// struct Cycle(Mutex<Option<Gc<Self>>>);
+    /// struct Cycle(Gc<Self>);
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         let cloned = Gc::try_clone(self.0.lock().unwrap().as_ref().unwrap());
+    ///         let cloned = Gc::try_clone(&self.0);
     ///         assert!(cloned.is_none());
     ///     }
     /// }
     ///
-    /// let gc1 = Gc::new(Cycle(Mutex::new(None)));
-    /// *gc1.0.lock().unwrap() = Some(gc1.clone());
+    /// let gc1 = Gc::new_cyclic(|gc| Cycle(gc));
     /// # drop(gc1);
     /// # dumpster::sync::collect();
     /// ```
@@ -590,29 +586,26 @@ where
 
     /// Determine whether this is a dead `Gc`.
     ///
-    /// A `Gc` is dead if it is accessed while the value it points to has been destroyed; this only
-    /// occurs if one attempts to interact with a `Gc` during a structure's [`Drop`] implementation.
-    /// However, this is not always guaranteed - sometime the garbage collector will leave `Gc`s
-    /// alive in differing orders, so users should not rely on the destruction order of `Gc`s to
-    /// determine whether it is dead.
+    /// A `Gc` is dead if it is not usable as a reference to any value.
+    /// Currently, a dead `Gc` may only be produced by accessing a `Gc` inside of the `Drop`
+    /// implementation of a garbage-collected value or by using the `Gc` provided to the
+    /// construction function in [`Gc::new_cyclic`].
     ///
     /// # Examples
     ///
     /// ```
     /// use dumpster::{sync::Gc, Trace};
-    /// use std::sync::OnceLock;
     ///
     /// #[derive(Trace)]
-    /// struct Cycle(OnceLock<Gc<Self>>);
+    /// struct Cycle(Gc<Self>);
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         assert!(Gc::is_dead(&self.0.get().unwrap()));
+    ///         assert!(Gc::is_dead(&self.0));
     ///     }
     /// }
     ///
-    /// let gc1 = Gc::new(Cycle(OnceLock::new()));
-    /// gc1.0.set(gc1.clone());
+    /// let gc1 = Gc::new_cyclic(|gc| Cycle(gc));
     /// # drop(gc1);
     /// # dumpster::sync::collect();
     /// ```
@@ -815,12 +808,7 @@ where
 {
     /// Clone a garbage-collected reference.
     /// This does not clone the underlying data.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if the `Gc` being cloned points to a deallocated object.
-    /// This is only possible if said `Gc` is accessed during the `Drop` implementation of a
-    /// `Trace` value.
+    /// If this `Gc` is [dead](`Gc::is_dead`), this will produce another dead `Gc`.
     ///
     /// For a fallible version, refer to [`Gc::try_clone`].
     ///
@@ -837,31 +825,32 @@ where
     /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
     /// ```
     ///
-    /// The following example will fail, because cloning a `Gc` to a deallocated object is wrong.
+    /// Note that you can also clone a dead `Gc`.
     ///
-    /// ```should_panic
+    /// ```
     /// use dumpster::{sync::Gc, Trace};
     /// use std::sync::Mutex;
     ///
     /// #[derive(Trace)]
-    /// struct Cycle(Mutex<Option<Gc<Self>>>);
+    /// struct Cycle(Gc<Self>);
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         let _ = self.0.lock().unwrap().as_ref().unwrap().clone();
+    ///         let gc = self.0.clone();
+    ///         assert!(Gc::is_dead(&gc));
     ///     }
     /// }
     ///
-    /// let gc1 = Gc::new(Cycle(Mutex::new(None)));
-    /// *gc1.0.lock().unwrap() = Some(gc1.clone());
+    /// let gc1 = Gc::new_cyclic(|gc| Cycle(gc));
     /// # drop(gc1);
     /// # dumpster::sync::collect();
     /// ```
     fn clone(&self) -> Gc<T> {
-        let box_ref = unsafe {
-            self.ptr.get().expect("attempt to clone Gc to already-deallocated object. \
-            This means a Gc was accessed during a Drop implementation, likely implying a bug in your code.").as_ref()
-        };
+        if Gc::is_dead(&self) {
+            // Clone dead Gcs by doing a naive copy.
+            return unsafe { ptr::read(self) };
+        }
+        let box_ref = unsafe { self.ptr.get().unwrap().as_ref() };
 
         // increment strong count before generation to ensure cleanup never underestimates ref count
         let old_strong = box_ref.strong.fetch_add(1, Ordering::Acquire);
