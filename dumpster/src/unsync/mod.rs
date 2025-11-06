@@ -526,11 +526,9 @@ impl<T: Trace + ?Sized> Gc<T> {
 
     /// Determine whether this is a dead `Gc`.
     ///
-    /// A `Gc` is dead if it is accessed while the value it points to has been destroyed; this only
-    /// occurs if one attempts to interact with a `Gc` during a structure's [`Drop`] implementation.
-    /// However, this is not always guaranteed - sometime the garbage collector will leave `Gc`s
-    /// alive in differing orders, so users should not rely on the destruction order of `Gc`s to
-    /// determine whether it is dead.
+    /// A `Gc` is dead if it does not point to a valid value.
+    /// Such a `Gc` can only be made in one of two ways: first, if a `Gc` is accessed during the
+    /// `Drop` implementation of a structure, and second, if a `Gc` leaks out of [`Gc::new_cyclic`].
     ///
     /// # Examples
     ///
@@ -845,12 +843,7 @@ impl<T: Trace + ?Sized> Deref for Gc<T> {
 impl<T: Trace + ?Sized> Clone for Gc<T> {
     /// Create a duplicate reference to the same data pointed to by `self`.
     /// This does not duplicate the data.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if the `Gc` being cloned points to a deallocated object.
-    /// This is only possible if said `Gc` is accessed during the `Drop` implementation of a
-    /// `Trace` value.
+    /// If this `Gc` [is dead](`Gc::is_dead`), the cloned value will also be a dead `Gc`.
     ///
     /// For a fallible version, refer to [`Gc::try_clone`].
     ///
@@ -867,9 +860,9 @@ impl<T: Trace + ?Sized> Clone for Gc<T> {
     /// assert_eq!(gc2.load(Ordering::Relaxed), 1);
     /// ```
     ///
-    /// The following example will fail, because cloning a `Gc` to a deallocated object is wrong.
+    /// You can also clone dead `Gc`s.
     ///
-    /// ```should_panic
+    /// ```
     /// use dumpster::{unsync::Gc, Trace};
     ///
     /// #[derive(Trace)]
@@ -877,7 +870,8 @@ impl<T: Trace + ?Sized> Clone for Gc<T> {
     ///
     /// impl Drop for Cycle {
     ///     fn drop(&mut self) {
-    ///         let _ = self.0.clone();
+    ///         let gc = self.0.clone();
+    ///         assert!(Gc::is_dead(&gc));
     ///     }
     /// }
     ///
@@ -886,9 +880,13 @@ impl<T: Trace + ?Sized> Clone for Gc<T> {
     /// # dumpster::unsync::collect();
     /// ```
     fn clone(&self) -> Self {
+        let Some(ptr) = self.ptr.get().as_option() else {
+            return Self {
+                ptr: self.ptr.clone(),
+            };
+        };
         unsafe {
-            let box_ref = self.ptr.get().expect("Attempt to clone Gc to already-collected object. \
-            This means a Gc escaped from a Drop implementation, likely implying a bug in your code.").as_ref();
+            let box_ref = ptr.as_ref();
             box_ref
                 .ref_count
                 .set(box_ref.ref_count.get().saturating_add(1));
