@@ -846,7 +846,7 @@ where
     /// # dumpster::sync::collect();
     /// ```
     fn clone(&self) -> Gc<T> {
-        if Gc::is_dead(&self) {
+        if Gc::is_dead(self) {
             // Clone dead Gcs by doing a naive copy.
             return unsafe { ptr::read(self) };
         }
