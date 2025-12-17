@@ -19,6 +19,7 @@ use syn::{
 };
 
 #[proc_macro_derive(Trace, attributes(dumpster))]
+/// Derive `Trace` for a type.
 pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let mut dumpster: Path = parse_quote!(::dumpster);

@@ -12,5 +12,5 @@ categories = ["data-structures", "memory-management"]
 publish = false
 
 [dev-dependencies]
-dumpster = { version = "1.1.0", path = "../dumpster" }
-dumpster_derive = { version = "1.1.0", path = "../dumpster_derive" }
+dumpster = { path = "../dumpster" }
+dumpster_derive = { path = "../dumpster_derive" }
