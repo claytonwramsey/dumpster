@@ -1,5 +1,15 @@
 # `dumpster` Changelog
 
+## 2.0.0
+
+### Breaking changes
+
+- Refactored `Trace` to use `TraceWith<V>`.
+
+### New features
+
+- Added `sync::Gc::new_cyclic`.
+
 ## 1.2.0
 
 ### New features
