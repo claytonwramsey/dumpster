@@ -9,6 +9,7 @@ repository = "https://github.com/claytonwramsey/dumpster"
 readme = "../README.md"
 keywords = ["dumpster", "garbage_collector", "benchmark"]
 categories = ["data-structures", "memory-management"]
+publish = false
 
 [dependencies]
 dumpster = { version = "1.1.0", path = "../dumpster", features = ["derive"] }
