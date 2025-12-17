@@ -71,7 +71,7 @@ To install, simply add `dumpster` as a dependency to your project.
 
 ```toml
 [dependencies]
-dumpster = "1.2.0"
+dumpster = "2.0.0"
 ```
 
 ## Optional features
@@ -117,7 +117,7 @@ To use `coerce-unsized`, edit your installation to `Cargo.toml` to include the f
 
 ```toml
 [dependencies]
-dumpster = { version = "1.2.0", features = ["coerce-unsized"]}
+dumpster = { version = "2.0.0", features = ["coerce-unsized"]}
 ```
 
 ## Loom support
