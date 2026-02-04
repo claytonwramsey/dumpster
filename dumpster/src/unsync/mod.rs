@@ -40,7 +40,7 @@ use std::{
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
-    ptr::{self, addr_of, addr_of_mut, copy_nonoverlapping, drop_in_place, NonNull},
+    ptr::{self, addr_of, addr_of_mut, drop_in_place, NonNull},
     slice,
 };
 
@@ -1365,18 +1365,6 @@ where
         // Collect into a `Vec` for O(n) performance.
         // TODO: this could be slightly optimized by using the `Gc<[]>` layout for perf, but this is
         // a later problem.
-        let mut t_vec = iter.into_iter().collect::<Vec<_>>();
-        let n = t_vec.len();
-        // if allocation fails, t_vec will be dropped
-        let box_ptr = Gc::allocate_for_slice(n);
-        let gc = unsafe {
-            copy_nonoverlapping(t_vec.as_ptr(), (*box_ptr).value.as_mut_ptr(), n);
-            t_vec.set_len(0); // forget old values
-            Gc::from_ptr(box_ptr)
-        };
-
-        DUMPSTER.with(Dumpster::notify_created_gc);
-
-        gc
+        Self::from(iter.into_iter().collect::<Vec<_>>())
     }
 }
