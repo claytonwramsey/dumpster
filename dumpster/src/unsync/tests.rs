@@ -750,3 +750,33 @@ fn custom_trait_object() {
     let gc: Gc<dyn MyTrait> = coerce_gc!(gc);
     _ = gc;
 }
+
+#[test]
+fn gc_from_iter() {
+    let _gc = (0..100).collect::<Gc<[_]>>();
+}
+
+#[test]
+fn self_referential_from_iter() {
+    struct Ab {
+        a: Gc<Self>,
+        b: Gc<Self>,
+    }
+
+    unsafe impl<V: Visitor> TraceWith<V> for Ab {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.a.accept(visitor)?;
+            self.b.accept(visitor)?;
+
+            Ok(())
+        }
+    }
+
+    let mut gcs = Vec::<Gc<Ab>>::new();
+    gcs.push(Gc::new_cyclic(|a: Gc<Ab>| Ab { a: a.clone(), b: a }));
+    for _ in 0..10 {
+        let b = gcs.last().unwrap().clone();
+        gcs.push(Gc::new_cyclic(|a: Gc<Ab>| Ab { a, b }));
+    }
+    let _big_gc = gcs.into_iter().collect::<Gc<[_]>>();
+}
