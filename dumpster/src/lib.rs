@@ -114,7 +114,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = "2.0.0"
+//! dumpster = "2.1.0"
 //! ```
 //!
 //! # Optional features
@@ -163,7 +163,7 @@ let gc1: Gc<[u8]> = Gc::new([1, 2, 3]);
 //!
 //! ```toml
 //! [dependencies]
-//! dumpster = { version = "2.0.0", features = ["coerce-unsized"]}
+//! dumpster = { version = "2.1.0", features = ["coerce-unsized"]}
 //! ```
 //!
 //! ## Loom support

@@ -1,5 +1,11 @@
 # `dumpster` Changelog
 
+## 2.1.0
+
+### New features
+
+- Implemented `FromIterator` for `Gc<[T]>`.
+
 ## 2.0.0
 
 ### Breaking changes
