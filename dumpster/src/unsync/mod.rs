@@ -35,12 +35,12 @@
 use crate::{
     contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, TraceWith, Visitor,
 };
-use std::fmt::Display;
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
     any::TypeId,
     borrow::{Borrow, Cow},
     cell::Cell,
+    fmt::Display,
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
@@ -137,7 +137,7 @@ pub struct Gc<T: Trace + ?Sized + 'static> {
 /// # }
 /// ```
 pub fn collect() {
-    DUMPSTER.with(Dumpster::collect_all);
+    _ = DUMPSTER.try_with(Dumpster::collect_all);
 }
 
 /// Information passed to a [`CollectCondition`] used to determine whether the garbage collector
@@ -205,7 +205,7 @@ pub fn default_collect_condition(info: &CollectInfo) -> bool {
 /// set_collect_condition(never_collect);
 /// ```
 pub fn set_collect_condition(f: CollectCondition) {
-    DUMPSTER.with(|d| d.collect_condition.set(f));
+    _ = DUMPSTER.try_with(|d| d.collect_condition.set(f));
 }
 
 #[repr(C)]
@@ -233,7 +233,7 @@ impl<T: Trace + ?Sized> Gc<T> {
     where
         T: Sized,
     {
-        DUMPSTER.with(Dumpster::notify_created_gc);
+        _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
         Gc {
             ptr: Cell::new(Nullable::new(NonNull::from(Box::leak(Box::new(GcBox {
                 ref_count: Cell::new(NonZeroUsize::MIN),
@@ -306,7 +306,7 @@ impl<T: Trace + ?Sized> Gc<T> {
             fn drop(&mut self) {
                 if self.initialized {
                     // push this `Gc` into the destruction queue
-                    DUMPSTER.with(|d| d.mark_dirty(self.ptr));
+                    _ = DUMPSTER.try_with(|d| d.mark_dirty(self.ptr));
                 } else {
                     // deallocate
                     unsafe {
@@ -320,7 +320,7 @@ impl<T: Trace + ?Sized> Gc<T> {
         }
 
         // make an uninitialized allocation
-        DUMPSTER.with(Dumpster::notify_created_gc);
+        _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
         let mut gcbox = NonNull::from(Box::leak(Box::new(GcBox {
             ref_count: Cell::new(NonZeroUsize::MIN),
             value: Uninitialized(MaybeUninit::<T>::uninit()),
@@ -625,7 +625,7 @@ impl Visitor for Rehydrate {
                 box_ref
                     .ref_count
                     .set(box_ref.ref_count.get().saturating_add(1));
-                DUMPSTER.with(Dumpster::notify_created_gc);
+                _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
             }
         }
     }
@@ -677,7 +677,7 @@ impl<T: Trace + Clone> Gc<T> {
             // The dumpster must not contain this allocation while we hold
             // a mutable reference to its value because on collection
             // it would dereference the value to trace it.
-            DUMPSTER.with(|d| d.mark_cleaned(ptr));
+            _ = DUMPSTER.try_with(|d| d.mark_cleaned(ptr));
         } else {
             // We don't have unique access to the value so we need to clone it.
             *this = Gc::new(box_ref.value.clone());
@@ -893,7 +893,7 @@ impl<T: Trace + ?Sized> Clone for Gc<T> {
                 .ref_count
                 .set(box_ref.ref_count.get().saturating_add(1));
         }
-        DUMPSTER.with(|d| {
+        _ = DUMPSTER.try_with(|d| {
             d.notify_created_gc();
             // d.mark_cleaned(self.ptr);
         });
@@ -912,11 +912,48 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
         let Some(mut ptr) = self.ptr.get().as_option() else {
             return;
         };
-        DUMPSTER.with(|d| {
+
+        let dumpster_is_destroyed = DUMPSTER
+            .try_with(|d| {
+                let box_ref = unsafe { ptr.as_ref() };
+                match box_ref.ref_count.get() {
+                    NonZeroUsize::MIN => {
+                        d.mark_cleaned(ptr);
+                        unsafe {
+                            // this was the last reference, drop unconditionally
+                            drop_in_place(addr_of_mut!(ptr.as_mut().value));
+                            // note: `box_ref` is no longer usable
+                            dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
+                        }
+                    }
+                    n => {
+                        // decrement the ref count - but another reference to this data still
+                        // lives
+                        box_ref
+                            .ref_count
+                            .set(NonZeroUsize::new(n.get() - 1).unwrap());
+
+                        if contains_gcs(&box_ref.value).unwrap_or(true) {
+                            // remaining references could be a cycle - therefore, mark it as dirty
+                            // so we can check later
+                            d.mark_dirty(ptr);
+                        }
+                    }
+                }
+                // Notify that a GC has been dropped, potentially triggering a cleanup
+                d.notify_dropped_gc();
+            })
+            .is_err();
+
+        if dumpster_is_destroyed {
+            // The `DUMPSTER` thread local has already been destroyed. This will only happen
+            // when if `Gc` is itself stored in a thread local or was created in a thread local
+            // destructor. We still do reference counting but won't be able to collect cycles.
+
             let box_ref = unsafe { ptr.as_ref() };
+
             match box_ref.ref_count.get() {
                 NonZeroUsize::MIN => {
-                    d.mark_cleaned(ptr);
                     unsafe {
                         // this was the last reference, drop unconditionally
                         drop_in_place(addr_of_mut!(ptr.as_mut().value));
@@ -930,17 +967,9 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
                     box_ref
                         .ref_count
                         .set(NonZeroUsize::new(n.get() - 1).unwrap());
-
-                    if contains_gcs(&box_ref.value).unwrap_or(true) {
-                        // remaining references could be a cycle - therefore, mark it as dirty
-                        // so we can check later
-                        d.mark_dirty(ptr);
-                    }
                 }
             }
-            // Notify that a GC has been dropped, potentially triggering a cleanup
-            d.notify_dropped_gc();
-        });
+        }
     }
 }
 
@@ -999,7 +1028,7 @@ impl CollectInfo {
     /// set_collect_condition(have_many_gcs_dropped);
     /// ```
     pub fn n_gcs_dropped_since_last_collect(&self) -> usize {
-        DUMPSTER.with(|d| d.n_ref_drops.get())
+        DUMPSTER.try_with(|d| d.n_ref_drops.get()).unwrap_or(0)
     }
 
     #[must_use]
@@ -1018,7 +1047,7 @@ impl CollectInfo {
     /// set_collect_condition(do_many_gcs_exist);
     /// ```
     pub fn n_gcs_existing(&self) -> usize {
-        DUMPSTER.with(|d| d.n_refs_living.get())
+        DUMPSTER.try_with(|d| d.n_refs_living.get()).unwrap_or(0)
     }
 }
 
@@ -1181,7 +1210,7 @@ impl<T: Trace + Clone> From<&[T]> for Gc<[T]> {
             // All clear. Forget the guard so it doesn't free the new GcBox.
             mem::forget(guard);
 
-            DUMPSTER.with(Dumpster::notify_created_gc);
+            _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
 
             Self {
                 ptr: Cell::new(Nullable::from_ptr(ptr)),
@@ -1306,7 +1335,7 @@ impl<T: Trace> From<Box<T>> for Gc<T> {
             let src = Box::from_raw(bptr.cast::<mem::ManuallyDrop<T>>());
             drop(src);
 
-            DUMPSTER.with(Dumpster::notify_created_gc);
+            _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
             Self::from_ptr(gc_ptr)
         }
     }
@@ -1338,7 +1367,7 @@ impl<T: Trace> From<Vec<T>> for Gc<[T]> {
 
             let _ = Vec::from_raw_parts(vec_ptr, 0, vec_cap);
 
-            DUMPSTER.with(Dumpster::notify_created_gc);
+            _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
             Self::from_ptr(gc_ptr)
         }
     }

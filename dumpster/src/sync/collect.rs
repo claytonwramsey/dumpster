@@ -153,7 +153,7 @@ thread_local! {
 /// completion of the collection.
 /// Ensures that all allocations dropped on the calling thread are cleaned up
 pub fn collect_all_await() {
-    DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
+    _ = DUMPSTER.try_with(|d| d.deliver_to(&GARBAGE_TRUCK));
     GARBAGE_TRUCK.collect_all();
     drop(GARBAGE_TRUCK.collecting_lock.read());
 }
@@ -166,7 +166,7 @@ pub fn collect_all_await() {
 pub fn notify_dropped_gc() {
     GARBAGE_TRUCK.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
     GARBAGE_TRUCK.n_gcs_dropped.fetch_add(1, Ordering::Relaxed);
-    DUMPSTER.with(|dumpster| {
+    _ = DUMPSTER.try_with(|dumpster| {
         dumpster.n_drops.set(dumpster.n_drops.get() + 1);
         if dumpster.is_full() {
             dumpster.deliver_to(&GARBAGE_TRUCK);
@@ -200,7 +200,7 @@ pub(super) unsafe fn mark_dirty<T>(allocation: NonNull<GcBox<T>>)
 where
     T: Trace + Send + Sync + ?Sized,
 {
-    DUMPSTER.with(|dumpster| {
+    _ = DUMPSTER.try_with(|dumpster| {
         if dumpster
             .contents
             .borrow_mut()
@@ -228,7 +228,7 @@ pub(super) fn mark_clean<T>(allocation: &GcBox<T>)
 where
     T: Trace + Send + Sync + ?Sized,
 {
-    DUMPSTER.with(|dumpster| {
+    _ = DUMPSTER.try_with(|dumpster| {
         if dumpster
             .contents
             .borrow_mut()
@@ -245,7 +245,7 @@ where
 ///
 /// This function is available to to support testing, but currently is not part of the public API.
 pub(super) fn deliver_dumpster() {
-    DUMPSTER.with(|d| d.deliver_to(&GARBAGE_TRUCK));
+    _ = DUMPSTER.try_with(|d| d.deliver_to(&GARBAGE_TRUCK));
 }
 
 /// Set the function which determines whether the garbage collector should be run.
