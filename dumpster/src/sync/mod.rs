@@ -36,6 +36,14 @@ mod loom_tests;
 #[cfg(all(test, not(loom)))]
 mod tests;
 
+#[cfg(loom)]
+use loom::{
+    lazy_static,
+    sync::atomic::{fence, AtomicUsize, Ordering},
+};
+use std::fmt::Display;
+#[cfg(not(loom))]
+use std::sync::atomic::{fence, AtomicUsize, Ordering};
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
     any::TypeId,
@@ -47,14 +55,6 @@ use std::{
     ptr::{self, addr_of, addr_of_mut, drop_in_place, NonNull},
     slice,
 };
-
-#[cfg(loom)]
-use loom::{
-    lazy_static,
-    sync::atomic::{fence, AtomicUsize, Ordering},
-};
-#[cfg(not(loom))]
-use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use crate::{
     contains_gcs, panic_deref_of_collected_object,
@@ -1169,6 +1169,19 @@ impl<T: Trace + Send + Sync + ?Sized> Debug for Gc<T> {
             self.ptr,
             self.tag.load(Ordering::Acquire)
         )
+    }
+}
+
+impl<T: Trace + Send + Sync + Display + ?Sized> Display for Gc<T> {
+    /// Formats the value using its `Display` implementation.
+    ///
+    /// # Note
+    ///
+    /// If `T` contains cyclic references through `Gc` pointers and its `Display` implementation
+    /// attempts to traverse them, this may cause infinite recursion. Types with potential cycles
+    /// should implement `Display` to avoid following cyclic references.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&**self, f)
     }
 }
 

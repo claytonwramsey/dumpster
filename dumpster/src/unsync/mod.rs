@@ -32,6 +32,10 @@
 //! foo.refs.borrow_mut().push(foo.clone());
 //! ```
 
+use crate::{
+    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, TraceWith, Visitor,
+};
+use std::fmt::Display;
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
     any::TypeId,
@@ -42,10 +46,6 @@ use std::{
     ops::Deref,
     ptr::{self, addr_of, addr_of_mut, drop_in_place, NonNull},
     slice,
-};
-
-use crate::{
-    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, TraceWith, Visitor,
 };
 
 use self::collect::{Dfs, DropAlloc, Dumpster, Mark, DUMPSTER};
@@ -1059,6 +1059,19 @@ where
     T: std::marker::Unsize<U> + Trace + ?Sized,
     U: Trace + ?Sized,
 {
+}
+
+impl<T: Trace + Send + Sync + Display + ?Sized> Display for Gc<T> {
+    /// Formats the value using its `Display` implementation.
+    ///
+    /// # Note
+    ///
+    /// If `T` contains cyclic references through `Gc` pointers and its `Display` implementation
+    /// attempts to traverse them, this may cause infinite recursion. Types with potential cycles
+    /// should implement `Display` to avoid following cyclic references.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&**self, f)
+    }
 }
 
 impl<T: Trace> From<T> for Gc<T> {
