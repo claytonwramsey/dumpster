@@ -37,6 +37,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.toolchain }}
+      - name: Generate lockfile
+        run: cargo generate-lockfile
       - name: Cache
         id: cache-restore
         uses: actions/cache@v4
@@ -89,6 +91,8 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           components: miri
+      - name: Generate lockfile
+        run: cargo generate-lockfile
       - name: Cache
         id: cache-restore
         uses: actions/cache@v4
@@ -129,6 +133,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Generate lockfile
+        run: cargo generate-lockfile
       - name: Cache
         id: cache-restore
         uses: actions/cache@v4
