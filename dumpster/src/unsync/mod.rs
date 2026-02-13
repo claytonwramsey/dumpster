@@ -1090,7 +1090,7 @@ where
 {
 }
 
-impl<T: Trace + Send + Sync + Display + ?Sized> Display for Gc<T> {
+impl<T: Trace + Display + ?Sized> Display for Gc<T> {
     /// Formats the value using its `Display` implementation.
     ///
     /// # Note
