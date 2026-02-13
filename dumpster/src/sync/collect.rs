@@ -11,7 +11,7 @@
 use std::{
     alloc::{dealloc, Layout},
     cell::{Cell, LazyCell, RefCell},
-    collections::{hash_map::Entry, HashMap},
+    collections::hash_map::Entry,
     hash::Hash,
     mem::{replace, swap, take, transmute},
     ptr::{drop_in_place, NonNull},
@@ -19,6 +19,8 @@ use std::{
 
 #[cfg(not(loom))]
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+
+use foldhash::{HashMap, HashMapExt};
 
 #[cfg(loom)]
 use loom::{

@@ -11,11 +11,13 @@
 use std::{
     alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::hash_map::Entry,
     mem::take,
     num::NonZeroUsize,
     ptr::{drop_in_place, NonNull},
 };
+
+use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
 
 use crate::{
     ptr::Erased,

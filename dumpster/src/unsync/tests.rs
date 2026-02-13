@@ -8,12 +8,14 @@
 
 //! Simple tests using manual implementations of [`Trace`].
 
+use foldhash::{HashMap, HashMapExt};
+
 use crate::{unsync::coerce_gc, Visitor};
 
 use super::*;
 use std::{
     cell::{OnceCell, RefCell},
-    collections::{hash_map::Entry, HashMap},
+    collections::hash_map::Entry,
     mem::{take, transmute, MaybeUninit},
     sync::{
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
