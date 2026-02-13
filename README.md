@@ -1,7 +1,7 @@
 # `dumpster`: A cycle-tracking garbage collector for Rust
 
-[![Crates.io page](https://img.shields.io/crates/v/capt)](https://crates.io/crates/dumpster)
-[![docs.rs](https://img.shields.io/docsrs/capt)](https://docs.rs/dumpster)
+[![Crates.io page](https://img.shields.io/crates/v/dumpster)](https://crates.io/crates/dumpster)
+[![docs.rs](https://img.shields.io/docsrs/dumpster)](https://docs.rs/dumpster)
 
 `dumpster` is a cycle-detecting garbage collector for Rust.
 It detects unreachable allocations and automatically frees them.
