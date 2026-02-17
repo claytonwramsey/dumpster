@@ -166,6 +166,13 @@ pub fn collect_all_await() {
 pub fn notify_dropped_gc() {
     GARBAGE_TRUCK.n_gcs_existing.fetch_sub(1, Ordering::Relaxed);
     GARBAGE_TRUCK.n_gcs_dropped.fetch_add(1, Ordering::Relaxed);
+
+    // Do not do deliver or collect if we are currently cleaning or this thread is dying.
+    // This prevents deadlocks.
+    if !CLEANING.try_with(Cell::get).is_ok_and(|x| !x) {
+        return;
+    }
+
     _ = DUMPSTER.try_with(|dumpster| {
         dumpster.n_drops.set(dumpster.n_drops.get() + 1);
         if dumpster.is_full() {
@@ -286,9 +293,8 @@ impl Dumpster {
     /// Deliver all [`TrashCan`]s contained by this dumpster to the garbage collect, removing them
     /// from the local dumpster storage and adding them to the global truck.
     fn deliver_to(&self, garbage_truck: &GarbageTruck) {
-        self.n_drops.set(0);
-
         let mut guard = garbage_truck.contents.lock();
+        self.n_drops.set(0);
         self.deliver_to_contents(&mut guard);
     }
 
