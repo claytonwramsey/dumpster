@@ -7,7 +7,7 @@
 */
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::hash_map::Entry,
     mem::{swap, take, transmute, MaybeUninit},
     ptr::NonNull,
     sync::{
@@ -15,6 +15,8 @@ use std::{
         Mutex, OnceLock,
     },
 };
+
+use foldhash::{HashMap, HashMapExt};
 
 use crate::{sync::coerce_gc, Visitor};
 
