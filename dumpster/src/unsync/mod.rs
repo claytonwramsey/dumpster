@@ -32,9 +32,7 @@
 //! foo.refs.borrow_mut().push(foo.clone());
 //! ```
 
-use crate::{
-    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, TraceWith, Visitor,
-};
+use crate::{panic_deref_of_collected_object, ptr::Nullable, Trace, TraceWith, Visitor};
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
     any::TypeId,
@@ -933,11 +931,9 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
                             .ref_count
                             .set(NonZeroUsize::new(n.get() - 1).unwrap());
 
-                        if contains_gcs(&box_ref.value).unwrap_or(true) {
-                            // remaining references could be a cycle - therefore, mark it as dirty
-                            // so we can check later
-                            d.mark_dirty(ptr);
-                        }
+                        // remaining references could be a cycle - therefore, mark it as dirty
+                        // so we can check later
+                        d.mark_dirty(ptr);
                     }
                 }
                 // Notify that a GC has been dropped, potentially triggering a cleanup

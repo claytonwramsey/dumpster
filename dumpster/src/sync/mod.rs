@@ -57,7 +57,7 @@ use std::{
 };
 
 use crate::{
-    contains_gcs, panic_deref_of_collected_object,
+    panic_deref_of_collected_object,
     ptr::Nullable,
     sync::{
         cell::UCell,
@@ -914,13 +914,12 @@ where
                 }
             }
             _ => {
-                if contains_gcs(&box_ref.value).unwrap_or(true) {
-                    // SAFETY: `ptr` is convertible to a reference
-                    // We don't use `box_ref` here because that pointer
-                    // only has `SharedReadOnly` permissions under the stacked borrows model
-                    // when we need `Unique` for the `TrashCan`.
-                    unsafe { mark_dirty(ptr) };
-                }
+                // SAFETY: `ptr` is convertible to a reference
+                // We don't use `box_ref` here because that pointer
+                // only has `SharedReadOnly` permissions under the stacked borrows model
+                // when we need `Unique` for the `TrashCan`.
+                unsafe { mark_dirty(ptr) };
+
                 box_ref.weak.fetch_sub(1, Ordering::Release);
             }
         }
