@@ -188,12 +188,13 @@ fn unsync_as_ptr() {
     assert_ne!(Gc::as_ptr(&b.0), empty2_ptr);
 }
 
-#[test]
-fn derive_trace_has_field_bounds_not_generic_bounds() {
-    const fn implements_trace(_: &impl Trace) {}
+const fn assert_implements_trace(_: &impl Trace) {}
 
-    struct DoesNotImplTrace;
+/// Some struct that doesn't implement `Trace`.
+struct DoesNotImplTrace;
 
+// A generic struct should not have a `Trace` bound for each generic, but for the fields instead.
+const _: () = {
     // All fields of this type implement `Trace` regardless of `T`
     // so the struct also implements `Trace` regardless of `T`.
     #[derive(Trace)]
@@ -202,8 +203,8 @@ fn derive_trace_has_field_bounds_not_generic_bounds() {
         phantom: PhantomData<T>,
     }
 
-    implements_trace(&GenericStruct::<DoesNotImplTrace> {
+    assert_implements_trace(&GenericStruct::<DoesNotImplTrace> {
         fn_ptr: |x| x,
         phantom: PhantomData,
     });
-}
+};
