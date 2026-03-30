@@ -13,11 +13,14 @@
 
 use std::{
     cell::RefCell,
+    marker::PhantomData,
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 
-use dumpster::unsync::{collect, Gc};
-use dumpster_derive::Trace;
+use dumpster::{
+    unsync::{collect, Gc},
+    Trace,
+};
 
 #[derive(Trace)]
 struct Empty;
@@ -183,4 +186,24 @@ fn unsync_as_ptr() {
     assert_ne!(empty_ptr, Gc::as_ptr(&b2.0));
     assert_ne!(Gc::as_ptr(&b.0), Gc::as_ptr(&b2.0));
     assert_ne!(Gc::as_ptr(&b.0), empty2_ptr);
+}
+
+#[test]
+fn derive_trace_has_field_bounds_not_generic_bounds() {
+    const fn implements_trace(_: &impl Trace) {}
+
+    struct DoesNotImplTrace;
+
+    // All fields of this type implement `Trace` regardless of `T`
+    // so the struct also implements `Trace` regardless of `T`.
+    #[derive(Trace)]
+    struct GenericStruct<T> {
+        fn_ptr: fn(T) -> T,
+        phantom: PhantomData<T>,
+    }
+
+    implements_trace(&GenericStruct::<DoesNotImplTrace> {
+        fn_ptr: |x| x,
+        phantom: PhantomData,
+    });
 }
