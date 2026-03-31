@@ -43,19 +43,46 @@ fn derive_trace(mut s: synstructure::Structure) -> Result<TokenStream> {
     // Every field must implement `Trace` (but the generics don't).
     s.add_bounds(synstructure::AddBounds::Fields);
 
-    let match_arms = s.each(|bi| {
-        quote! {
-            #dumpster::TraceWith::accept(#bi, visitor)?;
-        }
-    });
+    let contains_gcs_body = {
+        let match_arms = s.each(|bi| {
+            quote! {
+                if #dumpster::ContainsGcs::contains_gcs(#bi, visitor) {
+                    return true;
+                }
+            }
+        });
 
-    let body = quote!(match *self { #match_arms });
+        quote!(match *self { #match_arms })
+    };
+
+    let trace_with_body = {
+        let match_arms = s.each(|bi| {
+            quote! {
+                #dumpster::TraceWith::accept(#bi, visitor)?;
+            }
+        });
+
+        quote!(match *self { #match_arms })
+    };
 
     Ok(s.gen_impl(quote! {
+        gen impl #dumpster::ContainsGcs for @Self {
+            #[inline]
+            fn contains_gcs(&self, visitor: &mut #dumpster::ContainsGcsVisitor) -> bool {
+                if visitor.consume_fuel().is_err() {
+                    return true;
+                }
+
+                #contains_gcs_body
+
+                false
+            }
+        }
+
         gen unsafe impl<__V: #dumpster::Visitor> #dumpster::TraceWith<__V> for @Self {
             #[inline]
             fn accept(&self, visitor: &mut __V) -> ::core::result::Result<(), ()> {
-                #body
+                #trace_with_body
                 ::core::result::Result::Ok(())
             }
         }

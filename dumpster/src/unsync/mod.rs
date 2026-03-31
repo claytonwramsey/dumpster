@@ -33,7 +33,8 @@
 //! ```
 
 use crate::{
-    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, Trace, TraceWith, Visitor,
+    contains_gcs, panic_deref_of_collected_object, ptr::Nullable, ContainsGcs, ContainsGcsVisitor,
+    Trace, TraceWith, Visitor,
 };
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
@@ -287,6 +288,12 @@ impl<T: Trace + ?Sized> Gc<T> {
         /// May only be used inside `new_cyclic`.
         #[repr(transparent)]
         struct Uninitialized<T>(MaybeUninit<T>);
+
+        impl<T> ContainsGcs for Uninitialized<T> {
+            fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+                false
+            }
+        }
 
         unsafe impl<V: Visitor, T> TraceWith<V> for Uninitialized<T> {
             fn accept(&self, _: &mut V) -> Result<(), ()> {
@@ -933,7 +940,7 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
                             .ref_count
                             .set(NonZeroUsize::new(n.get() - 1).unwrap());
 
-                        if contains_gcs(&box_ref.value).unwrap_or(true) {
+                        if contains_gcs(&box_ref.value) {
                             // remaining references could be a cycle - therefore, mark it as dirty
                             // so we can check later
                             d.mark_dirty(ptr);
@@ -1048,6 +1055,12 @@ impl CollectInfo {
     /// ```
     pub fn n_gcs_existing(&self) -> usize {
         DUMPSTER.try_with(|d| d.n_refs_living.get()).unwrap_or(0)
+    }
+}
+
+impl<T: Trace + ?Sized> ContainsGcs for Gc<T> {
+    fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+        true
     }
 }
 
