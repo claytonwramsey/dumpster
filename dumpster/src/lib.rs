@@ -405,6 +405,26 @@ extern crate dumpster_derive;
 ///     bar: Option<Box<Foo>>,
 /// }
 /// ```
+///
+/// You can add `unsafe_ignore_trace` attribute to skip non-gc fields:
+///
+/// ```
+/// #[derive(Trace)]
+/// struct Foo {
+///     bar: Gc<Bar>,
+///     #[dumpster(unsafe_ignore_trace)]
+///     blah: Blah,
+/// }
+///
+/// #[derive(Trace)]
+/// struct Bar {
+///     foo: Gc<Foo>,
+/// }
+///
+/// struct Blah {
+///     value: i32,
+/// }
+/// ```
 pub use dumpster_derive::Trace;
 
 /// Determine whether some value contains a garbage-collected pointer.
