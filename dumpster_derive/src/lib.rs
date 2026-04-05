@@ -14,8 +14,8 @@
 use proc_macro2::{TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned, ToTokens as _};
 use syn::{
-    parse_macro_input, parse_quote, spanned::Spanned, Data, DeriveInput, Fields, GenericParam,
-    Generics, Ident, Index, Path,
+    parse_macro_input, parse_quote, spanned::Spanned, Data, DeriveInput, Field, Fields,
+    GenericParam, Generics, Ident, Index, Path,
 };
 
 #[proc_macro_derive(Trace, attributes(dumpster))]
@@ -84,6 +84,25 @@ pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     generated.into()
 }
 
+/// Check if a field has `#[dumpster(unsafe_ignore_trace)]` attribute.
+fn should_ignore_field(field: &Field) -> bool {
+    field.attrs.iter().any(|attr| {
+        if !attr.path().is_ident("dumpster") {
+            return false;
+        }
+
+        let mut found = false;
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("unsafe_ignore_trace") {
+                found = true;
+            }
+            Ok(())
+        });
+
+        found
+    })
+}
+
 /// Collect the trait bounds for some generic expression.
 fn add_trait_bounds(dumpster: &Path, mut generics: Generics) -> Generics {
     for param in &mut generics.params {
@@ -102,7 +121,7 @@ fn delegate_methods(dumpster: &Path, name: &Ident, data: &Data) -> TokenStream {
     match data {
         Data::Struct(data) => match data.fields {
             Fields::Named(ref f) => {
-                let delegate_visit = f.named.iter().map(|f| {
+                let delegate_visit = f.named.iter().filter(|f| !should_ignore_field(f)).map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span() =>
                         #dumpster::TraceWith::accept(
@@ -115,15 +134,20 @@ fn delegate_methods(dumpster: &Path, name: &Ident, data: &Data) -> TokenStream {
                 quote! { #(#delegate_visit)* ::core::result::Result::Ok(()) }
             }
             Fields::Unnamed(ref f) => {
-                let delegate_visit = f.unnamed.iter().enumerate().map(|(i, f)| {
-                    let index = Index::from(i);
-                    quote_spanned! {f.span() =>
-                        #dumpster::TraceWith::accept(
-                            &self.#index,
-                            visitor
-                        )?;
-                    }
-                });
+                let delegate_visit = f
+                    .unnamed
+                    .iter()
+                    .filter(|f| !should_ignore_field(f))
+                    .enumerate()
+                    .map(|(i, f)| {
+                        let index = Index::from(i);
+                        quote_spanned! {f.span() =>
+                            #dumpster::TraceWith::accept(
+                                &self.#index,
+                                visitor
+                            )?;
+                        }
+                    });
 
                 quote! { #(#delegate_visit)* ::core::result::Result::Ok(()) }
             }
@@ -138,7 +162,12 @@ fn delegate_methods(dumpster: &Path, name: &Ident, data: &Data) -> TokenStream {
                     Fields::Named(n) => {
                         let mut binding = TokenStream::new();
                         let mut execution_visit = TokenStream::new();
-                        for (i, name) in n.named.iter().enumerate() {
+                        for (i, name) in n
+                            .named
+                            .iter()
+                            .filter(|f| !should_ignore_field(f))
+                            .enumerate()
+                        {
                             let field_name = format_ident!("field{i}");
                             let field_ident = name.ident.as_ref().unwrap();
                             if i == 0 {
@@ -166,7 +195,12 @@ fn delegate_methods(dumpster: &Path, name: &Ident, data: &Data) -> TokenStream {
                     Fields::Unnamed(u) => {
                         let mut binding = TokenStream::new();
                         let mut execution_visit = TokenStream::new();
-                        for (i, _) in u.unnamed.iter().enumerate() {
+                        for (i, _) in u
+                            .unnamed
+                            .iter()
+                            .map(|f| !should_ignore_field(f))
+                            .enumerate()
+                        {
                             let field_name = format_ident!("field{i}");
                             if i == 0 {
                                 binding.extend(quote! {
