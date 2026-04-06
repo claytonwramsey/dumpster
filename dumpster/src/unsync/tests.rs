@@ -782,3 +782,10 @@ fn self_referential_from_iter() {
     }
     let _big_gc = gcs.into_iter().collect::<Gc<[_]>>();
 }
+
+#[test]
+fn debug_gc() {
+    let gc = Gc::new(0u8);
+
+    assert_eq!(format!("{gc:?}"), "0");
+}
