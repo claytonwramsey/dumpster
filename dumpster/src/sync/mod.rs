@@ -1258,17 +1258,6 @@ where
 {
 }
 
-impl<T: Trace + Send + Sync + ?Sized> Debug for Gc<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Gc({:?}, {})",
-            self.ptr,
-            self.tag.load(Ordering::Acquire)
-        )
-    }
-}
-
 impl<T: Trace + Send + Sync + Display + ?Sized> Display for Gc<T> {
     /// Formats the value using its `Display` implementation.
     ///
@@ -1279,6 +1268,19 @@ impl<T: Trace + Send + Sync + Display + ?Sized> Display for Gc<T> {
     /// should implement `Display` to avoid following cyclic references.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&**self, f)
+    }
+}
+
+impl<T: Trace + Send + Sync + Debug + ?Sized> Debug for Gc<T> {
+    /// Formats the value using its `Debug` implementation.
+    ///
+    /// # Note
+    ///
+    /// If `T` contains cyclic references through `Gc` pointers and its `Debug` implementation
+    /// attempts to traverse them, this may cause infinite recursion. Types with potential cycles
+    /// should implement `Debug` to avoid following cyclic references.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(&**self, f)
     }
 }
 
