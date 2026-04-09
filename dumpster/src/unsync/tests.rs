@@ -490,7 +490,7 @@ fn make_mut_of_object_in_dumpster() {
 #[should_panic = "panic on visit"]
 #[cfg_attr(miri, ignore = "intentionally leaks memory")]
 fn panic_visit() {
-    struct PanicVisit;
+    struct PanicVisit(Gc<Self>);
 
     /// We technically can make it part of the contract for `Trace` to reject panicking impls,
     /// but it is good form to accept these even though they are malformed.
@@ -500,7 +500,7 @@ fn panic_visit() {
         }
     }
 
-    let gc = Gc::new(PanicVisit);
+    let gc = Gc::new_cyclic(PanicVisit);
     let _ = gc.clone();
     drop(gc);
     collect();
