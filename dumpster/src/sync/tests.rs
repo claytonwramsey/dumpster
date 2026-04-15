@@ -833,6 +833,7 @@ fn make_mut_of_object_in_dumpster() {
 #[should_panic = "panic on visit"]
 #[cfg_attr(miri, ignore = "intentionally leaks memory")]
 fn panic_visit() {
+    #[expect(unused)]
     struct PanicVisit(Gc<Self>);
 
     /// We technically can make it part of the contract for `Trace` to reject panicking impls,
