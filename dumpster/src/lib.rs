@@ -203,16 +203,16 @@ pub mod unsync;
 
 /// Contains the sealed trait for [`Trace`].
 mod trace {
-    use crate::{sync::TraceSync, unsync::TraceUnsync, ContainsGcs, TraceWith};
+    use crate::{sync::TraceSync, unsync::TraceUnsync, ContainsGcs};
 
     /// The sealed trait for [`Trace`](crate::Trace),
     /// hiding away the implementation details and making it
     /// impossible to manually implement `Trace`.
     #[expect(clippy::missing_safety_doc)]
     #[expect(private_bounds)]
-    pub unsafe trait TraceWithV: TraceWith<ContainsGcs> + TraceSync + TraceUnsync {}
+    pub unsafe trait TraceWithV: ContainsGcs + TraceSync + TraceUnsync {}
 
-    unsafe impl<T> TraceWithV for T where T: ?Sized + TraceWith<ContainsGcs> + TraceSync + TraceUnsync {}
+    unsafe impl<T> TraceWithV for T where T: ?Sized + ContainsGcs + TraceSync + TraceUnsync {}
 }
 
 /// The trait that any garbage-collected data must implement.
@@ -232,9 +232,15 @@ mod trace {
 /// Accepting a visitor is simply a no-op.
 ///
 /// ```
-/// use dumpster::{TraceWith, Visitor};
+/// use dumpster::{TraceWith, Visitor, ContainsGcs, ContainsGcsVisitor};
 ///
 /// struct Foo(u8);
+///
+/// impl ContainsGcs for Foo {
+///     fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+///         false
+///     }
+/// }
 ///
 /// unsafe impl<V: Visitor> TraceWith<V> for Foo {
 ///     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
@@ -247,9 +253,15 @@ mod trace {
 /// fields in `accept`.
 ///
 /// ```
-/// use dumpster::{unsync::Gc, TraceWith, Visitor};
+/// use dumpster::{unsync::Gc, TraceWith, Visitor, ContainsGcs, ContainsGcsVisitor};
 ///
 /// struct Bar(Gc<Bar>);
+///
+/// impl ContainsGcs for Bar {
+///     fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+///         self.0.contains_gcs(visitor)
+///     }
+/// }
 ///
 /// unsafe impl<V: Visitor> TraceWith<V> for Bar {
 ///     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
@@ -262,11 +274,21 @@ mod trace {
 /// delegate to both fields in a consistent order:
 ///
 /// ```
-/// use dumpster::{unsync::Gc, TraceWith, Visitor};
+/// use dumpster::{unsync::Gc, TraceWith, Visitor, ContainsGcs, ContainsGcsVisitor};
 ///
 /// struct Baz {
 ///     a: Gc<Baz>,
 ///     b: Gc<Baz>,
+/// }
+///
+/// impl ContainsGcs for Baz {
+///     fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+///         if visitor.consume_fuel().is_err() {
+///             return true;
+///         }
+///
+///         self.a.contains_gcs(visitor) || self.b.contains_gcs(visitor)
+///     }
 /// }
 ///
 /// unsafe impl<V: Visitor> TraceWith<V> for Baz {
@@ -407,36 +429,74 @@ extern crate dumpster_derive;
 /// ```
 pub use dumpster_derive::Trace;
 
-/// Determine whether some value contains a garbage-collected pointer.
-///
-/// This function will return one of three values:
-/// - `Ok(true)`: The data structure contains a garbage-collected pointer.
-/// - `Ok(false)`: The data structure contains no garbage-collected pointers.
-/// - `Err(())`: The data structure was accessed while we checked it for garbage-collected pointers.
-fn contains_gcs<T: Trace + ?Sized>(x: &T) -> Result<bool, ()> {
-    let mut visit = ContainsGcs(false);
-    x.accept(&mut visit)?;
-    Ok(visit.0)
+/// Determines whether some value contains a garbage-collected pointer.
+fn contains_gcs<T: Trace + ?Sized>(x: &T) -> bool {
+    let mut visitor = ContainsGcsVisitor { fuel: 64 };
+    x.contains_gcs(&mut visitor)
 }
 
-/// A visitor structure used for determining whether some garbage-collected pointer contains a
-/// `Gc` in its pointed-to value.
-struct ContainsGcs(bool);
+/// A visitor for the [`ContainsGcs`] trait.
+pub struct ContainsGcsVisitor {
+    fuel: usize,
+}
 
-impl Visitor for ContainsGcs {
-    fn visit_sync<T>(&mut self, _: &sync::Gc<T>)
-    where
-        T: Trace + Send + Sync + ?Sized,
-    {
-        self.0 = true;
+impl ContainsGcsVisitor {
+    /// Consumes the visitors fuel.
+    ///
+    /// This should generally be called first in [`contains_gcs`] implementations and
+    /// the function should return early with `true` when the visitor is out of fuel.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the visitor is out of fuel.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::{unsync::Gc, ContainsGcs, ContainsGcsVisitor, TraceWith, Visitor};
+    ///
+    /// struct Foo {
+    ///     a: Gc<Foo>,
+    ///     b: Gc<Foo>,
+    /// }
+    ///
+    /// impl ContainsGcs for Foo {
+    ///     fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+    ///         if visitor.consume_fuel().is_err() {
+    ///             return true;
+    ///         }
+    ///
+    ///         self.a.contains_gcs(visitor) || self.b.contains_gcs(visitor)
+    ///     }
+    /// }
+    ///
+    /// unsafe impl<V: Visitor> TraceWith<V> for Foo {
+    ///     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+    ///         self.a.accept(visitor)?;
+    ///         self.b.accept(visitor)?;
+    ///         Ok(())
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// [`contains_gcs`]: ContainsGcs::contains_gcs
+    pub fn consume_fuel(&mut self) -> Result<(), ()> {
+        self.fuel = self.fuel.checked_sub(1).ok_or(())?;
+        Ok(())
     }
+}
 
-    fn visit_unsync<T>(&mut self, _: &unsync::Gc<T>)
-    where
-        T: Trace + ?Sized,
-    {
-        self.0 = true;
-    }
+/// A trait informing whether the data contains garbage-collected pointers
+///
+/// Returning `true` from the `contains_gcs` function is always valid.
+///
+/// When this data structure doesn't contain any garbage-collected pointers then
+/// `contains_gcs` may return `false`. This can improve performance because those
+/// data structures then don't have to be traced to be garbage collected.
+pub trait ContainsGcs {
+    /// This funtion returns `true` when this data structure may contain garbage-collected pointers
+    /// and `false` when it definitely does not.
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool;
 }
 
 /// Panics with a message that explains that the gc object has already been collected.

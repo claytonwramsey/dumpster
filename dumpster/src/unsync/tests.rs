@@ -31,6 +31,12 @@ impl Drop for DropCount {
     }
 }
 
+impl ContainsGcs for DropCount {
+    fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+        false
+    }
+}
+
 unsafe impl<V: Visitor> TraceWith<V> for DropCount {
     fn accept(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
@@ -46,6 +52,12 @@ fn simple() {
     impl Drop for Foo {
         fn drop(&mut self) {
             DROPPED.store(true, Ordering::Relaxed);
+        }
+    }
+
+    impl ContainsGcs for Foo {
+        fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+            false
         }
     }
 
@@ -75,6 +87,16 @@ struct MultiRef {
     drop_count: &'static AtomicUsize,
 }
 
+impl ContainsGcs for MultiRef {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        self.refs.contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor> TraceWith<V> for MultiRef {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.refs.accept(visitor)
@@ -91,6 +113,16 @@ impl Drop for MultiRef {
 fn self_referential() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
+
+    impl ContainsGcs for Foo {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.0.contains_gcs(visitor)
+        }
+    }
 
     unsafe impl<V: Visitor> TraceWith<V> for Foo {
         #[inline]
@@ -118,6 +150,16 @@ fn self_referential() {
 fn cyclic() {
     static DROPPED: AtomicU8 = AtomicU8::new(0);
     struct Foo(RefCell<Option<Gc<Foo>>>);
+
+    impl ContainsGcs for Foo {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.0.contains_gcs(visitor)
+        }
+    }
 
     unsafe impl<V: Visitor> TraceWith<V> for Foo {
         #[inline]
@@ -306,6 +348,16 @@ fn escape_dead_pointer() {
         }
     }
 
+    impl ContainsGcs for Escape {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.ptr.contains_gcs(visitor)
+        }
+    }
+
     unsafe impl<V: Visitor> TraceWith<V> for Escape {
         fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.ptr.accept(visitor)
@@ -365,6 +417,12 @@ fn from_slice_panic() {
                 value: self.value.clone(),
                 panic: self.panic,
             }
+        }
+    }
+
+    impl ContainsGcs for MayPanicOnClone {
+        fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+            false
         }
     }
 
@@ -460,6 +518,16 @@ fn make_mut_of_object_in_dumpster() {
         something: Gc<i32>,
     }
 
+    impl ContainsGcs for Foo {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.something.contains_gcs(visitor)
+        }
+    }
+
     unsafe impl<V: Visitor> TraceWith<V> for Foo {
         fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.something.accept(visitor)
@@ -495,6 +563,12 @@ fn panic_visit() {
     #[expect(unused)]
     struct PanicVisit(Gc<Self>);
 
+    impl ContainsGcs for PanicVisit {
+        fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+            panic!("panic on visit");
+        }
+    }
+
     /// We technically can make it part of the contract for `Trace` to reject panicking impls,
     /// but it is good form to accept these even though they are malformed.
     unsafe impl<V: Visitor> TraceWith<V> for PanicVisit {
@@ -525,6 +599,16 @@ fn new_cyclic_one() {
     #[expect(unused)]
     struct Cycle(Gc<Self>, DropCount);
 
+    impl ContainsGcs for Cycle {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.0.contains_gcs(visitor)
+        }
+    }
+
     unsafe impl<V: Visitor> TraceWith<V> for Cycle {
         fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
@@ -550,6 +634,16 @@ fn dead_inside_alive() {
     struct Cycle(Option<Gc<Self>>);
     thread_local! {
         static ESCAPE: Cell<Option<Gc<Cycle>>> = const { Cell::new(None) };
+    }
+
+    impl ContainsGcs for Cycle {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.0.contains_gcs(visitor)
+        }
     }
 
     unsafe impl<V: Visitor> TraceWith<V> for Cycle {
@@ -585,9 +679,29 @@ fn leak_by_creation_in_drop() {
     struct Foo(OnceCell<Gc<Self>>);
     struct Bar(OnceCell<Gc<Self>>);
 
+    impl ContainsGcs for Foo {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.0.contains_gcs(visitor)
+        }
+    }
+
     unsafe impl<V: Visitor> TraceWith<V> for Foo {
         fn accept(&self, visitor: &mut V) -> Result<(), ()> {
             self.0.accept(visitor)
+        }
+    }
+
+    impl ContainsGcs for Bar {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.0.contains_gcs(visitor)
         }
     }
 
@@ -647,6 +761,16 @@ fn unsync_fuzz() {
         fn drop(&mut self) {
             let n_drop = DROP_DETECTORS[self.id].fetch_add(1, Ordering::Relaxed);
             assert_eq!(n_drop, 0, "must not double drop an allocation");
+        }
+    }
+
+    impl ContainsGcs for Alloc {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.refs.contains_gcs(visitor)
         }
     }
 
@@ -764,6 +888,16 @@ fn self_referential_from_iter() {
     struct Ab {
         a: Gc<Self>,
         b: Gc<Self>,
+    }
+
+    impl ContainsGcs for Ab {
+        fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+            if visitor.consume_fuel().is_err() {
+                return true;
+            }
+
+            self.a.contains_gcs(visitor) || self.b.contains_gcs(visitor)
+        }
     }
 
     unsafe impl<V: Visitor> TraceWith<V> for Ab {

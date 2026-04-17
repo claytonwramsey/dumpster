@@ -41,14 +41,13 @@ use loom::{
     lazy_static,
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
-use std::fmt::Display;
 #[cfg(not(loom))]
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
     any::TypeId,
     borrow::{Borrow, Cow},
-    fmt::Debug,
+    fmt::{Debug, Display},
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
@@ -63,7 +62,7 @@ use crate::{
         cell::UCell,
         collect::{Dfs, PrepareForDestruction},
     },
-    Trace, TraceWith, Visitor,
+    ContainsGcs, ContainsGcsVisitor, Trace, TraceWith, Visitor,
 };
 
 use self::collect::{
@@ -339,6 +338,12 @@ where
         /// May only be used inside `new_cyclic`.
         #[repr(transparent)]
         struct Uninitialized<T>(MaybeUninit<T>);
+
+        impl<T> ContainsGcs for Uninitialized<T> {
+            fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+                false
+            }
+        }
 
         unsafe impl<V: Visitor, T> TraceWith<V> for Uninitialized<T> {
             fn accept(&self, _: &mut V) -> Result<(), ()> {
@@ -914,7 +919,7 @@ where
                 }
             }
             _ => {
-                if contains_gcs(&box_ref.value).unwrap_or(true) {
+                if contains_gcs(&box_ref.value) {
                     // SAFETY: `ptr` is convertible to a reference
                     // We don't use `box_ref` here because that pointer
                     // only has `SharedReadOnly` permissions under the stacked borrows model
@@ -1023,6 +1028,12 @@ impl<T: Trace + Send + Sync> Gc<[T]> {
                 ptr::slice_from_raw_parts_mut(mem.cast::<T>(), len) as *mut GcBox<[T]>
             })
         }
+    }
+}
+
+impl<T: Trace + Send + Sync + ?Sized> ContainsGcs for Gc<T> {
+    fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+        true
     }
 }
 
