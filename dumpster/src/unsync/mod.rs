@@ -40,7 +40,7 @@ use std::{
     any::TypeId,
     borrow::{Borrow, Cow},
     cell::Cell,
-    fmt::Display,
+    fmt::{Debug, Display},
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
@@ -70,7 +70,6 @@ impl<T> TraceUnsync for T where
 {
 }
 
-#[derive(Debug)]
 /// A garbage-collected pointer.
 ///
 /// This garbage-collected pointer may be used for data which is not safe to share across threads
@@ -1100,6 +1099,19 @@ impl<T: Trace + Display + ?Sized> Display for Gc<T> {
     /// should implement `Display` to avoid following cyclic references.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&**self, f)
+    }
+}
+
+impl<T: Trace + Debug + ?Sized> Debug for Gc<T> {
+    /// Formats the value using its `Debug` implementation.
+    ///
+    /// # Note
+    ///
+    /// If `T` contains cyclic references through `Gc` pointers and its `Debug` implementation
+    /// attempts to traverse them, this may cause infinite recursion. Types with potential cycles
+    /// should implement `Debug` to avoid following cyclic references.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(&**self, f)
     }
 }
 

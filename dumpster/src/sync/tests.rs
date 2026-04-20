@@ -597,7 +597,7 @@ fn root_canal() {
     collect();
     println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
 
-    assert!(dbg!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref()).is_some());
+    assert!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref().is_some());
     assert!(SMUGGLED_POINTERS[1].lock().unwrap().as_ref().is_some());
     println!("{}", B_VISIT_COUNT.load(Ordering::Relaxed));
 
@@ -954,4 +954,11 @@ fn self_referential_from_iter() {
         gcs.push(Gc::new_cyclic(|a: Gc<Ab>| Ab { a, b }));
     }
     let _big_gc = gcs.into_iter().collect::<Gc<[_]>>();
+}
+
+#[test]
+fn debug_gc() {
+    let gc = Gc::new(0u8);
+
+    assert_eq!(format!("{gc:?}"), "0");
 }
