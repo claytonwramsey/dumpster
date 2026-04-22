@@ -41,14 +41,13 @@ use loom::{
     lazy_static,
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
-use std::fmt::Display;
 #[cfg(not(loom))]
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
     any::TypeId,
     borrow::{Borrow, Cow},
-    fmt::Debug,
+    fmt::{Debug, Display},
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
