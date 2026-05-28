@@ -41,14 +41,13 @@ use loom::{
     lazy_static,
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
-use std::fmt::Display;
 #[cfg(not(loom))]
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 use std::{
     alloc::{dealloc, handle_alloc_error, Layout},
     any::TypeId,
     borrow::{Borrow, Cow},
-    fmt::Debug,
+    fmt::{Debug, Display},
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
@@ -771,6 +770,8 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
 ///
 /// This is one of two easy ways to create a `Gc<[T]>`; the other method is to use [`FromIterator`].
 ///
+/// To recover a sized `Gc<U>` from an unsized `Gc<T>`, use [`downcast_gc!`].
+///
 /// # Examples
 ///
 /// ```
@@ -803,6 +804,102 @@ macro_rules! __sync_coerce_gc {
 
 #[doc(inline)]
 pub use crate::__sync_coerce_gc as coerce_gc;
+
+/// Attempt to downcast a `Gc<T>` to a `Gc<U>`.
+///
+/// Returns `Result<Gc<U>, Gc<T>>`. On success, meaning the value behind the `Gc` is actually of
+/// type `U`. The original allocation (and its reference count) is preserved. On failure, the
+/// original `Gc<T>` is returned unchanged in the `Err` variant.
+///
+/// This is the inverse of [`coerce_gc!`]: where `coerce_gc!` unsize-coerces a `Gc<T>` into
+/// `Gc<dyn Trait>`, `downcast_gc!` recovers the original sized `Gc<T>`. The source `T` must
+/// therefore be unsized (e.g., `dyn Trait`; using `downcast_gc!` on an already
+/// sized `Gc` is a compile error.
+///
+/// The type check is performed via [`Any`](core::any::Any), so `T` must be castable to `&dyn Any`.
+/// In practice, this means that the trait object's trait should extend `Any`.
+///
+/// # Examples
+///
+/// Downcasting from a trait object back to its concrete type:
+///
+/// ```
+/// use dumpster::{
+///     sync::{coerce_gc, downcast_gc, Gc},
+///     Trace,
+/// };
+/// use std::any::Any;
+///
+/// trait MyTrait: Trace + Any + Send + Sync {}
+/// impl<T: Trace + Any + Send + Sync> MyTrait for T {}
+///
+/// let gc: Gc<dyn MyTrait> = coerce_gc!(Gc::new(5i32));
+/// let gc: Gc<i32> = downcast_gc!(gc, i32).ok().unwrap();
+/// assert_eq!(*gc, 5);
+/// ```
+///
+/// A failed downcast returns the original `Gc` in the `Err` variant:
+///
+/// ```
+/// use dumpster::{
+///     sync::{coerce_gc, downcast_gc, Gc},
+///     Trace,
+/// };
+/// use std::any::Any;
+///
+/// trait MyTrait: Trace + Any + Send + Sync {}
+/// impl<T: Trace + Any + Send + Sync> MyTrait for T {}
+///
+/// let gc: Gc<dyn MyTrait> = coerce_gc!(Gc::new(5i32));
+/// let gc: Gc<dyn MyTrait> = downcast_gc!(gc, u8).err().unwrap();
+/// // `gc` is still usable as a `Gc<dyn MyTrait>`.
+/// ```
+///
+/// Downcasting a sized `Gc` is rejected at compile time:
+///
+/// ```compile_fail
+/// use dumpster::sync::{downcast_gc, Gc};
+///
+/// let gc: Gc<i32> = Gc::new(5);
+/// let _ = downcast_gc!(gc, i32);
+/// ```
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __sync_downcast_gc {
+    ($gc:expr, $t:ty) => {{
+        match $crate::sync::assert_unsized($gc) {
+            gc if (::core::ops::Deref::deref(&gc) as &dyn ::core::any::Any).is::<$t>() => {
+                let (ptr, tag) = $crate::sync::Gc::__private_into_ptr(gc);
+                Ok(unsafe {
+                    $crate::sync::Gc::__private_from_ptr(ptr.cast::<$crate::sync::GcBox<$t>>(), tag)
+                })
+            }
+            gc => Err(gc),
+        }
+    }};
+}
+
+// Compile-time check: refuse to downcast an already-sized `Gc`. Fat pointers
+// (`&dyn Trait`, `&[T]`, `&str`) are wider than thin pointers; if `&T` is the size of
+// a thin pointer, then `T` is sized.
+#[doc(hidden)]
+pub const fn assert_unsized<T>(t: Gc<T>) -> Gc<T>
+where
+    T: Trace + ::core::marker::Send + ::core::marker::Sync + ?Sized + 'static,
+{
+    const {
+        assert!(
+            ::core::mem::size_of::<&T>() != ::core::mem::size_of::<*const ()>(),
+            "downcast_gc!: source `Gc` must hold an unsized type \
+                (e.g. `Gc<dyn Trait>`)",
+        );
+    }
+
+    t
+}
+
+#[doc(inline)]
+pub use crate::__sync_downcast_gc as downcast_gc;
 
 impl<T> Clone for Gc<T>
 where
