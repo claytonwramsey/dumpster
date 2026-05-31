@@ -10,7 +10,10 @@
 
 use foldhash::{HashMap, HashMapExt};
 
-use crate::{unsync::coerce_gc, Visitor};
+use crate::{
+    unsync::{coerce_gc, downcast_gc},
+    Visitor,
+};
 
 use super::*;
 use std::{
@@ -782,4 +785,63 @@ fn self_referential_from_iter() {
         gcs.push(Gc::new_cyclic(|a: Gc<Ab>| Ab { a, b }));
     }
     let _big_gc = gcs.into_iter().collect::<Gc<[_]>>();
+}
+
+trait MyTrait: crate::Trace + std::any::Any {
+    fn val(&self) -> i64;
+}
+
+impl MyTrait for i32 {
+    fn val(&self) -> i64 {
+        i64::from(*self)
+    }
+}
+
+impl MyTrait for u8 {
+    fn val(&self) -> i64 {
+        i64::from(*self)
+    }
+}
+
+#[test]
+fn downcast_success() {
+    let gc: Gc<dyn MyTrait> = coerce_gc!(Gc::new(42i32));
+    let gc = downcast_gc!(gc, i32)
+        .ok()
+        .expect("downcast to i32 should succeed");
+    assert_eq!(*gc, 42);
+}
+
+#[test]
+fn downcast_wrong_type_returns_self() {
+    let gc: Gc<dyn MyTrait> = coerce_gc!(Gc::new(42i32));
+    let gc = downcast_gc!(gc, u8)
+        .err()
+        .expect("downcast to wrong type should fail");
+    // original trait object is still usable
+    assert_eq!(gc.val(), 42);
+}
+
+#[test]
+fn downcast_preserves_refcount() {
+    let gc: Gc<i32> = Gc::new(7i32);
+    let trait_gc: Gc<dyn MyTrait> = coerce_gc!(gc.clone());
+    assert_eq!(Gc::ref_count(&gc).get(), 2);
+
+    let recovered = downcast_gc!(trait_gc, i32).ok().unwrap();
+    assert_eq!(Gc::ref_count(&gc).get(), 2);
+    assert!(Gc::ptr_eq(&gc, &recovered));
+    assert_eq!(*recovered, 7);
+}
+
+#[test]
+fn downcast_failure_preserves_refcount() {
+    let gc: Gc<i32> = Gc::new(7i32);
+    let trait_gc: Gc<dyn MyTrait> = coerce_gc!(gc.clone());
+    assert_eq!(Gc::ref_count(&gc).get(), 2);
+
+    let trait_gc = downcast_gc!(trait_gc, u8).err().unwrap();
+    assert_eq!(Gc::ref_count(&gc).get(), 2);
+    drop(trait_gc);
+    assert_eq!(Gc::ref_count(&gc).get(), 1);
 }
