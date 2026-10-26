@@ -9,12 +9,11 @@
 //! A synchronized collection algorithm.
 
 use std::{
-    alloc::{dealloc, Layout},
     cell::{Cell, LazyCell, RefCell},
     collections::hash_map::Entry,
     hash::Hash,
     mem::{replace, swap, take, transmute},
-    ptr::{drop_in_place, NonNull},
+    ptr::NonNull,
 };
 
 #[cfg(not(loom))]
@@ -49,6 +48,11 @@ struct GarbageTruck {
     /// This lock should be acquired for reads by threads running a collection and for writes by
     /// threads awaiting collection completion.
     collecting_lock: RwLock<()>,
+    /// A lock held for writes by a collection while it determines which allocations are
+    /// unreachable, and for reads while upgrading a [`WeakGc`](super::WeakGc).
+    /// This keeps an upgrade from resurrecting an allocation that a collection has decided to
+    /// destroy.
+    upgrade_lock: RwLock<()>,
     /// The number of [`Gc`]s dropped since the last time [`GarbageTruck::collect_all()`] was
     /// called.
     n_gcs_dropped: AtomicUsize,
@@ -281,6 +285,16 @@ pub fn set_collect_condition(f: CollectCondition) {
         .store(f as *mut (), Ordering::Relaxed);
 }
 
+/// Run `f` while no collection is determining which allocations are unreachable.
+///
+/// Upgrading a [`WeakGc`](super::WeakGc) must happen inside of `f`.
+/// Otherwise, a collection could decide that an allocation is unreachable just as the upgrade
+/// creates a new `Gc` to it, and then destroy it while that `Gc` is still in use.
+pub(super) fn exclude_collection<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = GARBAGE_TRUCK.upgrade_lock.read();
+    f()
+}
+
 /// Get the number of `[Gc]`s dropped since the last collection.
 pub fn n_gcs_dropped() -> usize {
     GARBAGE_TRUCK.n_gcs_dropped.load(Ordering::Relaxed)
@@ -332,6 +346,7 @@ impl GarbageTruck {
         Self {
             contents: Mutex::new(LazyCell::new(HashMap::new)),
             collecting_lock: RwLock::new(()),
+            upgrade_lock: RwLock::new(()),
             n_gcs_dropped: AtomicUsize::new(0),
             n_gcs_existing: AtomicUsize::new(0),
             collect_condition: AtomicPtr::new(default_collect_condition as *mut ()),
@@ -347,6 +362,7 @@ impl GarbageTruck {
         Self {
             contents: Mutex::new(LazyCell::new(HashMap::new)),
             collecting_lock: RwLock::new(()),
+            upgrade_lock: RwLock::new(()),
             n_gcs_dropped: AtomicUsize::new(0),
             n_gcs_existing: AtomicUsize::new(0),
             collect_condition: AtomicPtr::new(default_collect_condition as *mut ()),
@@ -358,6 +374,7 @@ impl GarbageTruck {
     /// If so, drop those allocations.
     fn collect_all(&self) {
         let collecting_guard = self.collecting_lock.write();
+        let upgrade_guard = self.upgrade_lock.write();
         self.n_gcs_dropped.store(0, Ordering::Relaxed);
 
         let to_collect = take(&mut **self.contents.lock());
@@ -391,6 +408,16 @@ impl GarbageTruck {
         for root_id in root_ids {
             mark(root_id, &mut ref_graph);
         }
+
+        // Every allocation of unknown reachability is about to be destroyed.
+        // Zero their strong counts so that once upgrades are allowed again, upgrading a `WeakGc` to
+        // one of them fails instead of resurrecting it.
+        for (id, node) in &ref_graph {
+            if matches!(node.reachability, Reachability::Unknown { .. }) {
+                unsafe { id.0.as_ref() }.strong.store(0, Ordering::Release);
+            }
+        }
+        drop(upgrade_guard);
 
         CLEANING.with(|c| c.set(true));
         // set of allocations which must be destroyed because we were the last weak pointer to it
@@ -649,14 +676,15 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
     ptr: Erased,
     graph: &HashMap<AllocationId, AllocationInfo>,
 ) {
-    let specified = ptr.specify::<GcBox<T>>().as_mut();
+    // Do not create a mutable reference to the box: other threads may be using its header through
+    // a `WeakGc`.
+    let specified = ptr.specify::<GcBox<T>>();
     specified
+        .as_ref()
         .value
         .accept(&mut PrepareForDestruction { graph })
         .expect("allocation assumed to be unreachable but somehow was accessed");
-    let layout = Layout::for_value(specified);
-    drop_in_place(specified);
-    dealloc(std::ptr::from_mut::<GcBox<T>>(specified).cast(), layout);
+    GcBox::drop_value(specified);
 }
 
 /// Function for handling dropping an allocation when its weak and strong reference count reach
@@ -666,13 +694,11 @@ unsafe fn destroy_erased<T: Trace + Send + Sync + ?Sized>(
 ///
 /// `ptr` must have been created as a pointer to a `GcBox<T>`.
 unsafe fn drop_weak_zero<T: Trace + Send + Sync + ?Sized>(ptr: Erased) {
-    let mut specified = ptr.specify::<GcBox<T>>();
+    let specified = ptr.specify::<GcBox<T>>();
     assert_eq!(specified.as_ref().weak.load(Ordering::Relaxed), 0);
     assert_eq!(specified.as_ref().strong.load(Ordering::Relaxed), 0);
 
-    let layout = Layout::for_value(specified.as_ref());
-    drop_in_place(specified.as_mut());
-    dealloc(specified.as_ptr().cast(), layout);
+    GcBox::drop_value(specified);
 }
 
 unsafe impl Send for AllocationId {}

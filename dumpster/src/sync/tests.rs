@@ -11,7 +11,7 @@ use std::{
     mem::{swap, take, transmute, MaybeUninit},
     ptr::NonNull,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex, OnceLock,
     },
 };
@@ -1016,4 +1016,201 @@ fn downcast_failure_preserves_refcount() {
     assert_eq!(Gc::ref_count(&gc).get(), 2);
     drop(trait_gc);
     assert_eq!(Gc::ref_count(&gc).get(), 1);
+}
+
+#[test]
+fn weak_upgrade_until_dropped() {
+    let gc = Gc::new(5);
+    let weak = Gc::downgrade(&gc);
+    let weak2 = weak.clone();
+
+    let upgraded = weak.upgrade().unwrap();
+    assert!(Gc::ptr_eq(&gc, &upgraded));
+    assert_eq!(Gc::ref_count(&gc).get(), 2);
+    drop(upgraded);
+    drop(weak);
+
+    assert_eq!(*weak2.upgrade().unwrap(), 5);
+    drop(gc);
+    assert!(weak2.upgrade().is_none());
+}
+
+#[test]
+fn weak_does_not_keep_value_alive() {
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    let gc = Gc::new(DropCount(&DROPPED));
+    let weak = Gc::downgrade(&gc);
+
+    drop(gc);
+    assert_eq!(DROPPED.load(Ordering::Acquire), 1);
+    assert!(weak.upgrade().is_none());
+    drop(weak);
+    assert_eq!(DROPPED.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn weak_new_never_upgrades() {
+    assert!(WeakGc::<i32>::new().upgrade().is_none());
+    assert!(WeakGc::<i32>::default().clone().upgrade().is_none());
+}
+
+#[test]
+fn weak_downgrade_dead_gc() {
+    let gc = Gc::new_cyclic(|this: Gc<OnceLock<Gc<()>>>| {
+        assert!(Gc::downgrade(&this).upgrade().is_none());
+        OnceLock::new()
+    });
+    assert!(Gc::downgrade(&gc).upgrade().is_some());
+}
+
+#[test]
+fn weak_unsized() {
+    let gc: Gc<[String]> = Gc::from(vec!["a".to_owned(), "b".to_owned()]);
+    let weak = Gc::downgrade(&gc);
+    assert_eq!(weak.upgrade().unwrap()[1], "b");
+    drop(gc);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn weak_to_collected_cycle() {
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    let gc = Gc::new(MultiRef {
+        refs: Mutex::new(Vec::new()),
+        count: DropCount(&DROPPED),
+    });
+    gc.refs.lock().unwrap().push(gc.clone());
+    let weak = Gc::downgrade(&gc);
+    assert!(weak.upgrade().is_some());
+
+    drop(gc);
+    collect();
+    assert_eq!(DROPPED.load(Ordering::Acquire), 1);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+/// A `Drop` implementation run during a collection must not be able to resurrect another
+/// unreachable allocation by upgrading a `WeakGc` to it.
+fn weak_upgrade_fails_during_collection() {
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    static RESURRECTED: AtomicBool = AtomicBool::new(false);
+
+    struct Node {
+        next: OnceLock<Gc<Node>>,
+        prev: OnceLock<WeakGc<Node>>,
+    }
+
+    unsafe impl<V: Visitor> TraceWith<V> for Node {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.next.accept(visitor)?;
+            self.prev.accept(visitor)
+        }
+    }
+
+    impl Drop for Node {
+        fn drop(&mut self) {
+            if self.prev.get().unwrap().upgrade().is_some() {
+                RESURRECTED.store(true, Ordering::Release);
+            }
+            DROPPED.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    let a = Gc::new(Node {
+        next: OnceLock::new(),
+        prev: OnceLock::new(),
+    });
+    let b = Gc::new(Node {
+        next: OnceLock::from(a.clone()),
+        prev: OnceLock::from(Gc::downgrade(&a)),
+    });
+    a.next.set(b.clone()).unwrap();
+    a.prev.set(Gc::downgrade(&b)).unwrap();
+
+    drop(a);
+    drop(b);
+    collect();
+    assert_eq!(DROPPED.load(Ordering::Acquire), 2);
+    assert!(!RESURRECTED.load(Ordering::Acquire));
+}
+
+#[test]
+fn weak_upgrade_fails_in_own_drop() {
+    static RESURRECTED: AtomicBool = AtomicBool::new(false);
+    struct Foo(OnceLock<WeakGc<Foo>>);
+
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            if self.0.get().unwrap().upgrade().is_some() {
+                RESURRECTED.store(true, Ordering::Release);
+            }
+        }
+    }
+
+    let gc = Gc::new(Foo(OnceLock::new()));
+    gc.0.set(Gc::downgrade(&gc)).unwrap();
+    drop(gc);
+    collect();
+    assert!(!RESURRECTED.load(Ordering::Acquire));
+}
+
+#[test]
+fn make_mut_disassociates_weak() {
+    let mut gc = Gc::new(1);
+    let weak = Gc::downgrade(&gc);
+    *Gc::make_mut(&mut gc) += 1;
+    assert_eq!(*gc, 2);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "miri is too slow")]
+/// Upgrading a `WeakGc` on one thread while another thread collects its (otherwise unreachable)
+/// allocation must never yield a `Gc` to a destroyed value.
+fn weak_upgrade_races_collection() {
+    struct Cycle {
+        this: OnceLock<Gc<Cycle>>,
+        alive: AtomicBool,
+    }
+
+    unsafe impl<V: Visitor> TraceWith<V> for Cycle {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.this.accept(visitor)
+        }
+    }
+
+    impl Drop for Cycle {
+        fn drop(&mut self) {
+            self.alive.store(false, Ordering::Release);
+        }
+    }
+
+    for _ in 0..1_000 {
+        let gc = Gc::new(Cycle {
+            this: OnceLock::new(),
+            alive: AtomicBool::new(true),
+        });
+        gc.this.set(gc.clone()).unwrap();
+        let weak = Gc::downgrade(&gc);
+        drop(gc);
+
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                for _ in 0..10 {
+                    if let Some(gc) = weak.upgrade() {
+                        assert!(gc.alive.load(Ordering::Acquire));
+                    }
+                }
+            });
+            collect();
+        });
+    }
+    collect();
 }

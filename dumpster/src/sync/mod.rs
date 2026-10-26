@@ -66,8 +66,8 @@ use crate::{
 };
 
 use self::collect::{
-    collect_all_await, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing, notify_created_gc,
-    notify_dropped_gc,
+    collect_all_await, exclude_collection, mark_clean, mark_dirty, n_gcs_dropped, n_gcs_existing,
+    notify_created_gc, notify_dropped_gc,
 };
 
 /// A soft limit on the amount of references that may be made to a `Gc`.
@@ -165,8 +165,55 @@ where
     /// The generation number is assigned to the global generation every time a strong reference is
     /// created or destroyed or a `Gc` pointing to this allocation is dereferenced.
     generation: AtomicUsize,
+    /// The number of [`WeakGc`]s pointing to this allocation, plus one until the value is dropped.
+    /// Unlike `weak`, this does not keep the value alive, only the allocation itself.
+    /// The allocation is deallocated once this reaches zero.
+    weak_gcs: AtomicUsize,
     /// The actual data stored in the allocation.
     value: T,
+}
+
+impl<T> GcBox<T>
+where
+    T: Trace + Send + Sync + ?Sized,
+{
+    /// Drop the value in an allocation, then deallocate it if no [`WeakGc`]s point to it.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live allocation whose strong count is zero and whose value has not
+    /// been dropped, and nothing else may access the value during or after this call.
+    unsafe fn drop_value(ptr: NonNull<Self>) {
+        // Do not create a reference to the whole box: other threads may be using its header
+        // through a `WeakGc` while we drop the value.
+        drop_in_place(&raw mut (*ptr.as_ptr()).value);
+        Self::release_weak(ptr);
+    }
+
+    /// Release a weak reference to an allocation, deallocating it if that was the last one.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live allocation, and the caller must own one of its weak references.
+    unsafe fn release_weak(ptr: NonNull<Self>) {
+        if (*ptr.as_ptr()).weak_gcs.fetch_sub(1, Ordering::Release) == 1 {
+            fence(Ordering::Acquire);
+            dealloc(ptr.as_ptr().cast(), Layout::for_value(ptr.as_ref()));
+        }
+    }
+
+    /// Take out a weak reference to an allocation.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live allocation.
+    unsafe fn acquire_weak(ptr: NonNull<Self>) {
+        let old_weak = (*ptr.as_ptr()).weak_gcs.fetch_add(1, Ordering::Relaxed);
+        // Check for overflow. See implementation of clone for details.
+        if old_weak > MAX_STRONG_COUNT {
+            std::process::abort();
+        }
+    }
 }
 
 unsafe impl<T> Send for Gc<T> where T: Trace + Send + Sync + ?Sized {}
@@ -287,6 +334,7 @@ where
                 strong: AtomicUsize::new(1),
                 weak: AtomicUsize::new(0),
                 generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
+                weak_gcs: AtomicUsize::new(1),
                 value,
             }))))),
             tag: AtomicUsize::new(0),
@@ -376,6 +424,7 @@ where
             strong: AtomicUsize::new(1),
             weak: AtomicUsize::new(0),
             generation: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
+            weak_gcs: AtomicUsize::new(1),
             value: Uninitialized(MaybeUninit::<T>::uninit()),
         })));
         let mut cleanup = CleanUp {
@@ -613,6 +662,28 @@ where
         unsafe { gc.ptr.get() }.is_null()
     }
 
+    /// Create a [`WeakGc`] pointing to the same allocation as this `Gc`.
+    ///
+    /// The `WeakGc` does not keep the value alive.
+    /// If this `Gc` [is dead](Gc::is_dead), the `WeakGc` will never upgrade.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::sync::Gc;
+    ///
+    /// let gc = Gc::new(5);
+    /// let weak = Gc::downgrade(&gc);
+    /// assert_eq!(*weak.upgrade().unwrap(), 5);
+    /// ```
+    pub fn downgrade(gc: &Self) -> WeakGc<T> {
+        let ptr = unsafe { gc.ptr.get() };
+        if let Some(box_ptr) = ptr.as_option() {
+            unsafe { GcBox::acquire_weak(box_ptr) };
+        }
+        WeakGc { ptr }
+    }
+
     /// Consumes the `Gc<T>`, returning the inner `GcBox<T>` pointer and tag.
     #[inline]
     #[must_use]
@@ -712,6 +783,8 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
     /// If there are other `Gc` pointers to the same allocation, then `make_mut` will
     /// [`clone`] the inner value to a new allocation to ensure unique ownership. This is also
     /// referred to as clone-on-write.
+    /// The same happens if any [`WeakGc`]s point to the allocation, in which case they are
+    /// disassociated from this `Gc` and will no longer upgrade.
     ///
     /// [`clone`]: Clone::clone
     ///
@@ -749,16 +822,18 @@ impl<T: Trace + Send + Sync + Clone> Gc<T> {
 
         let strong = box_ref.strong.load(Ordering::Acquire);
         let weak = box_ref.weak.load(Ordering::Acquire);
+        let weak_gcs = box_ref.weak_gcs.load(Ordering::Acquire);
 
-        if strong != 1 || weak != 0 {
+        if strong != 1 || weak != 0 || weak_gcs != 1 {
             // We don't have unique access to the value so we need to clone it.
             *this = Gc::new(box_ref.value.clone());
         }
 
         // SAFETY: we have exclusive access to this `GcBox` because we ensured
         // that we hold the only reference to this allocation.
-        // No other `Gc`s point to this allocation because the strong count is 1, and there are no
-        // loose pointers internal to the collector because the weak count is 0.
+        // No other `Gc`s point to this allocation because the strong count is 1, there are no
+        // loose pointers internal to the collector because the weak count is 0, and no `WeakGc`s
+        // can upgrade to it because `weak_gcs` only counts the reference held for the value.
         unsafe { &mut (*this.ptr.get().as_ptr()).value }
     }
 }
@@ -987,7 +1062,7 @@ where
     T: Trace + Send + Sync + ?Sized,
 {
     fn drop(&mut self) {
-        let Some(mut ptr) = unsafe { self.ptr.get() }.as_option() else {
+        let Some(ptr) = unsafe { self.ptr.get() }.as_option() else {
             return;
         };
         let box_ref = unsafe { ptr.as_ref() };
@@ -1001,13 +1076,9 @@ where
             1 => {
                 mark_clean(box_ref);
                 if box_ref.weak.fetch_sub(1, Ordering::Release) == 1 {
-                    // destroyed the last weak reference! we can safely deallocate this
-                    let layout = Layout::for_value(box_ref);
+                    // destroyed the last weak reference! we can safely drop the value
                     fence(Ordering::Acquire);
-                    unsafe {
-                        drop_in_place(ptr.as_mut());
-                        dealloc(ptr.as_ptr().cast(), layout);
-                    }
+                    unsafe { GcBox::drop_value(ptr) };
                 }
             }
             _ => {
@@ -1106,6 +1177,7 @@ impl<T: Trace + Send + Sync + ?Sized> Gc<T> {
             (&raw mut (*inner).strong).write(AtomicUsize::new(1));
             (&raw mut (*inner).weak).write(AtomicUsize::new(0));
             (&raw mut (*inner).generation).write(AtomicUsize::new(0));
+            (&raw mut (*inner).weak_gcs).write(AtomicUsize::new(1));
         }
 
         inner
@@ -1591,4 +1663,160 @@ where
         // a later problem.
         Self::from(iter.into_iter().collect::<Vec<_>>())
     }
+}
+
+/// A thread-safe weak reference to a garbage-collected allocation.
+///
+/// A `WeakGc` does not keep its value alive.
+/// Once every [`Gc`] to the allocation has been dropped (or the allocation has been collected as
+/// part of an unreachable cycle), [`WeakGc::upgrade`] returns `None`.
+/// The garbage collector never follows a `WeakGc`, so it is safe to use them to point "backwards"
+/// in a data structure, such as from a child node to its parent.
+///
+/// A `WeakGc` is created by calling [`Gc::downgrade`].
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::sync::{Gc, WeakGc};
+///
+/// let gc = Gc::new(5);
+/// let weak: WeakGc<i32> = Gc::downgrade(&gc);
+///
+/// std::thread::scope(|s| {
+///     s.spawn(|| assert_eq!(*weak.upgrade().unwrap(), 5));
+/// });
+///
+/// drop(gc);
+/// assert!(weak.upgrade().is_none());
+/// ```
+pub struct WeakGc<T: Trace + Send + Sync + ?Sized + 'static> {
+    /// The pointer to the allocation.
+    ///
+    /// If `ptr` is null, then this `WeakGc` does not point to any allocation and will never
+    /// upgrade.
+    ptr: Nullable<GcBox<T>>,
+}
+
+unsafe impl<T> Send for WeakGc<T> where T: Trace + Send + Sync + ?Sized {}
+unsafe impl<T> Sync for WeakGc<T> where T: Trace + Send + Sync + ?Sized {}
+
+impl<T: Trace + Send + Sync> WeakGc<T> {
+    /// Construct a `WeakGc` which does not point to any allocation.
+    /// Calling [`WeakGc::upgrade`] on it will always return `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::sync::WeakGc;
+    ///
+    /// let weak = WeakGc::<i32>::new();
+    /// assert!(weak.upgrade().is_none());
+    /// ```
+    #[must_use]
+    pub fn new() -> Self {
+        WeakGc {
+            ptr: Nullable::from_ptr(ptr::null_mut()),
+        }
+    }
+}
+
+impl<T: Trace + Send + Sync + ?Sized> WeakGc<T> {
+    /// Attempt to upgrade this `WeakGc` into a [`Gc`].
+    ///
+    /// Returns `None` if every `Gc` to the value is gone or the value has been collected as part of
+    /// an unreachable cycle.
+    ///
+    /// This may briefly block while another thread is determining which allocations are
+    /// unreachable during a collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::sync::Gc;
+    ///
+    /// let gc = Gc::new(5);
+    /// let weak = Gc::downgrade(&gc);
+    /// assert!(weak.upgrade().is_some());
+    ///
+    /// drop(gc);
+    /// assert!(weak.upgrade().is_none());
+    /// ```
+    #[must_use]
+    pub fn upgrade(&self) -> Option<Gc<T>> {
+        let ptr = self.ptr.as_option()?;
+        // Only touch the header: another thread might be dropping the value.
+        let (strong, generation) =
+            unsafe { (&(*ptr.as_ptr()).strong, &(*ptr.as_ptr()).generation) };
+
+        exclude_collection(|| {
+            let mut n = strong.load(Ordering::Relaxed);
+            loop {
+                if n == 0 {
+                    return None;
+                }
+                // Check for overflow. See implementation of clone for details.
+                if n > MAX_STRONG_COUNT {
+                    std::process::abort();
+                }
+                match strong.compare_exchange_weak(n, n + 1, Ordering::Acquire, Ordering::Relaxed) {
+                    Ok(_) => break,
+                    Err(actual) => n = actual,
+                }
+            }
+
+            generation.store(CURRENT_TAG.load(Ordering::Acquire), Ordering::Release);
+            notify_created_gc();
+
+            Some(Gc {
+                ptr: UCell::new(self.ptr),
+                tag: AtomicUsize::new(CURRENT_TAG.load(Ordering::Acquire)),
+            })
+        })
+    }
+}
+
+impl<T: Trace + Send + Sync + ?Sized> Clone for WeakGc<T> {
+    fn clone(&self) -> Self {
+        if let Some(ptr) = self.ptr.as_option() {
+            unsafe { GcBox::acquire_weak(ptr) };
+        }
+        WeakGc { ptr: self.ptr }
+    }
+}
+
+impl<T: Trace + Send + Sync + ?Sized> Drop for WeakGc<T> {
+    fn drop(&mut self) {
+        if let Some(ptr) = self.ptr.as_option() {
+            unsafe { GcBox::release_weak(ptr) };
+        }
+    }
+}
+
+impl<T: Trace + Send + Sync> Default for WeakGc<T> {
+    fn default() -> Self {
+        WeakGc::new()
+    }
+}
+
+impl<T: Trace + Send + Sync + ?Sized> Debug for WeakGc<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WeakGc({:?})", self.ptr)
+    }
+}
+
+/// A `WeakGc` is never followed by the collector, since it does not keep its value alive.
+unsafe impl<V: Visitor, T: Trace + Send + Sync + ?Sized> TraceWith<V> for WeakGc<T> {
+    fn accept(&self, _: &mut V) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+#[cfg(not(loom))]
+#[cfg(feature = "coerce-unsized")]
+impl<T, U> std::ops::CoerceUnsized<WeakGc<U>> for WeakGc<T>
+where
+    T: std::marker::Unsize<U> + Trace + Send + Sync + ?Sized,
+    U: Trace + Send + Sync + ?Sized,
+{
 }

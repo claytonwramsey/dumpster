@@ -845,3 +845,154 @@ fn downcast_failure_preserves_refcount() {
     drop(trait_gc);
     assert_eq!(Gc::ref_count(&gc).get(), 1);
 }
+
+#[test]
+fn weak_upgrade_until_dropped() {
+    let gc = Gc::new(5);
+    let weak = Gc::downgrade(&gc);
+    let weak2 = weak.clone();
+
+    let upgraded = weak.upgrade().unwrap();
+    assert!(Gc::ptr_eq(&gc, &upgraded));
+    assert_eq!(Gc::ref_count(&gc).get(), 2);
+    drop(upgraded);
+    drop(weak);
+
+    assert_eq!(*weak2.upgrade().unwrap(), 5);
+    drop(gc);
+    assert!(weak2.upgrade().is_none());
+}
+
+#[test]
+fn weak_does_not_keep_value_alive() {
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    let gc = Gc::new(DropCount(&DROPPED));
+    let weak = Gc::downgrade(&gc);
+
+    drop(gc);
+    assert_eq!(DROPPED.load(Ordering::Relaxed), 1);
+    assert!(weak.upgrade().is_none());
+    drop(weak);
+    assert_eq!(DROPPED.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn weak_new_never_upgrades() {
+    assert!(WeakGc::<i32>::new().upgrade().is_none());
+    assert!(WeakGc::<i32>::default().clone().upgrade().is_none());
+}
+
+#[test]
+fn weak_downgrade_dead_gc() {
+    let gc = Gc::new_cyclic(|this: Gc<OnceCell<Gc<()>>>| {
+        assert!(Gc::downgrade(&this).upgrade().is_none());
+        OnceCell::new()
+    });
+    assert!(Gc::downgrade(&gc).upgrade().is_some());
+}
+
+#[test]
+fn weak_unsized() {
+    let gc: Gc<[String]> = Gc::from(vec!["a".to_owned(), "b".to_owned()]);
+    let weak = Gc::downgrade(&gc);
+    assert_eq!(weak.upgrade().unwrap()[1], "b");
+    drop(gc);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn weak_to_collected_cycle() {
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    let gc = Gc::new(MultiRef {
+        refs: RefCell::new(Vec::new()),
+        drop_count: &DROPPED,
+    });
+    gc.refs.borrow_mut().push(gc.clone());
+    let weak = Gc::downgrade(&gc);
+    assert!(weak.upgrade().is_some());
+
+    drop(gc);
+    collect();
+    assert_eq!(DROPPED.load(Ordering::Relaxed), 1);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+/// A `Drop` implementation run during a collection must not be able to resurrect another
+/// unreachable allocation by upgrading a `WeakGc` to it.
+fn weak_upgrade_fails_during_collection() {
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    static RESURRECTED: AtomicBool = AtomicBool::new(false);
+
+    struct Node {
+        next: RefCell<Option<Gc<Node>>>,
+        prev: RefCell<WeakGc<Node>>,
+    }
+
+    unsafe impl<V: Visitor> TraceWith<V> for Node {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.next.accept(visitor)?;
+            self.prev.accept(visitor)
+        }
+    }
+
+    impl Drop for Node {
+        fn drop(&mut self) {
+            if self.prev.borrow().upgrade().is_some() {
+                RESURRECTED.store(true, Ordering::Relaxed);
+            }
+            DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let a = Gc::new(Node {
+        next: RefCell::new(None),
+        prev: RefCell::new(WeakGc::new()),
+    });
+    let b = Gc::new(Node {
+        next: RefCell::new(Some(a.clone())),
+        prev: RefCell::new(Gc::downgrade(&a)),
+    });
+    *a.next.borrow_mut() = Some(b.clone());
+    *a.prev.borrow_mut() = Gc::downgrade(&b);
+
+    drop(a);
+    drop(b);
+    collect();
+    assert_eq!(DROPPED.load(Ordering::Relaxed), 2);
+    assert!(!RESURRECTED.load(Ordering::Relaxed));
+}
+
+#[test]
+fn weak_upgrade_fails_in_own_drop() {
+    static RESURRECTED: AtomicBool = AtomicBool::new(false);
+    struct Foo(RefCell<WeakGc<Foo>>);
+
+    unsafe impl<V: Visitor> TraceWith<V> for Foo {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    impl Drop for Foo {
+        fn drop(&mut self) {
+            if self.0.borrow().upgrade().is_some() {
+                RESURRECTED.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    let gc = Gc::new(Foo(RefCell::new(WeakGc::new())));
+    *gc.0.borrow_mut() = Gc::downgrade(&gc);
+    drop(gc);
+    assert!(!RESURRECTED.load(Ordering::Relaxed));
+}
+
+#[test]
+fn make_mut_disassociates_weak() {
+    let mut gc = Gc::new(1);
+    let weak = Gc::downgrade(&gc);
+    *Gc::make_mut(&mut gc) += 1;
+    assert_eq!(*gc, 2);
+    assert!(weak.upgrade().is_none());
+}

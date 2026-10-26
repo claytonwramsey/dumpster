@@ -9,12 +9,10 @@
 //! Implementations of the single-threaded garbage-collection logic.
 
 use std::{
-    alloc::{dealloc, Layout},
     cell::{Cell, RefCell},
     collections::hash_map::Entry,
     mem::take,
-    num::NonZeroUsize,
-    ptr::{drop_in_place, NonNull},
+    ptr::NonNull,
 };
 
 use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
@@ -57,7 +55,7 @@ pub(super) struct Dumpster {
 /// A unique identifier for an allocated garbage-collected block.
 ///
 /// It contains a pointer to the reference count of the allocation.
-struct AllocationId(pub NonNull<Cell<NonZeroUsize>>);
+struct AllocationId(pub NonNull<Cell<usize>>);
 
 impl<T> From<NonNull<GcBox<T>>> for AllocationId
 where
@@ -150,6 +148,15 @@ impl Dumpster {
             {
                 mark.visited.insert(*id);
                 (cleanup.mark_fn)(cleanup.ptr, &mut mark);
+            }
+
+            // Zero the strong count of every unreachable allocation before running any `Drop`
+            // implementation, so that no `WeakGc` can upgrade to an allocation about to be dropped.
+            // Every allocation we are about to drop is in `to_collect` or was found by `dfs`.
+            for id in dfs.ref_graph.keys().chain(self.to_collect.borrow().keys()) {
+                if !mark.visited.contains(id) {
+                    id.0.as_ref().set(0);
+                }
             }
 
             dfs.visited.clear();
@@ -272,7 +279,7 @@ impl Visitor for Dfs {
             }
             Entry::Vacant(v) => {
                 v.insert(Reachability {
-                    n_unaccounted: unsafe { next_id.0.as_ref().get().get() - 1 },
+                    n_unaccounted: unsafe { next_id.0.as_ref().get() - 1 },
                     ptr: Erased::new(ptr),
                     mark_fn: apply_visitor!(),
                 });
@@ -342,9 +349,12 @@ impl Visitor for DropAlloc<'_> {
         if self.reachable.contains(&id) {
             unsafe {
                 let cell_ref = &ptr.as_ref().ref_count;
-                cell_ref.set(NonZeroUsize::new(cell_ref.get().get() - 1).expect(
-                    "reachable allocation cannot be rendered unreachable by deleting lost alloc",
-                ));
+                let new_count = cell_ref.get() - 1;
+                assert_ne!(
+                    new_count, 0,
+                    "reachable allocation cannot be rendered unreachable by deleting lost alloc"
+                );
+                cell_ref.set(new_count);
             }
             return;
         }
@@ -352,9 +362,7 @@ impl Visitor for DropAlloc<'_> {
         if self.visited.insert(id) {
             unsafe {
                 ptr.as_ref().value.accept(self).unwrap();
-                let layout = Layout::for_value(ptr.as_ref());
-                drop_in_place(ptr.as_ptr());
-                dealloc(ptr.as_ptr().cast(), layout);
+                GcBox::drop_value(ptr);
             }
         }
     }
@@ -364,13 +372,9 @@ impl Visitor for DropAlloc<'_> {
 /// find.
 /// Also, drop the allocation when done.
 unsafe fn drop_assist<T: Trace + ?Sized>(ptr: Erased, visitor: &mut DropAlloc<'_>) {
-    let mut spec = ptr.specify::<GcBox<T>>();
+    let spec = ptr.specify::<GcBox<T>>();
     if visitor.visited.insert(AllocationId::from(spec)) {
         spec.as_ref().value.accept(visitor).unwrap();
-
-        let mut_spec = spec.as_mut();
-        let layout = Layout::for_value(mut_spec);
-        drop_in_place(mut_spec);
-        dealloc(std::ptr::from_mut::<GcBox<T>>(mut_spec).cast(), layout);
+        GcBox::drop_value(spec);
     }
 }
