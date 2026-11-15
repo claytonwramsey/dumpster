@@ -229,6 +229,87 @@ fn deadlock() {
 }
 
 #[test]
+/// Test that freeing an allocation whose last strong reference was dropped during a collection
+/// does not start a nested collection on the collecting thread.
+///
+/// The collector holds a weak reference to every allocation in its reference graph. When the last
+/// strong reference to a reachable allocation is dropped while the collector destroys garbage, the
+/// collector frees that allocation itself afterwards. Freeing it drops the `Gc`s it contains, which
+/// must not trigger a collection while the collecting thread still holds the collection lock:
+/// that collection would wait for the lock forever.
+///
+/// If this regresses, the collecting thread keeps holding the lock, so other tests calling
+/// `collect()` will hang after this one fails.
+fn no_nested_collect_when_freeing_after_cleaning() {
+    use std::{cell::Cell, sync::mpsc, thread, time::Duration};
+
+    /// An allocation that owns a `Gc`, so that freeing it drops a `Gc`.
+    struct Owner(Gc<()>);
+
+    unsafe impl<V: Visitor> TraceWith<V> for Owner {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.0.accept(visitor)
+        }
+    }
+
+    /// A garbage cycle that also holds the only strong reference to an `Owner`.
+    ///
+    /// `hidden` is deliberately not visited, so the `Owner` looks reachable to the collector, but
+    /// loses its last strong reference when the cycle is destroyed.
+    struct Cycle {
+        this: Mutex<Option<Gc<Cycle>>>,
+        #[expect(unused)]
+        hidden: Gc<Owner>,
+    }
+
+    unsafe impl<V: Visitor> TraceWith<V> for Cycle {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.this.accept(visitor)
+        }
+    }
+
+    thread_local! {
+        static FORCE_COLLECT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Always collects on a thread that set `FORCE_COLLECT`, and behaves like the default
+    /// everywhere else, so that concurrently running tests are unaffected.
+    fn force_on_this_thread(info: &CollectInfo) -> bool {
+        FORCE_COLLECT.with(Cell::get) || default_collect_condition(info)
+    }
+
+    /// The deadlock needs a cycle to be destroyed before its `Owner` is visited in the destroy
+    /// loop, which iterates in hash map order. Many cycles make that all but certain.
+    const N_CYCLES: usize = 64;
+
+    set_collect_condition(force_on_this_thread);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for _ in 0..N_CYCLES {
+            let owner = Gc::new(Owner(Gc::new(())));
+            // make sure the collector visits the owner
+            drop(owner.clone());
+            let cycle = Gc::new(Cycle {
+                this: Mutex::new(None),
+                hidden: owner,
+            });
+            *cycle.this.lock().unwrap() = Some(cycle.clone());
+            drop(cycle);
+        }
+        FORCE_COLLECT.with(|force| force.set(true));
+        collect();
+        FORCE_COLLECT.with(|force| force.set(false));
+        _ = done_tx.send(());
+    });
+    let finished = done_rx.recv_timeout(Duration::from_secs(30));
+    set_collect_condition(default_collect_condition);
+    assert!(
+        finished.is_ok(),
+        "collect() deadlocked while freeing allocations after cleaning"
+    );
+}
+
+#[test]
 fn open_drop() {
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
     let gc1 = Gc::new(MultiRef {
