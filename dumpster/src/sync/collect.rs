@@ -416,7 +416,6 @@ impl GarbageTruck {
                 }
             }
         }
-        CLEANING.with(|c| c.set(false));
         for (drop_fn, ptr) in weak_destroys {
             unsafe {
                 // SAFETY: we have proven (via header_ref.weak = 1) that the cleaning
@@ -425,6 +424,10 @@ impl GarbageTruck {
                 drop_fn(ptr);
             };
         }
+        // Only stop cleaning once the weak destroys are done: they drop the `Gc`s inside the
+        // allocations they free, and a collection triggered by one of those drops would wait
+        // forever for `collecting_lock`, which this thread still holds.
+        CLEANING.with(|c| c.set(false));
         drop(collecting_guard);
     }
 }
