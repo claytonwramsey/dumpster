@@ -214,9 +214,60 @@ pub fn set_collect_condition(f: CollectCondition) {
 /// The underlying heap allocation for a [`Gc`].
 pub struct GcBox<T: Trace + ?Sized> {
     /// The number of extant references to this garbage-collected data.
-    ref_count: Cell<NonZeroUsize>,
+    /// If this is zero, the value has been (or is being) dropped, and only [`WeakGc`]s remain.
+    ref_count: Cell<usize>,
+    /// The number of [`WeakGc`]s pointing to this allocation, plus one until the value is dropped.
+    /// The allocation is deallocated once this reaches zero.
+    weak_gcs: Cell<usize>,
     /// The stored value inside this garbage-collected box.
     value: T,
+}
+
+impl<T: Trace + ?Sized> GcBox<T> {
+    /// Drop the value in an allocation whose last [`Gc`] is gone.
+    ///
+    /// The strong count is zeroed first so that no [`WeakGc`] can upgrade to the allocation, even
+    /// from within the value's `Drop` implementation.
+    /// The allocation is deallocated afterwards if no `WeakGc`s point to it.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live allocation whose value has not been dropped, and no `Gc` to it
+    /// may be used afterwards.
+    unsafe fn drop_value(ptr: NonNull<Self>) {
+        (*ptr.as_ptr()).ref_count.set(0);
+        drop_in_place(&raw mut (*ptr.as_ptr()).value);
+        Self::release_weak(ptr);
+    }
+
+    /// Take out a weak reference to an allocation.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live allocation.
+    unsafe fn acquire_weak(ptr: NonNull<Self>) {
+        // Only touch the header: the value might be in the middle of being dropped.
+        let weak_gcs = &(*ptr.as_ptr()).weak_gcs;
+        let n = weak_gcs.get().wrapping_add(1);
+        weak_gcs.set(n);
+        if n == 0 {
+            // Overflowing would let the allocation be freed while `WeakGc`s to it still exist.
+            std::process::abort();
+        }
+    }
+
+    /// Release a weak reference to an allocation, deallocating it if that was the last one.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live allocation, and the caller must own one of its weak references.
+    unsafe fn release_weak(ptr: NonNull<Self>) {
+        let weak_gcs = &(*ptr.as_ptr()).weak_gcs;
+        weak_gcs.set(weak_gcs.get() - 1);
+        if weak_gcs.get() == 0 {
+            dealloc(ptr.as_ptr().cast(), Layout::for_value(ptr.as_ref()));
+        }
+    }
 }
 
 impl<T: Trace + ?Sized> Gc<T> {
@@ -236,7 +287,8 @@ impl<T: Trace + ?Sized> Gc<T> {
         _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
         Gc {
             ptr: Cell::new(Nullable::new(NonNull::from(Box::leak(Box::new(GcBox {
-                ref_count: Cell::new(NonZeroUsize::MIN),
+                ref_count: Cell::new(1),
+                weak_gcs: Cell::new(1),
                 value,
             }))))),
         }
@@ -322,7 +374,8 @@ impl<T: Trace + ?Sized> Gc<T> {
         // make an uninitialized allocation
         _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
         let mut gcbox = NonNull::from(Box::leak(Box::new(GcBox {
-            ref_count: Cell::new(NonZeroUsize::MIN),
+            ref_count: Cell::new(1),
+            weak_gcs: Cell::new(1),
             value: Uninitialized(MaybeUninit::<T>::uninit()),
         })));
         let mut cleanup = CleanUp {
@@ -521,7 +574,8 @@ impl<T: Trace + ?Sized> Gc<T> {
     This means a Gc escaped from a Drop implementation, likely implying a bug in your code.",
         );
         let box_ref = unsafe { box_ptr.as_ref() };
-        box_ref.ref_count.get()
+        NonZeroUsize::new(box_ref.ref_count.get())
+            .expect("strong count to a GcBox may never be zero while a Gc to it exists")
     }
 
     /// Determine whether this is a dead `Gc`.
@@ -550,6 +604,28 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// ```
     pub fn is_dead(gc: &Self) -> bool {
         gc.ptr.get().is_null()
+    }
+
+    /// Create a [`WeakGc`] pointing to the same allocation as this `Gc`.
+    ///
+    /// The `WeakGc` does not keep the value alive.
+    /// If this `Gc` [is dead](Gc::is_dead), the `WeakGc` will never upgrade.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::unsync::Gc;
+    ///
+    /// let gc = Gc::new(5);
+    /// let weak = Gc::downgrade(&gc);
+    /// assert_eq!(*weak.upgrade().unwrap(), 5);
+    /// ```
+    pub fn downgrade(gc: &Self) -> WeakGc<T> {
+        let ptr = gc.ptr.get();
+        if let Some(box_ptr) = ptr.as_option() {
+            unsafe { GcBox::acquire_weak(box_ptr) };
+        }
+        WeakGc { ptr }
     }
 
     /// Consumes the `Gc<T>`, returning the inner `GcBox<T>` pointer.
@@ -637,6 +713,8 @@ impl<T: Trace + Clone> Gc<T> {
     /// If there are other `Gc` pointers to the same allocation, then `make_mut` will
     /// [`clone`] the inner value to a new allocation to ensure unique ownership. This is also
     /// referred to as clone-on-write.
+    /// The same happens if any [`WeakGc`]s point to the allocation, in which case they are
+    /// disassociated from this `Gc` and will no longer upgrade.
     ///
     /// [`clone`]: Clone::clone
     ///
@@ -673,7 +751,7 @@ impl<T: Trace + Clone> Gc<T> {
         let ptr = unsafe { this.ptr.get().unwrap_unchecked() };
         let box_ref = unsafe { ptr.as_ref() };
 
-        if box_ref.ref_count.get() == NonZeroUsize::MIN {
+        if box_ref.ref_count.get() == 1 && box_ref.weak_gcs.get() == 1 {
             // The dumpster must not contain this allocation while we hold
             // a mutable reference to its value because on collection
             // it would dereference the value to trace it.
@@ -684,8 +762,8 @@ impl<T: Trace + Clone> Gc<T> {
         }
 
         // SAFETY: we have exclusive access to this `GcBox` because we ensured
-        // that the ref count is 1 and that there are no loose pointers in the
-        // `to_collect` buffer of this thread's dumpster.
+        // that the ref count is 1, that no `WeakGc`s could upgrade to it, and that there are no
+        // loose pointers in the `to_collect` buffer of this thread's dumpster.
         unsafe { &mut (*this.ptr.get_mut().as_ptr()).value }
     }
 }
@@ -727,7 +805,8 @@ impl<T: Trace + ?Sized> Gc<T> {
         let inner = mem_to_gc_box(ptr);
 
         unsafe {
-            (&raw mut (*inner).ref_count).write(Cell::new(NonZeroUsize::MIN));
+            (&raw mut (*inner).ref_count).write(Cell::new(1));
+            (&raw mut (*inner).weak_gcs).write(Cell::new(1));
         }
 
         inner
@@ -1007,7 +1086,7 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
     /// If this is the last reference which can reach the pointed-to data, the allocation that it
     /// points to will be destroyed.
     fn drop(&mut self) {
-        let Some(mut ptr) = self.ptr.get().as_option() else {
+        let Some(ptr) = self.ptr.get().as_option() else {
             return;
         };
 
@@ -1015,21 +1094,16 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
             .try_with(|d| {
                 let box_ref = unsafe { ptr.as_ref() };
                 match box_ref.ref_count.get() {
-                    NonZeroUsize::MIN => {
+                    1 => {
                         d.mark_cleaned(ptr);
-                        unsafe {
-                            // this was the last reference, drop unconditionally
-                            drop_in_place(addr_of_mut!(ptr.as_mut().value));
-                            // note: `box_ref` is no longer usable
-                            dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
-                        }
+                        // this was the last reference, drop unconditionally
+                        // note: `box_ref` is no longer usable
+                        unsafe { GcBox::drop_value(ptr) };
                     }
                     n => {
                         // decrement the ref count - but another reference to this data still
                         // lives
-                        box_ref
-                            .ref_count
-                            .set(NonZeroUsize::new(n.get() - 1).unwrap());
+                        box_ref.ref_count.set(n - 1);
 
                         if contains_gcs(&box_ref.value).unwrap_or(true) {
                             // remaining references could be a cycle - therefore, mark it as dirty
@@ -1051,20 +1125,15 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
             let box_ref = unsafe { ptr.as_ref() };
 
             match box_ref.ref_count.get() {
-                NonZeroUsize::MIN => {
-                    unsafe {
-                        // this was the last reference, drop unconditionally
-                        drop_in_place(addr_of_mut!(ptr.as_mut().value));
-                        // note: `box_ref` is no longer usable
-                        dealloc(ptr.as_ptr().cast::<u8>(), Layout::for_value(ptr.as_ref()));
-                    }
+                1 => {
+                    // this was the last reference, drop unconditionally
+                    // note: `box_ref` is no longer usable
+                    unsafe { GcBox::drop_value(ptr) };
                 }
                 n => {
                     // decrement the ref count - but another reference to this data still
                     // lives
-                    box_ref
-                        .ref_count
-                        .set(NonZeroUsize::new(n.get() - 1).unwrap());
+                    box_ref.ref_count.set(n - 1);
                 }
             }
         }
@@ -1507,4 +1576,132 @@ where
         // a later problem.
         Self::from(iter.into_iter().collect::<Vec<_>>())
     }
+}
+
+/// A weak reference to a garbage-collected allocation.
+///
+/// A `WeakGc` does not keep its value alive.
+/// Once every [`Gc`] to the allocation has been dropped (or the allocation has been collected as
+/// part of an unreachable cycle), the value is dropped and [`WeakGc::upgrade`] returns `None`.
+/// The garbage collector never follows a `WeakGc`, so it is safe to use them to point "backwards"
+/// in a data structure, such as from a child node to its parent.
+///
+/// A `WeakGc` is created by calling [`Gc::downgrade`].
+///
+/// # Examples
+///
+/// ```
+/// use dumpster::unsync::{Gc, WeakGc};
+///
+/// let gc = Gc::new(5);
+/// let weak: WeakGc<i32> = Gc::downgrade(&gc);
+/// assert_eq!(*weak.upgrade().unwrap(), 5);
+///
+/// drop(gc);
+/// assert!(weak.upgrade().is_none());
+/// ```
+pub struct WeakGc<T: Trace + ?Sized + 'static> {
+    /// A pointer to the heap allocation containing the data under concern.
+    ///
+    /// If `ptr` is null, then this `WeakGc` does not point to any allocation and will never
+    /// upgrade.
+    ptr: Nullable<GcBox<T>>,
+}
+
+impl<T: Trace> WeakGc<T> {
+    /// Construct a `WeakGc` which does not point to any allocation.
+    /// Calling [`WeakGc::upgrade`] on it will always return `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::unsync::WeakGc;
+    ///
+    /// let weak = WeakGc::<i32>::new();
+    /// assert!(weak.upgrade().is_none());
+    /// ```
+    #[must_use]
+    pub fn new() -> Self {
+        WeakGc {
+            ptr: Nullable::from_ptr(ptr::null_mut()),
+        }
+    }
+}
+
+impl<T: Trace + ?Sized> WeakGc<T> {
+    /// Attempt to upgrade this `WeakGc` into a [`Gc`].
+    ///
+    /// Returns `None` if the value has already been dropped, which happens once every `Gc` to it
+    /// is gone or it has been collected as part of an unreachable cycle.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dumpster::unsync::Gc;
+    ///
+    /// let gc = Gc::new(5);
+    /// let weak = Gc::downgrade(&gc);
+    /// assert!(weak.upgrade().is_some());
+    ///
+    /// drop(gc);
+    /// assert!(weak.upgrade().is_none());
+    /// ```
+    #[must_use]
+    pub fn upgrade(&self) -> Option<Gc<T>> {
+        let ptr = self.ptr.as_option()?;
+        // Only touch the header: the value might be in the middle of being dropped.
+        let ref_count = unsafe { &(*ptr.as_ptr()).ref_count };
+        if ref_count.get() == 0 {
+            return None;
+        }
+        ref_count.set(ref_count.get().saturating_add(1));
+        _ = DUMPSTER.try_with(Dumpster::notify_created_gc);
+        Some(Gc {
+            ptr: Cell::new(self.ptr),
+        })
+    }
+}
+
+impl<T: Trace + ?Sized> Clone for WeakGc<T> {
+    fn clone(&self) -> Self {
+        if let Some(ptr) = self.ptr.as_option() {
+            unsafe { GcBox::acquire_weak(ptr) };
+        }
+        WeakGc { ptr: self.ptr }
+    }
+}
+
+impl<T: Trace + ?Sized> Drop for WeakGc<T> {
+    fn drop(&mut self) {
+        if let Some(ptr) = self.ptr.as_option() {
+            unsafe { GcBox::release_weak(ptr) };
+        }
+    }
+}
+
+impl<T: Trace> Default for WeakGc<T> {
+    fn default() -> Self {
+        WeakGc::new()
+    }
+}
+
+impl<T: Trace + ?Sized> std::fmt::Debug for WeakGc<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WeakGc({:?})", self.ptr)
+    }
+}
+
+/// A `WeakGc` is never followed by the collector, since it does not keep its value alive.
+unsafe impl<V: Visitor, T: Trace + ?Sized> TraceWith<V> for WeakGc<T> {
+    fn accept(&self, _: &mut V) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "coerce-unsized")]
+impl<T, U> std::ops::CoerceUnsized<WeakGc<U>> for WeakGc<T>
+where
+    T: std::marker::Unsize<U> + Trace + ?Sized,
+    U: Trace + ?Sized,
+{
 }

@@ -8,7 +8,7 @@
 
 use loom::{
     lazy_static,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use loom_ext::{Mutex, OnceLock};
@@ -197,5 +197,54 @@ fn loom_sync_leak_by_creation_in_drop() {
         for join_handle in join_handles {
             join_handle.join().unwrap();
         }
+    });
+}
+
+#[test]
+/// Upgrading a `WeakGc` while another thread collects its (otherwise unreachable) allocation must
+/// never yield a `Gc` to a destroyed value.
+fn loom_weak_upgrade_during_collection() {
+    struct Cycle {
+        this: Mutex<Option<Gc<Cycle>>>,
+        alive: AtomicBool,
+    }
+
+    unsafe impl<V: Visitor> TraceWith<V> for Cycle {
+        fn accept(&self, visitor: &mut V) -> Result<(), ()> {
+            self.this.accept(visitor)
+        }
+    }
+
+    impl Drop for Cycle {
+        fn drop(&mut self) {
+            self.alive.store(false, Ordering::Release);
+        }
+    }
+
+    loom::model(|| {
+        let gc = Gc::new(Cycle {
+            this: Mutex::new(None),
+            alive: AtomicBool::new(true),
+        });
+        *gc.this.lock() = Some(gc.clone());
+        let weak = Gc::downgrade(&gc);
+        drop(gc);
+
+        let weak2 = weak.clone();
+        let upgrader = loom::thread::spawn(move || {
+            if let Some(gc) = weak2.upgrade() {
+                assert!(
+                    gc.alive.load(Ordering::Acquire),
+                    "upgraded to a destroyed allocation"
+                );
+                drop(gc);
+                collect::deliver_dumpster();
+            }
+        });
+        collect();
+        upgrader.join().unwrap();
+
+        collect();
+        assert!(weak.upgrade().is_none());
     });
 }

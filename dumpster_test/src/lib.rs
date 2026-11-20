@@ -16,7 +16,7 @@ use std::{
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 
-use dumpster::unsync::{collect, Gc};
+use dumpster::unsync::{collect, Gc, WeakGc};
 use dumpster_derive::Trace;
 
 #[derive(Trace)]
@@ -183,4 +183,45 @@ fn unsync_as_ptr() {
     assert_ne!(empty_ptr, Gc::as_ptr(&b2.0));
     assert_ne!(Gc::as_ptr(&b.0), Gc::as_ptr(&b2.0));
     assert_ne!(Gc::as_ptr(&b.0), empty2_ptr);
+}
+
+#[test]
+fn weak_parent_pointers() {
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Trace)]
+    struct Node {
+        counter: &'static AtomicUsize,
+        parent: RefCell<WeakGc<Node>>,
+        children: RefCell<Vec<Gc<Node>>>,
+    }
+
+    impl Drop for Node {
+        fn drop(&mut self) {
+            self.counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let root = Gc::new(Node {
+        counter: &COUNT,
+        parent: RefCell::new(WeakGc::new()),
+        children: RefCell::new(Vec::new()),
+    });
+    for _ in 0..2 {
+        root.children.borrow_mut().push(Gc::new(Node {
+            counter: &COUNT,
+            parent: RefCell::new(Gc::downgrade(&root)),
+            children: RefCell::new(Vec::new()),
+        }));
+    }
+
+    let child = root.children.borrow()[0].clone();
+    assert!(Gc::ptr_eq(&child.parent.borrow().upgrade().unwrap(), &root));
+
+    // The weak parent pointers form no cycle, so the tree is freed by reference counting alone.
+    drop(root);
+    assert_eq!(COUNT.load(Ordering::Relaxed), 2);
+    assert!(child.parent.borrow().upgrade().is_none());
+    drop(child);
+    assert_eq!(COUNT.load(Ordering::Relaxed), 3);
 }
