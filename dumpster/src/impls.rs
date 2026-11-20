@@ -31,11 +31,31 @@ use std::{
     },
 };
 
-use crate::{TraceWith, Visitor};
+use crate::{ContainsGcs, ContainsGcsVisitor, TraceWith, Visitor};
+
+impl ContainsGcs for Infallible {
+    fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+        false
+    }
+}
 
 unsafe impl<V: Visitor> TraceWith<V> for Infallible {
     fn accept(&self, _: &mut V) -> Result<(), ()> {
         match *self {}
+    }
+}
+
+#[cfg(feature = "either")]
+impl<A: ContainsGcs, B: ContainsGcs> ContainsGcs for either::Either<A, B> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self {
+            either::Either::Left(a) => a.contains_gcs(visitor),
+            either::Either::Right(b) => b.contains_gcs(visitor),
+        }
     }
 }
 
@@ -52,6 +72,12 @@ unsafe impl<V: Visitor, A: TraceWith<V>, B: TraceWith<V>> TraceWith<V> for eithe
 /// Implement `TraceWith<V>` trivially for some parametric `?Sized` type.
 macro_rules! param_trivial_impl_unsized {
     ($x: ty) => {
+        impl<T: ?Sized> ContainsGcs for $x {
+            fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+                false
+            }
+        }
+
         unsafe impl<V: Visitor, T: ?Sized> TraceWith<V> for $x {
             #[inline]
             fn accept(&self, _: &mut V) -> Result<(), ()> {
@@ -69,6 +95,12 @@ param_trivial_impl_unsized!(PhantomData<T>);
 /// Implement `TraceWith<V>` trivially for some parametric `Sized` type.
 macro_rules! param_trivial_impl_sized {
     ($x: ty) => {
+        impl<T> ContainsGcs for $x {
+            fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+                false
+            }
+        }
+
         unsafe impl<V: Visitor, T> TraceWith<V> for $x {
             #[inline]
             fn accept(&self, _: &mut V) -> Result<(), ()> {
@@ -81,15 +113,50 @@ macro_rules! param_trivial_impl_sized {
 param_trivial_impl_sized!(std::future::Pending<T>);
 param_trivial_impl_sized!(std::mem::Discriminant<T>);
 
+impl<T: ContainsGcs + ?Sized> ContainsGcs for Box<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        (**self).contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for Box<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         (**self).accept(visitor)
     }
 }
 
+impl<T> ContainsGcs for BuildHasherDefault<T> {
+    fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+        false
+    }
+}
+
 unsafe impl<V: Visitor, T> TraceWith<V> for BuildHasherDefault<T> {
     fn accept(&self, _: &mut V) -> Result<(), ()> {
         Ok(())
+    }
+}
+
+impl<T: ToOwned + ?Sized> ContainsGcs for Cow<'_, T>
+where
+    T::Owned: ContainsGcs,
+{
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        if let Cow::Owned(ref v) = self {
+            if v.contains_gcs(visitor) {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
@@ -105,10 +172,39 @@ where
     }
 }
 
+impl<T: ContainsGcs + ?Sized> ContainsGcs for RefCell<T> {
+    #[inline]
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self.try_borrow() {
+            Ok(value) => value.contains_gcs(visitor),
+            Err(_) => true,
+        }
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for RefCell<T> {
     #[inline]
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.try_borrow().map_err(|_| ())?.accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs + ?Sized> ContainsGcs for Mutex<T> {
+    #[inline]
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self.try_lock() {
+            Ok(value) => value.deref().contains_gcs(visitor),
+            Err(TryLockError::Poisoned(_)) => panic!(),
+            Err(TryLockError::WouldBlock) => true,
+        }
     }
 }
 
@@ -125,6 +221,21 @@ unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for Mutex<T> {
     }
 }
 
+impl<T: ContainsGcs + ?Sized> ContainsGcs for RwLock<T> {
+    #[inline]
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self.try_read() {
+            Ok(value) => value.deref().contains_gcs(visitor),
+            Err(TryLockError::Poisoned(_)) => panic!(),
+            Err(TryLockError::WouldBlock) => true,
+        }
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for RwLock<T> {
     #[inline]
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
@@ -138,12 +249,40 @@ unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for RwLock<T> {
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for Option<T> {
+    #[inline]
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self {
+            Some(x) => x.contains_gcs(visitor),
+            None => false,
+        }
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for Option<T> {
     #[inline]
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             Some(x) => x.accept(visitor),
             None => Ok(()),
+        }
+    }
+}
+
+impl<T: ContainsGcs, E: ContainsGcs> ContainsGcs for Result<T, E> {
+    #[inline]
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self {
+            Ok(t) => t.contains_gcs(visitor),
+            Err(e) => e.contains_gcs(visitor),
         }
     }
 }
@@ -158,9 +297,26 @@ unsafe impl<V: Visitor, T: TraceWith<V>, E: TraceWith<V>> TraceWith<V> for Resul
     }
 }
 
+impl<T: ContainsGcs + Copy> ContainsGcs for Cell<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.get().contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: Copy + TraceWith<V>> TraceWith<V> for Cell<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs> ContainsGcs for OnceCell<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        self.get().map_or(false, |x| x.contains_gcs(visitor))
     }
 }
 
@@ -170,9 +326,26 @@ unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for OnceCell<T> {
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for OnceLock<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        self.get().map_or(false, |x| x.contains_gcs(visitor))
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for OnceLock<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get().map_or(Ok(()), |x| x.accept(visitor))
+    }
+}
+
+impl<T: ContainsGcs> ContainsGcs for std::cmp::Reverse<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.0.contains_gcs(visitor)
     }
 }
 
@@ -182,9 +355,23 @@ unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::cmp::Reverse<T> {
     }
 }
 
+impl<T: ContainsGcs + ?Sized> ContainsGcs for std::io::BufReader<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.get_ref().contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V> + ?Sized> TraceWith<V> for std::io::BufReader<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get_ref().accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs + std::io::Write + ?Sized> ContainsGcs for std::io::BufWriter<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.get_ref().contains_gcs(visitor)
     }
 }
 
@@ -196,6 +383,14 @@ unsafe impl<V: Visitor, T: TraceWith<V> + std::io::Write + ?Sized> TraceWith<V>
     }
 }
 
+impl<T: ContainsGcs, U: ContainsGcs> ContainsGcs for std::io::Chain<T, U> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        let (t, u) = self.get_ref();
+        t.contains_gcs(visitor) || u.contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>, U: TraceWith<V>> TraceWith<V> for std::io::Chain<T, U> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         let (t, u) = self.get_ref();
@@ -204,9 +399,23 @@ unsafe impl<V: Visitor, T: TraceWith<V>, U: TraceWith<V>> TraceWith<V> for std::
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for std::io::Cursor<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.get_ref().contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::io::Cursor<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get_ref().accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs + std::io::Write + ?Sized> ContainsGcs for std::io::LineWriter<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.get_ref().contains_gcs(visitor)
     }
 }
 
@@ -218,9 +427,23 @@ unsafe impl<V: Visitor, T: TraceWith<V> + std::io::Write + ?Sized> TraceWith<V>
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for std::io::Take<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.get_ref().contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::io::Take<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.get_ref().accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs> ContainsGcs for std::mem::ManuallyDrop<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        (**self).contains_gcs(visitor)
     }
 }
 
@@ -230,15 +453,39 @@ unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::mem::ManuallyDrop
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for std::num::Saturating<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.0.contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::num::Saturating<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.0.accept(visitor)
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for std::num::Wrapping<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.0.contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::num::Wrapping<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.0.accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs> ContainsGcs for std::ops::Range<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        self.start.contains_gcs(visitor) || self.end.contains_gcs(visitor)
     }
 }
 
@@ -249,9 +496,26 @@ unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::Range<T> {
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for std::ops::RangeFrom<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.start.contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::RangeFrom<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.start.accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs> ContainsGcs for std::ops::RangeInclusive<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        self.start().contains_gcs(visitor) || self.end().contains_gcs(visitor)
     }
 }
 
@@ -262,9 +526,23 @@ unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::RangeInclusi
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for std::ops::RangeTo<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.end.contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::RangeTo<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.end.accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs> ContainsGcs for std::ops::RangeToInclusive<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.end.contains_gcs(visitor)
     }
 }
 
@@ -274,11 +552,37 @@ unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::RangeToInclu
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for std::ops::Bound<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self {
+            std::ops::Bound::Included(x) | std::ops::Bound::Excluded(x) => x.contains_gcs(visitor),
+            std::ops::Bound::Unbounded => false,
+        }
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::ops::Bound<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         match self {
             std::ops::Bound::Included(x) | std::ops::Bound::Excluded(x) => x.accept(visitor),
             std::ops::Bound::Unbounded => Ok(()),
+        }
+    }
+}
+
+impl<B: ContainsGcs, C: ContainsGcs> ContainsGcs for std::ops::ControlFlow<B, C> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self {
+            std::ops::ControlFlow::Continue(c) => c.contains_gcs(visitor),
+            std::ops::ControlFlow::Break(b) => b.contains_gcs(visitor),
         }
     }
 }
@@ -294,9 +598,29 @@ unsafe impl<V: Visitor, B: TraceWith<V>, C: TraceWith<V>> TraceWith<V>
     }
 }
 
+impl<T: ContainsGcs> ContainsGcs for std::panic::AssertUnwindSafe<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        // we omit `visitor.consume_fuel()` since this directly accesses a single field
+        self.0.contains_gcs(visitor)
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::panic::AssertUnwindSafe<T> {
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
         self.0.accept(visitor)
+    }
+}
+
+impl<T: ContainsGcs> ContainsGcs for std::task::Poll<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        match self {
+            std::task::Poll::Ready(r) => r.contains_gcs(visitor),
+            std::task::Poll::Pending => false,
+        }
     }
 }
 
@@ -314,6 +638,22 @@ unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::task::Poll<T> {
 /// mutable references.
 macro_rules! Trace_collection_impl {
     ($x: ty) => {
+        impl<T: ContainsGcs> ContainsGcs for $x {
+            fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+                if visitor.consume_fuel().is_err() {
+                    return true;
+                }
+
+                for elem in self {
+                    if elem.contains_gcs(visitor) {
+                        return true;
+                    }
+                }
+
+                false
+            }
+        }
+
         unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for $x {
             #[inline]
             fn accept(&self, visitor: &mut V) -> Result<(), ()> {
@@ -333,6 +673,22 @@ Trace_collection_impl!([T]);
 Trace_collection_impl!(BinaryHeap<T>);
 Trace_collection_impl!(BTreeSet<T>);
 
+impl<T: ContainsGcs> ContainsGcs for std::vec::IntoIter<T> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        for elem in self.as_slice() {
+            if elem.contains_gcs(visitor) {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
 unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::vec::IntoIter<T> {
     #[inline]
     fn accept(&self, visitor: &mut V) -> Result<(), ()> {
@@ -340,6 +696,24 @@ unsafe impl<V: Visitor, T: TraceWith<V>> TraceWith<V> for std::vec::IntoIter<T> 
             elem.accept(visitor)?;
         }
         Ok(())
+    }
+}
+
+impl<K: ContainsGcs, V: ContainsGcs, S: ContainsGcs + BuildHasher> ContainsGcs
+    for HashMap<K, V, S>
+{
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        for (k, v) in self {
+            if k.contains_gcs(visitor) || v.contains_gcs(visitor) {
+                return true;
+            }
+        }
+
+        self.hasher().contains_gcs(visitor)
     }
 }
 
@@ -355,6 +729,22 @@ unsafe impl<Z: Visitor, K: TraceWith<Z>, V: TraceWith<Z>, S: BuildHasher + Trace
     }
 }
 
+impl<T: ContainsGcs, S: ContainsGcs + BuildHasher> ContainsGcs for HashSet<T, S> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        for elem in self {
+            if elem.contains_gcs(visitor) {
+                return true;
+            }
+        }
+
+        self.hasher().contains_gcs(visitor)
+    }
+}
+
 unsafe impl<Z: Visitor, T: TraceWith<Z>, S: BuildHasher + TraceWith<Z>> TraceWith<Z>
     for HashSet<T, S>
 {
@@ -366,6 +756,22 @@ unsafe impl<Z: Visitor, T: TraceWith<Z>, S: BuildHasher + TraceWith<Z>> TraceWit
     }
 }
 
+impl<K: ContainsGcs, V: ContainsGcs> ContainsGcs for BTreeMap<K, V> {
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        for (k, v) in self {
+            if k.contains_gcs(visitor) || v.contains_gcs(visitor) {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
 unsafe impl<Z: Visitor, K: TraceWith<Z>, V: TraceWith<Z>> TraceWith<Z> for BTreeMap<K, V> {
     fn accept(&self, visitor: &mut Z) -> Result<(), ()> {
         for (k, v) in self {
@@ -373,6 +779,23 @@ unsafe impl<Z: Visitor, K: TraceWith<Z>, V: TraceWith<Z>> TraceWith<Z> for BTree
             v.accept(visitor)?;
         }
         Ok(())
+    }
+}
+
+impl<T: ContainsGcs, const N: usize> ContainsGcs for [T; N] {
+    #[inline]
+    fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+        if visitor.consume_fuel().is_err() {
+            return true;
+        }
+
+        for elem in self.as_slice() {
+            if elem.contains_gcs(visitor) {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
@@ -390,6 +813,13 @@ unsafe impl<V: Visitor, T: TraceWith<V>, const N: usize> TraceWith<V> for [T; N]
 /// fields.
 macro_rules! Trace_trivial_impl {
     ($x: ty) => {
+        impl ContainsGcs for $x {
+            #[inline]
+            fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+                false
+            }
+        }
+
         unsafe impl<V: Visitor> TraceWith<V> for $x {
             #[inline]
             fn accept(&self, _: &mut V) -> Result<(), ()> {
@@ -572,6 +1002,23 @@ Trace_trivial_impl!(std::time::TryFromFloatSecsError);
 macro_rules! Trace_tuple {
     () => {}; // This case is handled above by the trivial case
     ($($args:ident),*) => {
+        impl<$($args: ContainsGcs),*> ContainsGcs for ($($args,)*) {
+            fn contains_gcs(&self, visitor: &mut ContainsGcsVisitor) -> bool {
+                if visitor.consume_fuel().is_err() {
+                    return true;
+                }
+                #[expect(clippy::allow_attributes)]
+                #[allow(non_snake_case)]
+                let &($(ref $args,)*) = self;
+                $(
+                    if ($args).contains_gcs(visitor) {
+                        return true;
+                    }
+                )*
+                false
+            }
+        }
+
         unsafe impl<V: Visitor, $($args: TraceWith<V>),*> TraceWith<V> for ($($args,)*) {
             fn accept(&self, visitor: &mut V) -> Result<(), ()> {
                 #[expect(clippy::allow_attributes)]
@@ -599,6 +1046,12 @@ Trace_tuple!(A, B, C, D, E, F, G, H, I, J);
 /// Implement `TraceWith<V>` for one function type.
 macro_rules! Trace_fn {
     ($ty:ty $(,$args:ident)*) => {
+        impl<Ret $(,$args)*> ContainsGcs for $ty {
+            fn contains_gcs(&self, _: &mut ContainsGcsVisitor) -> bool {
+                false
+            }
+        }
+
         unsafe impl<V: Visitor, Ret $(,$args)*> TraceWith<V> for $ty {
             fn accept(&self, _: &mut V) -> Result<(), ()> { Ok(()) }
         }
