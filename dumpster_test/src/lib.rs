@@ -13,11 +13,14 @@
 
 use std::{
     cell::RefCell,
+    marker::PhantomData,
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 
-use dumpster::unsync::{collect, Gc};
-use dumpster_derive::Trace;
+use dumpster::{
+    unsync::{collect, Gc},
+    Trace,
+};
 
 #[derive(Trace)]
 struct Empty;
@@ -184,3 +187,24 @@ fn unsync_as_ptr() {
     assert_ne!(Gc::as_ptr(&b.0), Gc::as_ptr(&b2.0));
     assert_ne!(Gc::as_ptr(&b.0), empty2_ptr);
 }
+
+const fn assert_implements_trace(_: &impl Trace) {}
+
+/// Some struct that doesn't implement `Trace`.
+struct DoesNotImplTrace;
+
+// A generic struct should not have a `Trace` bound for each generic, but for the fields instead.
+const _: () = {
+    // All fields of this type implement `Trace` regardless of `T`
+    // so the struct also implements `Trace` regardless of `T`.
+    #[derive(Trace)]
+    struct GenericStruct<T> {
+        fn_ptr: fn(T) -> T,
+        phantom: PhantomData<T>,
+    }
+
+    assert_implements_trace(&GenericStruct::<DoesNotImplTrace> {
+        fn_ptr: |x| x,
+        phantom: PhantomData,
+    });
+};
