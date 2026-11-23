@@ -6,13 +6,18 @@
     file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
+#![expect(
+    clippy::items_after_statements,
+    reason = "every test takes the `serial()` guard before declaring its local items"
+)]
+
 use std::{
     collections::hash_map::Entry,
     mem::{swap, take, transmute, MaybeUninit},
     ptr::NonNull,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex, OnceLock,
+        Mutex, MutexGuard, OnceLock, PoisonError,
     },
 };
 
@@ -24,6 +29,17 @@ use crate::{
 };
 
 use super::*;
+
+/// Acquire a serialization lock over the tests in this module.
+///
+/// All sync `Gc`s share one global garbage truck, collection lock, and set of drop counters, so a
+/// test running concurrently with another can collect, deliver, or delay the other test's garbage.
+/// Every test here must hold this guard for its whole body so that tests don't fail spuriously.
+fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    // A panicking test (including `#[should_panic]` ones) poisons the lock and can be ignored.
+    LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 struct DropCount<'a>(&'a AtomicUsize);
 
@@ -53,6 +69,7 @@ unsafe impl<V: Visitor> TraceWith<V> for MultiRef {
 
 #[test]
 fn single_alloc() {
+    let _serial = serial();
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&DROP_COUNT));
 
@@ -65,6 +82,7 @@ fn single_alloc() {
 
 #[test]
 fn ref_count() {
+    let _serial = serial();
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
     let gc1 = Gc::new(DropCount(&DROP_COUNT));
     let gc2 = Gc::clone(&gc1);
@@ -78,6 +96,7 @@ fn ref_count() {
 
 #[test]
 fn self_referential() {
+    let _serial = serial();
     struct Foo(Mutex<Option<Gc<Foo>>>);
     static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -105,6 +124,7 @@ fn self_referential() {
 
 #[test]
 fn two_cycle() {
+    let _serial = serial();
     static DROP_0: AtomicUsize = AtomicUsize::new(0);
     static DROP_1: AtomicUsize = AtomicUsize::new(0);
 
@@ -133,6 +153,7 @@ fn two_cycle() {
 
 #[test]
 fn self_ref_two_cycle() {
+    let _serial = serial();
     static DROP_0: AtomicUsize = AtomicUsize::new(0);
     static DROP_1: AtomicUsize = AtomicUsize::new(0);
 
@@ -162,6 +183,7 @@ fn self_ref_two_cycle() {
 
 #[test]
 fn parallel_loop() {
+    let _serial = serial();
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
     static COUNT_2: AtomicUsize = AtomicUsize::new(0);
     static COUNT_3: AtomicUsize = AtomicUsize::new(0);
@@ -219,6 +241,7 @@ fn parallel_loop() {
 /// Test that we can drop a Gc which points to some allocation with a locked Mutex inside it
 // note: I tried using `ntest::timeout` but for some reason that caused this test to trivially pass.
 fn deadlock() {
+    let _serial = serial();
     let gc1 = Gc::new(Mutex::new(()));
     let gc2 = gc1.clone();
 
@@ -241,6 +264,7 @@ fn deadlock() {
 /// If this regresses, the collecting thread keeps holding the lock, so other tests calling
 /// `collect()` will hang after this one fails.
 fn no_nested_collect_when_freeing_after_cleaning() {
+    let _serial = serial();
     use std::{cell::Cell, sync::mpsc, thread, time::Duration};
 
     /// An allocation that owns a `Gc`, so that freeing it drops a `Gc`.
@@ -311,6 +335,7 @@ fn no_nested_collect_when_freeing_after_cleaning() {
 
 #[test]
 fn open_drop() {
+    let _serial = serial();
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
     let gc1 = Gc::new(MultiRef {
         refs: Mutex::new(Vec::new()),
@@ -331,6 +356,7 @@ fn open_drop() {
 #[test]
 #[cfg_attr(miri, ignore = "miri is too slow")]
 fn eventually_collect() {
+    let _serial = serial();
     static COUNT_1: AtomicUsize = AtomicUsize::new(0);
     static COUNT_2: AtomicUsize = AtomicUsize::new(0);
 
@@ -363,6 +389,7 @@ fn eventually_collect() {
 #[test]
 #[cfg(feature = "coerce-unsized")]
 fn coerce_array() {
+    let _serial = serial();
     let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
     let gc2: Gc<[u8]> = gc1;
     assert_eq!(gc2.len(), 3);
@@ -374,6 +401,7 @@ fn coerce_array() {
 
 #[test]
 fn coerce_array_using_macro() {
+    let _serial = serial();
     let gc1: Gc<[u8; 3]> = Gc::new([0, 0, 0]);
     let gc2: Gc<[u8]> = coerce_gc!(gc1);
     assert_eq!(gc2.len(), 3);
@@ -385,6 +413,7 @@ fn coerce_array_using_macro() {
 
 #[test]
 fn malicious() {
+    let _serial = serial();
     static EVIL: AtomicUsize = AtomicUsize::new(0);
     static A_DROP_DETECT: AtomicUsize = AtomicUsize::new(0);
     struct A {
@@ -461,6 +490,7 @@ fn malicious() {
 #[cfg_attr(miri, ignore = "miri is too slow")]
 #[expect(clippy::too_many_lines)]
 fn fuzz() {
+    let _serial = serial();
     const N: usize = 20_000;
     static DROP_DETECTORS: [AtomicUsize; N] = {
         let mut detectors: [MaybeUninit<AtomicUsize>; N] =
@@ -586,6 +616,7 @@ fn fuzz() {
 
 #[test]
 fn root_canal() {
+    let _serial = serial();
     struct A {
         b: Gc<B>,
     }
@@ -703,6 +734,7 @@ fn root_canal() {
 #[test]
 #[should_panic = "Attempting to dereference Gc to already-deallocated object.This is caused by accessing a Gc during a Drop implementation, likely implying a bug in your code."]
 fn escape_dead_pointer() {
+    let _serial = serial();
     static ESCAPED: Mutex<Option<Gc<Escape>>> = Mutex::new(None);
 
     struct Escape {
@@ -738,6 +770,7 @@ fn escape_dead_pointer() {
 
 #[test]
 fn from_box() {
+    let _serial = serial();
     let gc: Gc<String> = Gc::from(Box::new(String::from("hello")));
 
     // The `From<Box<T>>` implementation executes a different code path to
@@ -755,6 +788,7 @@ fn from_box() {
 
 #[test]
 fn from_slice() {
+    let _serial = serial();
     let gc: Gc<[String]> = Gc::from(&[String::from("hello"), String::from("world")][..]);
 
     // The `From<&[T]>` implementation executes a different code path to
@@ -773,6 +807,7 @@ fn from_slice() {
 #[test]
 #[should_panic = "told you"]
 fn from_slice_panic() {
+    let _serial = serial();
     struct MayPanicOnClone {
         value: String,
         panic: bool,
@@ -815,6 +850,7 @@ fn from_slice_panic() {
 
 #[test]
 fn from_vec() {
+    let _serial = serial();
     let gc: Gc<[String]> = Gc::from(vec![String::from("hello"), String::from("world")]);
 
     // The `From<Vec<T>>` implementation executes a different code path to
@@ -832,6 +868,7 @@ fn from_vec() {
 
 #[test]
 fn make_mut() {
+    let _serial = serial();
     let mut a = Gc::new(42);
     let mut b = a.clone();
     let mut c = b.clone();
@@ -856,6 +893,7 @@ fn make_mut() {
 
 #[test]
 fn make_mut_2() {
+    let _serial = serial();
     let mut a = Gc::new(42);
     let b = a.clone();
     let c = b.clone();
@@ -879,6 +917,7 @@ fn make_mut_2() {
 
 #[test]
 fn make_mut_of_object_in_dumpster() {
+    let _serial = serial();
     #[derive(Clone)]
     struct Foo {
         // just some gc pointer so foo lands in the dumpster
@@ -917,6 +956,7 @@ fn make_mut_of_object_in_dumpster() {
 #[should_panic = "panic on visit"]
 #[cfg_attr(miri, ignore = "intentionally leaks memory")]
 fn panic_visit() {
+    let _serial = serial();
     #[expect(unused)]
     struct PanicVisit(Gc<Self>);
 
@@ -937,6 +977,7 @@ fn panic_visit() {
 #[test]
 /// Test that creating a `Gc` during a `Drop` implementation will still not leak the `Gc`.
 fn sync_leak_by_creation_in_drop() {
+    let _serial = serial();
     static BAR_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
     struct Foo(OnceLock<Gc<Self>>);
     struct Bar(OnceLock<Gc<Self>>);
@@ -983,6 +1024,7 @@ fn sync_leak_by_creation_in_drop() {
 
 #[test]
 fn custom_trait_object() {
+    let _serial = serial();
     trait MyTrait: Trace + Send + Sync {}
     impl<T: Trace + Send + Sync> MyTrait for T {}
 
@@ -993,6 +1035,7 @@ fn custom_trait_object() {
 
 #[test]
 fn new_cyclic_simple() {
+    let _serial = serial();
     struct Cycle(Gc<Self>);
     unsafe impl<V: Visitor> TraceWith<V> for Cycle {
         fn accept(&self, visitor: &mut V) -> Result<(), ()> {
@@ -1007,16 +1050,19 @@ fn new_cyclic_simple() {
 #[test]
 #[should_panic = "told you"]
 fn panic_new_cyclic() {
+    let _serial = serial();
     let _ = Gc::<()>::new_cyclic(|_| panic!("told you"));
 }
 
 #[test]
 fn gc_from_iter() {
+    let _serial = serial();
     let _gc = (0..100).collect::<Gc<[_]>>();
 }
 
 #[test]
 fn self_referential_from_iter() {
+    let _serial = serial();
     struct Ab {
         a: Gc<Self>,
         b: Gc<Self>,
@@ -1058,6 +1104,7 @@ impl MyTrait for u8 {
 
 #[test]
 fn downcast_success() {
+    let _serial = serial();
     let gc: Gc<dyn MyTrait> = coerce_gc!(Gc::new(42i32));
     let gc = downcast_gc!(gc, i32)
         .ok()
@@ -1067,6 +1114,7 @@ fn downcast_success() {
 
 #[test]
 fn downcast_wrong_type_returns_self() {
+    let _serial = serial();
     let gc: Gc<dyn MyTrait> = coerce_gc!(Gc::new(42i32));
     let gc = downcast_gc!(gc, u8)
         .err()
@@ -1077,6 +1125,7 @@ fn downcast_wrong_type_returns_self() {
 
 #[test]
 fn downcast_preserves_refcount() {
+    let _serial = serial();
     let gc: Gc<i32> = Gc::new(7i32);
     let trait_gc: Gc<dyn MyTrait> = coerce_gc!(gc.clone());
     assert_eq!(Gc::ref_count(&gc).get(), 2);
@@ -1089,6 +1138,7 @@ fn downcast_preserves_refcount() {
 
 #[test]
 fn downcast_failure_preserves_refcount() {
+    let _serial = serial();
     let gc: Gc<i32> = Gc::new(7i32);
     let trait_gc: Gc<dyn MyTrait> = coerce_gc!(gc.clone());
     assert_eq!(Gc::ref_count(&gc).get(), 2);
