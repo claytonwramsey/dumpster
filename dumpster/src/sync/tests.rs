@@ -712,7 +712,7 @@ fn root_canal() {
     collect();
     println!("{}", CURRENT_TAG.load(Ordering::Relaxed));
 
-    assert!(dbg!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref()).is_some());
+    assert!(SMUGGLED_POINTERS[0].lock().unwrap().as_ref().is_some());
     assert!(SMUGGLED_POINTERS[1].lock().unwrap().as_ref().is_some());
     println!("{}", B_VISIT_COUNT.load(Ordering::Relaxed));
 
@@ -1147,4 +1147,11 @@ fn downcast_failure_preserves_refcount() {
     assert_eq!(Gc::ref_count(&gc).get(), 2);
     drop(trait_gc);
     assert_eq!(Gc::ref_count(&gc).get(), 1);
+}
+
+#[test]
+fn debug_gc() {
+    let gc = Gc::new(0u8);
+
+    assert_eq!(format!("{gc:?}"), "0");
 }

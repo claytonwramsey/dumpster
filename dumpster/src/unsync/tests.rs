@@ -845,3 +845,10 @@ fn downcast_failure_preserves_refcount() {
     drop(trait_gc);
     assert_eq!(Gc::ref_count(&gc).get(), 1);
 }
+
+#[test]
+fn debug_gc() {
+    let gc = Gc::new(0u8);
+
+    assert_eq!(format!("{gc:?}"), "0");
+}
