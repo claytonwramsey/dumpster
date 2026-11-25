@@ -203,16 +203,16 @@ pub mod unsync;
 
 /// Contains the sealed trait for [`Trace`].
 mod trace {
-    use crate::{sync::TraceSync, unsync::TraceUnsync, ContainsGcs, TraceWith};
+    use crate::{sync::TraceSync, unsync::TraceUnsync};
 
     /// The sealed trait for [`Trace`](crate::Trace),
     /// hiding away the implementation details and making it
     /// impossible to manually implement `Trace`.
     #[expect(clippy::missing_safety_doc)]
     #[expect(private_bounds)]
-    pub unsafe trait TraceWithV: TraceWith<ContainsGcs> + TraceSync + TraceUnsync {}
+    pub unsafe trait TraceWithV: TraceSync + TraceUnsync {}
 
-    unsafe impl<T> TraceWithV for T where T: ?Sized + TraceWith<ContainsGcs> + TraceSync + TraceUnsync {}
+    unsafe impl<T> TraceWithV for T where T: ?Sized + TraceSync + TraceUnsync {}
 }
 
 /// The trait that any garbage-collected data must implement.
@@ -406,38 +406,6 @@ extern crate dumpster_derive;
 /// }
 /// ```
 pub use dumpster_derive::Trace;
-
-/// Determine whether some value contains a garbage-collected pointer.
-///
-/// This function will return one of three values:
-/// - `Ok(true)`: The data structure contains a garbage-collected pointer.
-/// - `Ok(false)`: The data structure contains no garbage-collected pointers.
-/// - `Err(())`: The data structure was accessed while we checked it for garbage-collected pointers.
-fn contains_gcs<T: Trace + ?Sized>(x: &T) -> Result<bool, ()> {
-    let mut visit = ContainsGcs(false);
-    x.accept(&mut visit)?;
-    Ok(visit.0)
-}
-
-/// A visitor structure used for determining whether some garbage-collected pointer contains a
-/// `Gc` in its pointed-to value.
-struct ContainsGcs(bool);
-
-impl Visitor for ContainsGcs {
-    fn visit_sync<T>(&mut self, _: &sync::Gc<T>)
-    where
-        T: Trace + Send + Sync + ?Sized,
-    {
-        self.0 = true;
-    }
-
-    fn visit_unsync<T>(&mut self, _: &unsync::Gc<T>)
-    where
-        T: Trace + ?Sized,
-    {
-        self.0 = true;
-    }
-}
 
 /// Panics with a message that explains that the gc object has already been collected.
 #[cold]
